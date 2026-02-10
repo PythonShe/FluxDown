@@ -27,7 +27,7 @@ class TaskTabBar extends StatelessWidget {
           height: 40,
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: c.surface1,
             border: Border(bottom: BorderSide(color: c.border, width: 1)),
           ),
           child: Row(

@@ -22,52 +22,52 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set extension version from tag
+        working-directory: fluxDown
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
+          sed -i "s/version: '.*'/version: '$VERSION'/" wxt.config.ts
+          echo "Updated extension version to $VERSION"
+          grep '"version"' package.json
+          grep 'version:' wxt.config.ts
+
       - name: Install dependencies
         run: npm ci
         working-directory: fluxDown
 
       - name: Build Chrome extension
-        run: npm run zip
+        run: npm run build
         working-directory: fluxDown
 
       - name: Build Firefox extension
-        run: npm run zip:firefox
+        run: npm run build:firefox
         working-directory: fluxDown
 
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-
-      - name: Rename artifacts
+      - name: Package extensions
         run: |
-          cd fluxDown
-          # WXT outputs zip files to .output/ directory
-          mkdir -p ../build/extension
-          for f in .output/*.zip; do
-            if [ -f "$f" ]; then
-              cp "$f" ../build/extension/
-            fi
-          done
-          # List what we got
-          ls -la ../build/extension/
+          VERSION=${{ steps.version.outputs.VERSION }}
+          mkdir -p build/extension/FluxDown-${VERSION}-extension
+          cp -r fluxDown/.output/chrome-mv3 build/extension/FluxDown-${VERSION}-extension/chrome
+          cp -r fluxDown/.output/firefox-mv3 build/extension/FluxDown-${VERSION}-extension/firefox
+          cd build/extension
+          zip -r FluxDown-${VERSION}-extension.zip FluxDown-${VERSION}-extension/
+          ls -la
 
-      - name: Upload Chrome extension artifact
+      - name: Upload extension artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fluxdown-chrome-extension-${{ steps.version.outputs.VERSION }}
-          path: build/extension/*chrome*.zip
-          if-no-files-found: warn
+          name: FluxDown-${{ steps.version.outputs.VERSION }}-extension
+          path: build/extension/FluxDown-${{ steps.version.outputs.VERSION }}-extension/
+          if-no-files-found: error
 
-      - name: Upload Firefox extension artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: fluxdown-firefox-extension-${{ steps.version.outputs.VERSION }}
-          path: build/extension/*firefox*.zip
-          if-no-files-found: warn
-
-      - name: Upload all extension zips to Release
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/extension/*.zip
+          files: build/extension/FluxDown-*.zip
           draft: true
           generate_release_notes: true

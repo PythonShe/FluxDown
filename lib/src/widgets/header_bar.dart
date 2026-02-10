@@ -291,27 +291,31 @@ class HeaderBarState extends State<HeaderBar> {
                         size: 14,
                         color: _isSearchActive ? c.accent : c.textMuted,
                       ),
-                      trailing: _isSearchActive
-                          ? null
-                          : Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 5,
-                                vertical: 1,
-                              ),
-                              decoration: BoxDecoration(
-                                color: c.surface2,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: c.border, width: 1),
-                              ),
-                              child: Text(
-                                'Ctrl+F',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: c.textMuted,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
+                      trailing: Visibility(
+                        visible: !_isSearchActive,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: c.surface2,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: c.border, width: 1),
+                          ),
+                          child: Text(
+                            'Ctrl+F',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: c.textMuted,
+                              fontWeight: FontWeight.w500,
                             ),
+                          ),
+                        ),
+                      ),
                       style: const TextStyle(fontSize: 13),
                       decoration: const ShadDecoration(
                         secondaryFocusedBorder: ShadBorder.none,
