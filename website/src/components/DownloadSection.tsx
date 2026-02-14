@@ -35,6 +35,8 @@ interface ReleaseInfo {
   assets: {
     setup: ReleaseAsset | null;
     portable: ReleaseAsset | null;
+    setup_arm64: ReleaseAsset | null;
+    portable_arm64: ReleaseAsset | null;
     extension: ReleaseAsset | null;
   };
 }
@@ -48,7 +50,7 @@ export default function DownloadSection() {
   const { t } = useLocale();
   const [release, setRelease] = useState<ReleaseInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showPortable, setShowPortable] = useState(false);
+  const [showPortable, setShowPortable] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/release")
@@ -85,12 +87,18 @@ export default function DownloadSection() {
     }
   }, [subscribeEmail]);
 
-  const platforms: { key: string; name: string; icon: ComponentType<{ className?: string; size?: number; color?: string }>; arch: string; available: boolean; primary: boolean; badge: string }[] = [
-    { key: "windows", name: t("dl.windows"), icon: WindowsLogo, arch: "x64", available: true, primary: true, badge: t("dl.availableNow") },
-    { key: "macos", name: t("dl.macos"), icon: SiApple, arch: "Apple Silicon", available: false, primary: false, badge: t("dl.comingSoon") },
-    { key: "linux", name: t("dl.linux"), icon: SiLinux, arch: "x64", available: false, primary: false, badge: t("dl.comingSoon") },
-    { key: "web", name: t("dl.web"), icon: Globe, arch: t("dl.webArch"), available: false, primary: false, badge: t("dl.comingSoon") },
-    { key: "mobile", name: t("dl.mobile"), icon: Smartphone, arch: "Android / iOS", available: false, primary: false, badge: t("dl.comingSoon") },
+  const hasArm64Assets = !!(release?.assets.setup_arm64 || release?.assets.portable_arm64);
+
+  const platforms: { key: string; name: string; icon: ComponentType<{ className?: string; size?: number; color?: string }>; arch: string; available: boolean; primary: boolean; badge: string; setup: ReleaseAsset | null; portable: ReleaseAsset | null }[] = [
+    { key: "windows-x64", name: t("dl.windows"), icon: WindowsLogo, arch: "x64", available: true, primary: true, badge: t("dl.availableNow"), setup: release?.assets.setup ?? null, portable: release?.assets.portable ?? null },
+    ...(hasArm64Assets ? [{
+      key: "windows-arm64", name: t("dl.windows"), icon: WindowsLogo, arch: "ARM64", available: true, primary: false, badge: t("dl.availableNow"),
+      setup: release?.assets.setup_arm64 ?? null, portable: release?.assets.portable_arm64 ?? null,
+    }] : []),
+    { key: "macos", name: t("dl.macos"), icon: SiApple, arch: "Apple Silicon", available: false, primary: false, badge: t("dl.comingSoon"), setup: null, portable: null },
+    { key: "linux", name: t("dl.linux"), icon: SiLinux, arch: "x64", available: false, primary: false, badge: t("dl.comingSoon"), setup: null, portable: null },
+    { key: "web", name: t("dl.web"), icon: Globe, arch: t("dl.webArch"), available: false, primary: false, badge: t("dl.comingSoon"), setup: null, portable: null },
+    { key: "mobile", name: t("dl.mobile"), icon: Smartphone, arch: "Android / iOS", available: false, primary: false, badge: t("dl.comingSoon"), setup: null, portable: null },
   ];
 
   return (
@@ -139,7 +147,7 @@ export default function DownloadSection() {
                       : "border-dark-border/60 bg-dark-surface1 hover:-translate-y-1 hover:border-dark-text-muted/20 hover:shadow-lg hover:shadow-black/20 transition-all duration-300 ease-out"
                   }`}
                 >
-                  {p.primary ? (
+                  {p.available ? (
                     <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-brand-blue text-[10px] font-semibold text-white flex items-center gap-1 whitespace-nowrap">
                       <Check className="w-3 h-3" />
                       {p.badge}
@@ -167,11 +175,11 @@ export default function DownloadSection() {
                   <p className="text-xs text-dark-text-muted mt-1">{p.arch}</p>
 
                   {/* 版本号 */}
-                  {p.primary && release && (
+                  {p.available && release && (
                     <p className="text-[10px] text-dark-text-muted mt-1">
                       {t("dl.version", { version: release.version })}
-                      {release.assets.setup && (
-                        <span className="ml-1.5">({formatSize(release.assets.setup.size)})</span>
+                      {p.setup && (
+                        <span className="ml-1.5">({formatSize(p.setup.size)})</span>
                       )}
                     </p>
                   )}
@@ -184,9 +192,9 @@ export default function DownloadSection() {
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           {t("dl.loading")}
                         </div>
-                      ) : release?.assets.setup ? (
+                      ) : p.setup ? (
                         <a
-                          href={release.assets.setup.download_url}
+                          href={p.setup.download_url}
                           className="inline-flex items-center justify-center gap-2 w-full rounded-lg bg-brand-blue px-5 py-2.5 text-xs font-semibold text-white hover:bg-brand-blue/90 transition-colors shadow-lg shadow-brand-blue/20"
                         >
                           <Download className="w-3.5 h-3.5" />
@@ -203,23 +211,23 @@ export default function DownloadSection() {
                       )}
 
                       {/* 便携版下载（折叠） */}
-                      {release?.assets.portable && (
+                      {p.portable && (
                         <>
                           <button
                             type="button"
-                            onClick={() => setShowPortable(!showPortable)}
+                            onClick={() => setShowPortable(showPortable === p.key ? null : p.key)}
                             className="inline-flex items-center justify-center gap-1 text-[10px] text-dark-text-muted hover:text-dark-text-secondary transition-colors"
                           >
                             {t("dl.portablePkg")}
-                            <ChevronDown className={`w-3 h-3 transition-transform ${showPortable ? "rotate-180" : ""}`} />
+                            <ChevronDown className={`w-3 h-3 transition-transform ${showPortable === p.key ? "rotate-180" : ""}`} />
                           </button>
-                          {showPortable && (
+                          {showPortable === p.key && (
                             <a
-                              href={release.assets.portable.download_url}
+                              href={p.portable.download_url}
                               className="inline-flex items-center justify-center gap-2 w-full rounded-lg border border-dark-border px-5 py-2 text-[10px] font-medium text-dark-text-secondary hover:bg-dark-surface3 transition-colors"
                             >
                               <Download className="w-3 h-3" />
-                              {t("dl.portablePkg")} ({formatSize(release.assets.portable.size)})
+                              {t("dl.portablePkg")} ({formatSize(p.portable.size)})
                             </a>
                           )}
                         </>

@@ -98,9 +98,16 @@ export const GET: APIRoute = async () => {
 
     const version = latest.tag_name.replace(/^v/, "");
 
-    // 匹配资产文件
-    const setupAsset = latest.assets.find((a) => a.name.endsWith("-windows-setup.exe"));
-    const portableAsset = latest.assets.find((a) => a.name.endsWith("-windows-portable.zip"));
+    // 匹配资产文件（兼容旧命名：-windows-setup.exe / 新命名：-windows-x64-setup.exe）
+    const setupAsset = latest.assets.find((a) =>
+      a.name.endsWith("-windows-x64-setup.exe") || a.name.endsWith("-windows-setup.exe"),
+    );
+    const portableAsset = latest.assets.find((a) =>
+      a.name.endsWith("-windows-x64-portable.zip") || a.name.endsWith("-windows-portable.zip"),
+    );
+    // ARM64 资产（仅新版 Release 包含）
+    const setupArm64Asset = latest.assets.find((a) => a.name.endsWith("-windows-arm64-setup.exe"));
+    const portableArm64Asset = latest.assets.find((a) => a.name.endsWith("-windows-arm64-portable.zip"));
     const extensionAsset = latest.assets.find((a) => a.name.endsWith("-extension.zip"));
 
     const formatAsset = (asset: GitHubAsset | undefined) => {
@@ -129,6 +136,8 @@ export const GET: APIRoute = async () => {
       assets: {
         setup: formatAsset(setupAsset),
         portable: formatAsset(portableAsset),
+        setup_arm64: formatAsset(setupArm64Asset),
+        portable_arm64: formatAsset(portableArm64Asset),
         extension: formatAsset(extensionAsset),
       },
     };
