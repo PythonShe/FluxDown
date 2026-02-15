@@ -576,7 +576,7 @@ export default function IssueDetailModal({ issueNumber, onClose }: IssueDetailMo
             </div>
 
             {/* Reply box */}
-            {data && !loading && (
+            {data && !loading && data.issue.state === "open" && (
               <div className="shrink-0 border-t border-dark-border bg-dark-surface1 px-5 py-4">
                 <textarea
                   rows={2}
