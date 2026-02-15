@@ -55,16 +55,32 @@ jobs:
           path: ~/.cargo/bin/rinf.exe
           key: rinf-cli-${{ runner.os }}-${{ matrix.arch }}-8.9.0
 
-      # ── Flutter SDK ──
-      - name: Setup Flutter
+      # ── Flutter SDK（x64 用预编译包，ARM64 用 git clone 原生安装）──
+      - name: Setup Flutter (x64)
+        if: matrix.arch == 'x64'
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-          architecture: x64  # Flutter SDK 无 ARM64 Windows 版，x64 通过仿真层运行
 
-      - name: Flutter version info
-        run: flutter --version
+      - name: Setup Flutter (ARM64 via git)
+        if: matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          git clone https://github.com/flutter/flutter.git -b stable --depth 1 "$USERPROFILE/flutter"
+          echo "$USERPROFILE/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Flutter (ARM64)
+        if: matrix.arch == 'arm64'
+        uses: actions/cache@v4
+        with:
+          path: ~/flutter/bin/cache
+          key: flutter-arm64-stable
+
+      - name: Flutter precache & version info
+        run: |
+          flutter --version
+          flutter precache --windows
 
       - name: Install Flutter dependencies
         run: flutter pub get
@@ -80,24 +96,6 @@ jobs:
       # ── Build ──
       - name: Build Flutter Windows app
         run: flutter build windows --release --build-name=${{ steps.version.outputs.VERSION }} --build-number=1 --dart-define=APP_VERSION=${{ steps.version.outputs.VERSION }}
-
-      - name: Normalize build output path for ARM64
-        if: matrix.arch == 'arm64'
-        shell: pwsh
-        run: |
-          $expected = "build\windows\arm64\runner\Release"
-          $fallback = "build\windows\x64\runner\Release"
-          if (-not (Test-Path $expected) -and (Test-Path $fallback)) {
-            Write-Host "Relocating x64 build output to arm64 path..."
-            New-Item -ItemType Directory -Path "build\windows\arm64\runner" -Force | Out-Null
-            Move-Item -Path $fallback -Destination $expected
-          }
-          if (Test-Path $expected) {
-            Write-Host "Build output verified at: $expected"
-          } else {
-            Write-Error "No build output found at $expected or $fallback"
-            exit 1
-          }
 
       # ── Inno Setup installer ──
       - name: Ensure Inno Setup is installed
