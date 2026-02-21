@@ -235,6 +235,7 @@ class _HomePageState extends State<HomePage> {
                 AnalyticsService.instance.trackView('HomePage');
               }),
               settingsProvider: _settingsProvider,
+              downloadController: _controller,
               initialCategory: _initialSettingsCategory,
             ),
           ),

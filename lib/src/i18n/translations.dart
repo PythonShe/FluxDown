@@ -105,14 +105,21 @@ class S {
   String get queueNameHint => _t('输入队列名称', 'Enter queue name');
   String get queueSpeedLimit => _t('速度限制 (KB/s)', 'Speed Limit (KB/s)');
   String get queueSpeedLimitHint => _t('0 = 不限制', '0 = Unlimited');
-  String get queueMaxConcurrent => _t('最大并发数', 'Max Concurrent');
+  String get queueMaxConcurrent => _t('同时下载任务数', 'Simultaneous Tasks');
   String get queueMaxConcurrentHint => _t('0 = 使用全局设置', '0 = Use global setting');
+  String get queueDefaultSegments => _t('默认线程数', 'Default Threads');
+  String get queueDefaultSegmentsHint => _t('0 = 自动', '0 = Auto');
   String get queueSaveDir => _t('默认保存目录', 'Default Save Directory');
   String queueDeleteConfirmDesc(String name) => _t(
     '确定要删除队列「$name」吗？队列中的任务将移至默认队列。',
     'Delete queue "$name"? Tasks in this queue will be moved to the default queue.',
   );
   String get taskQueueLabel => _t('下载队列', 'Queue');
+  String get defaultQueueSetting => _t('默认下载队列', 'Default Queue');
+  String get defaultQueueSettingDesc => _t(
+    '浏览器扩展和新建下载时默认使用的队列',
+    'Default queue for browser extension and new downloads',
+  );
   String downloadUpdateVersion(String v) => _t('下载更新 v$v', 'Download v$v');
   String get installAndRestart => _t('立即安装并重启', 'Install & Restart');
 

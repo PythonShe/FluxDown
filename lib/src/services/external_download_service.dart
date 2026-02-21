@@ -106,6 +106,7 @@ class ExternalDownloadService {
         mimeType: req.mimeType,
         cookies: req.cookies,
         defaultSaveDir: settingsProvider.defaultSaveDir,
+        defaultQueueId: settingsProvider.defaultQueueId,
       );
       logInfo(_tag, 'dialog shown');
     } catch (e, stack) {

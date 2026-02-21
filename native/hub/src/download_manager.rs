@@ -177,6 +177,14 @@ pub struct DownloadManager {
     hls_quality_senders: HashMap<String, oneshot::Sender<i32>>,
     /// Globally configured user-agent string. Empty = use built-in Chrome UA.
     global_user_agent: String,
+    /// In-memory cache of named queue settings (queue_id → QueueInfo).
+    /// Kept in sync with the DB on every queue CRUD operation.
+    queues: HashMap<String, QueueInfo>,
+    /// Per-queue speed limiters (queue_id → SpeedLimiter).
+    /// Created on demand for queues that have speed_limit_kbps > 0.
+    queue_limiters: HashMap<String, SpeedLimiter>,
+    /// Maps active task_id → queue_id for per-queue concurrency counting.
+    active_task_queue: HashMap<String, String>,
 }
 
 impl DownloadManager {
@@ -216,6 +224,9 @@ impl DownloadManager {
             app_data_dir,
             bt_config,
             global_user_agent: user_agent,
+            queues: HashMap::new(),
+            queue_limiters: HashMap::new(),
+            active_task_queue: HashMap::new(),
         })
     }
 
@@ -366,6 +377,24 @@ impl DownloadManager {
         QueuePositionsUpdate { positions }.send_signal_to_dart();
     }
 
+    /// Load all named queues from the database into the in-memory cache.
+    /// Must be called once after the manager is created (before the event loop).
+    pub async fn load_queues(&mut self) {
+        match self.db.load_all_queues().await {
+            Ok(qs) => {
+                self.queues.clear();
+                for q in qs {
+                    // Sync the limiter if one already exists.
+                    if let Some(limiter) = self.queue_limiters.get(&q.queue_id) {
+                        limiter.set_limit((q.speed_limit_kbps.max(0) as u64) * 1024);
+                    }
+                    self.queues.insert(q.queue_id.clone(), q);
+                }
+            }
+            Err(e) => rinf::debug_print!("[manager] load_queues error: {}", e),
+        }
+    }
+
     /// Whether we have a free slot for a new HTTP/FTP download.
     /// BT tasks are excluded from this count because they are managed by the
     /// shared librqbit session with its own concurrency controls.
@@ -380,25 +409,89 @@ impl DownloadManager {
         http_ftp_active < self.max_concurrent
     }
 
+    /// Whether the named queue `queue_id` has room for another task.
+    /// Returns true when:
+    ///   - The queue has no max_concurrent limit (0), OR
+    ///   - The number of active tasks assigned to that queue is below the limit.
+    fn has_queue_capacity(&self, queue_id: &str) -> bool {
+        // Default/empty queue_id: no queue-level limit.
+        if queue_id.is_empty() {
+            return true;
+        }
+        let queue_max = self
+            .queues
+            .get(queue_id)
+            .map(|q| q.max_concurrent as usize)
+            .unwrap_or(0);
+        if queue_max == 0 {
+            return true;
+        }
+        let active_in_queue = self
+            .active_task_queue
+            .values()
+            .filter(|qid| qid.as_str() == queue_id)
+            .count();
+        active_in_queue < queue_max
+    }
+
+    /// Return the appropriate speed limiter for a task in `queue_id`.
+    ///
+    /// If the queue has a positive speed_limit_kbps, a dedicated per-queue
+    /// `SpeedLimiter` is returned (creating and starting it on first use).
+    /// Otherwise the global limiter is used.
+    fn queue_limiter_for(&mut self, queue_id: &str) -> SpeedLimiter {
+        let limit_bps = if queue_id.is_empty() {
+            0u64
+        } else {
+            self.queues
+                .get(queue_id)
+                .map(|q| (q.speed_limit_kbps.max(0) as u64) * 1024)
+                .unwrap_or(0)
+        };
+        if limit_bps > 0 {
+            self.queue_limiters
+                .entry(queue_id.to_string())
+                .or_insert_with(|| {
+                    let l = SpeedLimiter::new(limit_bps);
+                    l.spawn_refill_task();
+                    l
+                })
+                .clone()
+        } else {
+            self.speed_limiter.clone()
+        }
+    }
+
     /// Try to start tasks from the pending queue until we run out of capacity.
+    ///
+    /// Queue-aware: tasks blocked only by their queue's concurrent limit are
+    /// skipped so that tasks from other queues (or the default queue) can
+    /// proceed, rather than blocking the entire pending queue.
     async fn drain_queue(&mut self) {
-        while self.has_capacity() {
-            let Some(queued) = self.pending_queue.front() else {
+        let mut i = 0;
+        while i < self.pending_queue.len() {
+            // Global concurrency ceiling reached — stop entirely.
+            if !self.has_capacity() {
                 break;
-            };
-            // Check if task is already running (edge case: resume while queued).
-            if self.active_tokens.contains_key(&queued.task_id) {
-                self.pending_queue.pop_front();
+            }
+            // Edge case: task was resumed/cancelled while queued.
+            if self.active_tokens.contains_key(&self.pending_queue[i].task_id) {
+                self.pending_queue.remove(i);
                 continue;
             }
-            let Some(queued) = self.pending_queue.pop_front() else {
-                break;
-            };
+            // Queue-level concurrency check: skip (don't remove) if the
+            // target queue is full; try the next pending task instead.
+            if !self.has_queue_capacity(&self.pending_queue[i].queue_id.clone()) {
+                i += 1;
+                continue;
+            }
+            let queued = self.pending_queue.remove(i).expect("index checked above");
             if queued.is_resume {
                 self.do_resume_task(&queued.task_id).await;
             } else {
                 self.do_start_task(queued).await;
             }
+            // Don't increment i — an element was removed.
         }
         // 队列变化后广播最新位置
         self.broadcast_queue_positions();
@@ -418,6 +511,7 @@ impl DownloadManager {
                 self.active_handles.remove(task_id);
                 self.bt_task_ids.remove(task_id);
                 self.hls_quality_senders.remove(task_id);
+                self.active_task_queue.remove(task_id);
             }
         // A slot freed up — try to start queued tasks.
         self.drain_queue().await;
@@ -575,17 +669,18 @@ impl DownloadManager {
             user_agent,
             queue_id,
         };
-        if is_bt || self.has_capacity() {
+        if is_bt || (self.has_capacity() && self.has_queue_capacity(&queued.queue_id)) {
             self.do_start_task(queued).await;
             // If do_start_task failed early (e.g. BT session init), the slot
             // was freed — drain the queue so pending tasks can proceed.
             self.drain_queue().await;
         } else {
             rinf::debug_print!(
-                "[manager] queuing task {} (active={}, max={})",
+                "[manager] queuing task {} (active={}, max={}, queue={})",
                 queued.task_id,
                 self.active_tokens.len(),
-                self.max_concurrent
+                self.max_concurrent,
+                queued.queue_id
             );
             // 保存探测所需信息（queued 即将被 move 进队列）
             let probe_tid = queued.task_id.clone();
@@ -629,13 +724,32 @@ impl DownloadManager {
             torrent_file_bytes,
             proxy_url,
             user_agent,
-            queue_id: _,
+            queue_id,
         } = queued;
+
+        // Three-tier segment count priority:
+        //   1. Task-level explicit choice (segments > 0) — highest priority
+        //   2. Queue default_segments (> 0) — inherits from queue when task is auto
+        //   3. Global segment advisor (segments == 0) — dynamic calculation at runtime
+        let segments = if segments > 0 {
+            segments
+        } else {
+            self.queues
+                .get(&queue_id)
+                .map(|q| q.default_segments)
+                .filter(|&s| s > 0)
+                .unwrap_or(0) // 0 → segment_advisor will calculate
+        };
+
         self.generation += 1;
         let spawn_gen = self.generation;
         let cancel_token = CancellationToken::new();
         self.active_tokens
             .insert(task_id.clone(), (cancel_token.clone(), spawn_gen));
+        // Track which queue this task belongs to for per-queue concurrency counting.
+        self.active_task_queue.insert(task_id.clone(), queue_id.clone());
+        // Select speed limiter: queue-specific if the queue has a limit, global otherwise.
+        let speed_limiter = self.queue_limiter_for(&queue_id);
 
         let use_ftp = is_ftp_url(&url);
         let use_hls = hls_downloader::is_hls_url(&url);
@@ -761,7 +875,7 @@ impl DownloadManager {
                 client: task_client,
                 progress_tx: self.progress_tx.clone(),
                 cancel_token,
-                speed_limiter: self.speed_limiter.clone(),
+                speed_limiter,
                 cookies,
                 proxy_config: task_proxy,
                 hls_quality_rx,
@@ -825,6 +939,7 @@ impl DownloadManager {
             token.cancel();
             self.bt_task_ids.remove(task_id);
             self.hls_quality_senders.remove(task_id);
+            self.active_task_queue.remove(task_id);
 
             // For BT tasks, explicitly pause the torrent in the session so
             // that the handle stays cached for fast resume.  This is a
@@ -893,6 +1008,7 @@ impl DownloadManager {
             self.active_handles.remove(task_id);
             self.bt_task_ids.remove(task_id);
             self.hls_quality_senders.remove(task_id);
+            self.active_task_queue.remove(task_id);
             // Do NOT drain_queue here — we are about to occupy the freed slot.
         }
 
@@ -904,18 +1020,20 @@ impl DownloadManager {
         // Load task once and reuse for both the is_bt check and the queue entry.
         let task_row = self.db.load_task_by_id(task_id).await.ok().flatten();
         let is_bt = task_row.as_ref().map(|t| is_bt_url(&t.url)).unwrap_or(false);
+        let queue_id = task_row.as_ref().map(|t| t.queue_id.clone()).unwrap_or_default();
 
-        if is_bt || self.has_capacity() {
+        if is_bt || (self.has_capacity() && self.has_queue_capacity(&queue_id)) {
             self.do_resume_task(task_id).await;
             // If do_resume_task failed early (e.g. BT session init), drain
             // the queue so pending tasks can proceed.
             self.drain_queue().await;
         } else {
             rinf::debug_print!(
-                "[manager] queuing resume for task {} (active={}, max={})",
+                "[manager] queuing resume for task {} (active={}, max={}, queue={})",
                 task_id,
                 self.active_tokens.len(),
-                self.max_concurrent
+                self.max_concurrent,
+                queue_id
             );
             if let Some(t) = task_row {
                 self.pending_queue.push_back(QueuedTask {
@@ -951,6 +1069,9 @@ impl DownloadManager {
         let cancel_token = CancellationToken::new();
         self.active_tokens
             .insert(task_id.to_string(), (cancel_token.clone(), spawn_gen));
+        // Track queue membership and select the appropriate speed limiter.
+        self.active_task_queue.insert(task_id.to_string(), task.queue_id.clone());
+        let speed_limiter = self.queue_limiter_for(&task.queue_id);
 
         let use_ftp = is_ftp_url(&task.url);
         let use_hls = hls_downloader::is_hls_url(&task.url);
@@ -1116,7 +1237,7 @@ impl DownloadManager {
                 client: task_client,
                 progress_tx: self.progress_tx.clone(),
                 cancel_token,
-                speed_limiter: self.speed_limiter.clone(),
+                speed_limiter,
                 cookies: String::new(),
                 proxy_config: task_proxy,
                 hls_quality_rx,
@@ -1162,6 +1283,7 @@ impl DownloadManager {
             token.cancel();
             self.bt_task_ids.remove(task_id);
             self.hls_quality_senders.remove(task_id);
+            self.active_task_queue.remove(task_id);
 
             // For BT tasks, explicitly pause the torrent in the session so
             // that fast-resume data is preserved and the user can resume later.
@@ -1216,6 +1338,7 @@ impl DownloadManager {
             token.cancel();
             self.bt_task_ids.remove(task_id);
             self.hls_quality_senders.remove(task_id);
+            self.active_task_queue.remove(task_id);
         }
         if let Some(handle) = self.active_handles.remove(task_id) {
             // Timeout guard: don't block forever if the task misbehaves.
@@ -1338,11 +1461,12 @@ impl DownloadManager {
 
     /// Create a new named queue and broadcast the updated list.
     pub async fn create_queue(
-        &self,
+        &mut self,
         name: String,
         speed_limit_kbps: i64,
         max_concurrent: i32,
         default_save_dir: String,
+        default_segments: i32,
     ) {
         let id = Uuid::new_v4().to_string();
         let position = match self.db.queue_count().await {
@@ -1354,52 +1478,84 @@ impl DownloadManager {
         };
         if let Err(e) = self
             .db
-            .insert_queue(&id, &name, speed_limit_kbps, max_concurrent, &default_save_dir, position)
+            .insert_queue(&id, &name, speed_limit_kbps, max_concurrent, &default_save_dir, position, default_segments)
             .await
         {
             rinf::debug_print!("[manager] insert_queue error: {}", e);
             return;
         }
+        // Sync in-memory cache.
+        self.queues.insert(id.clone(), QueueInfo {
+            queue_id: id.clone(),
+            name: name.clone(),
+            speed_limit_kbps,
+            max_concurrent,
+            default_save_dir,
+            position,
+            default_segments,
+        });
         rinf::debug_print!("[manager] created queue: id={}, name={}", id, name);
         self.send_all_queues().await;
     }
 
     /// Update an existing queue and broadcast the updated list.
     pub async fn update_queue(
-        &self,
+        &mut self,
         queue_id: String,
         name: String,
         speed_limit_kbps: i64,
         max_concurrent: i32,
         default_save_dir: String,
+        default_segments: i32,
     ) {
         if let Err(e) = self
             .db
-            .update_queue(&queue_id, &name, speed_limit_kbps, max_concurrent, &default_save_dir)
+            .update_queue(&queue_id, &name, speed_limit_kbps, max_concurrent, &default_save_dir, default_segments)
             .await
         {
             rinf::debug_print!("[manager] update_queue error: {}", e);
             return;
+        }
+        // Sync in-memory cache.
+        if let Some(q) = self.queues.get_mut(&queue_id) {
+            q.name = name;
+            q.speed_limit_kbps = speed_limit_kbps;
+            q.max_concurrent = max_concurrent;
+            q.default_save_dir = default_save_dir;
+            q.default_segments = default_segments;
+        }
+        // If a per-queue limiter already exists, update its limit in place.
+        if let Some(limiter) = self.queue_limiters.get(&queue_id) {
+            limiter.set_limit((speed_limit_kbps.max(0) as u64) * 1024);
         }
         rinf::debug_print!("[manager] updated queue: {}", queue_id);
         self.send_all_queues().await;
     }
 
     /// Delete a named queue (tasks move to default queue) and broadcast.
-    pub async fn delete_queue(&self, queue_id: String) {
+    pub async fn delete_queue(&mut self, queue_id: String) {
         if let Err(e) = self.db.delete_queue(&queue_id).await {
             rinf::debug_print!("[manager] delete_queue error: {}", e);
             return;
         }
+        // Sync in-memory cache.
+        self.queues.remove(&queue_id);
+        self.queue_limiters.remove(&queue_id);
         rinf::debug_print!("[manager] deleted queue: {}", queue_id);
         self.send_all_queues().await;
     }
 
     /// Move a task to a different queue and broadcast the updated queue list.
-    pub async fn move_task_to_queue(&self, task_id: String, queue_id: String) {
+    pub async fn move_task_to_queue(&mut self, task_id: String, queue_id: String) {
         if let Err(e) = self.db.move_task_to_queue(&task_id, &queue_id).await {
             rinf::debug_print!("[manager] move_task_to_queue error: {}", e);
             return;
+        }
+        // If the task is currently active, update its tracked queue.
+        // Note: the existing speed limiter runs to completion; the new
+        // queue limiter takes effect on next resume.
+        if self.active_task_queue.contains_key(&task_id) {
+            self.active_task_queue.insert(task_id.clone(), queue_id.clone());
         }
         rinf::debug_print!("[manager] moved task {} to queue '{}'", task_id, queue_id);
         self.send_all_queues().await;

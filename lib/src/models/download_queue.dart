@@ -8,7 +8,7 @@ class DownloadQueue {
   /// 速度限制（KB/s），0 = 不限制
   final int speedLimitKbps;
 
-  /// 最大并发数，0 = 使用全局设置
+  /// 同时下载任务数，0 = 使用全局设置
   final int maxConcurrent;
 
   /// 默认保存目录，空 = 使用全局设置
@@ -17,6 +17,9 @@ class DownloadQueue {
   /// 显示顺序（从小到大）
   final int position;
 
+  /// 每任务默认线程数（HTTP 分段连接数），0 = 自动（全局 segment_advisor）
+  final int defaultSegments;
+
   const DownloadQueue({
     required this.queueId,
     required this.name,
@@ -24,6 +27,7 @@ class DownloadQueue {
     required this.maxConcurrent,
     required this.defaultSaveDir,
     required this.position,
+    this.defaultSegments = 0,
   });
 
   factory DownloadQueue.fromQueueInfo(QueueInfo info) {
@@ -34,6 +38,7 @@ class DownloadQueue {
       maxConcurrent: info.maxConcurrent,
       defaultSaveDir: info.defaultSaveDir,
       position: info.position,
+      defaultSegments: info.defaultSegments,
     );
   }
 
@@ -44,6 +49,7 @@ class DownloadQueue {
     int? maxConcurrent,
     String? defaultSaveDir,
     int? position,
+    int? defaultSegments,
   }) {
     return DownloadQueue(
       queueId: queueId ?? this.queueId,
@@ -52,6 +58,7 @@ class DownloadQueue {
       maxConcurrent: maxConcurrent ?? this.maxConcurrent,
       defaultSaveDir: defaultSaveDir ?? this.defaultSaveDir,
       position: position ?? this.position,
+      defaultSegments: defaultSegments ?? this.defaultSegments,
     );
   }
 }

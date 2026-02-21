@@ -88,9 +88,9 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
     _saveDirController.text = widget.settingsProvider.defaultSaveDir;
     _urlController.addListener(_onUrlChanged);
     _pasteUrlFromClipboard();
-    // 如果侧边栏已选中某个队列，新建任务默认加入该队列
+    // 优先使用侧边栏队列筛选，否则使用设置中的默认队列
     final qf = widget.controller.queueFilter;
-    if (qf != null) _selectedQueueId = qf;
+    _selectedQueueId = qf ?? widget.settingsProvider.defaultQueueId;
   }
 
   void _onUrlChanged() {
@@ -661,6 +661,9 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
               ),
             ],
 
+            // 队列选择器（有命名队列时才显示）
+            _buildQueueSelector(s, c),
+
             // 高级选项 — 可折叠，含任务独立代理
             const SizedBox(height: 10),
             GestureDetector(
@@ -803,8 +806,6 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                   ),
                 ],
               ),
-              // 队列选择器（有命名队列时才显示）
-              _buildQueueSelector(s, c),
             ],
           ],
         ),

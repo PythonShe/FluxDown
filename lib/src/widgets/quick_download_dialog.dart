@@ -16,6 +16,8 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 
 import '../bindings/bindings.dart';
 import '../i18n/locale_provider.dart';
+import '../models/download_controller.dart';
+import '../models/download_queue.dart';
 import '../theme/app_colors.dart';
 import 'dir_picker_field.dart';
 
@@ -45,6 +47,7 @@ void showQuickDownloadDialog(
   required String mimeType,
   required String cookies,
   required String defaultSaveDir,
+  String defaultQueueId = '',
 }) {
   showShadDialog(
     context: context,
@@ -58,6 +61,7 @@ void showQuickDownloadDialog(
       mimeType: mimeType,
       cookies: cookies,
       defaultSaveDir: defaultSaveDir,
+      defaultQueueId: defaultQueueId,
     ),
   );
 }
@@ -69,6 +73,7 @@ class _QuickDownloadDialogContent extends StatefulWidget {
   final String mimeType;
   final String cookies;
   final String defaultSaveDir;
+  final String defaultQueueId;
 
   const _QuickDownloadDialogContent({
     required this.url,
@@ -77,6 +82,7 @@ class _QuickDownloadDialogContent extends StatefulWidget {
     required this.mimeType,
     required this.cookies,
     required this.defaultSaveDir,
+    required this.defaultQueueId,
   });
 
   @override
@@ -95,6 +101,9 @@ class _QuickDownloadDialogContentState
   String? selectedThreads;
   String _selectedUaPreset = 'custom';
 
+  /// 选中的队列 ID（空字符串 = 默认队列）
+  late String _selectedQueueId;
+
   /// 是否展开高级选项（含任务代理）
   bool _showAdvanced = false;
 
@@ -107,6 +116,7 @@ class _QuickDownloadDialogContentState
   @override
   void initState() {
     super.initState();
+    _selectedQueueId = widget.defaultQueueId;
     _urlController.text = widget.url;
     _saveDirController.text = widget.defaultSaveDir;
     if (widget.filename.isNotEmpty) {
@@ -211,7 +221,7 @@ class _QuickDownloadDialogContentState
         cookies: widget.cookies,
         proxyUrl: proxyUrl,
         userAgent: userAgent,
-        queueId: '',
+        queueId: _selectedQueueId,
       ).sendSignalToRust();
     } else {
       // 多条 — 使用 BatchCreateTask
@@ -221,7 +231,7 @@ class _QuickDownloadDialogContentState
         segments: segments,
         proxyUrl: proxyUrl,
         userAgent: userAgent,
-        queueId: '',
+        queueId: _selectedQueueId,
       ).sendSignalToRust();
     }
 
@@ -431,6 +441,9 @@ class _QuickDownloadDialogContentState
               ),
             ],
 
+            // 队列选择器（有命名队列时才显示）
+            _buildQueueSelector(s, c),
+
             // 高级选项 — 可折叠，含任务独立代理
             const SizedBox(height: 10),
             GestureDetector(
@@ -569,6 +582,51 @@ class _QuickDownloadDialogContentState
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildQueueSelector(S s, AppColors c) {
+    final queues = DownloadController.globalInstance?.queues ?? [];
+    if (queues.isEmpty) return const SizedBox.shrink();
+
+    final allOptions = <DownloadQueue>[
+      const DownloadQueue(
+        queueId: '',
+        name: '',
+        speedLimitKbps: 0,
+        maxConcurrent: 0,
+        defaultSaveDir: '',
+        position: -1,
+      ),
+      ...queues,
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 14),
+        _SectionLabel(text: s.taskQueueLabel, c: c),
+        const SizedBox(height: 6),
+        ShadSelect<String>(
+          initialValue: _selectedQueueId,
+          options: allOptions.map((q) {
+            final label = q.queueId.isEmpty ? s.defaultQueue : q.name;
+            return ShadOption(value: q.queueId, child: Text(label));
+          }).toList(),
+          selectedOptionBuilder: (context, value) {
+            if (value.isEmpty) return Text(s.defaultQueue);
+            final q = queues.where((q) => q.queueId == value).firstOrNull;
+            return Text(
+              q?.name ?? s.defaultQueue,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            );
+          },
+          onChanged: (v) {
+            if (v != null) setState(() => _selectedQueueId = v);
+          },
+        ),
+      ],
     );
   }
 }

@@ -138,6 +138,10 @@ pub async fn run(db_dir: PathBuf) {
         tokio::spawn(download_manager::progress_reporter(rx, db.clone()));
     }
 
+    // Load named queue settings into the in-memory cache so that
+    // per-queue speed limits and concurrency limits take effect immediately.
+    manager.load_queues().await;
+
     // Channel for spawned tasks to notify completion (for active_tokens cleanup)
     let mut done_rx: mpsc::Receiver<TaskDone> = match manager.take_done_rx() {
         Some(rx) => rx,
@@ -193,6 +197,9 @@ pub async fn run(db_dir: PathBuf) {
                 manager
                     .create_task(msg.url, msg.save_dir, msg.file_name, msg.segments, msg.cookies, msg.torrent_file_bytes, msg.proxy_url, msg.user_agent, msg.queue_id)
                     .await;
+                // 立即推送 AllTasks，确保 Dart 端在收到 TaskProgress 之前
+                // 已通过 AllTasks 获得正确的 queue_id，防止新任务被错误归入默认队列。
+                manager.load_and_send_all_tasks().await;
             }
             Some(signal) = batch_create_recv.recv() => {
                 let msg = signal.message;
@@ -205,6 +212,8 @@ pub async fn run(db_dir: PathBuf) {
                         .create_task(url, msg.save_dir.clone(), String::new(), msg.segments, String::new(), Vec::new(), msg.proxy_url.clone(), msg.user_agent.clone(), msg.queue_id.clone())
                         .await;
                 }
+                // 批量创建完成后统一推送一次 AllTasks，同步 queue_id 到 Dart。
+                manager.load_and_send_all_tasks().await;
             }
             Some(signal) = control_recv.recv() => {
                 let msg = signal.message;
@@ -343,17 +352,19 @@ pub async fn run(db_dir: PathBuf) {
                 manager
                     .create_task(msg.url, msg.save_dir, msg.file_name, msg.segments, msg.cookies, Vec::new(), msg.proxy_url, msg.user_agent, msg.queue_id)
                     .await;
+                // 推送 AllTasks 确保 Dart 端获得正确 queue_id。
+                manager.load_and_send_all_tasks().await;
             }
             // --- Named queue management ---
             Some(signal) = create_queue_recv.recv() => {
                 let msg = signal.message;
                 rinf::debug_print!("[actor] CreateQueue: name={}", msg.name);
-                manager.create_queue(msg.name, msg.speed_limit_kbps, msg.max_concurrent, msg.default_save_dir).await;
+                manager.create_queue(msg.name, msg.speed_limit_kbps, msg.max_concurrent, msg.default_save_dir, msg.default_segments).await;
             }
             Some(signal) = update_queue_recv.recv() => {
                 let msg = signal.message;
                 rinf::debug_print!("[actor] UpdateQueue: id={}", msg.queue_id);
-                manager.update_queue(msg.queue_id, msg.name, msg.speed_limit_kbps, msg.max_concurrent, msg.default_save_dir).await;
+                manager.update_queue(msg.queue_id, msg.name, msg.speed_limit_kbps, msg.max_concurrent, msg.default_save_dir, msg.default_segments).await;
             }
             Some(signal) = delete_queue_recv.recv() => {
                 let msg = signal.message;

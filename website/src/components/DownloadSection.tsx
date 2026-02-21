@@ -341,25 +341,40 @@ export default function DownloadSection() {
                       <span className="ml-1.5">· Chrome + Firefox</span>
                     </p>
                   )}
+                  <p className="text-[10px] text-dark-text-muted/70 mt-1">{t("dl.extensionOtherNote")}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-3 flex-shrink-0">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-shrink-0">
+                {/* Firefox 官方商店按钮 */}
+                <a
+                  href="https://addons.mozilla.org/zh-CN/firefox/addon/fluxdown"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#ff7139]/30 bg-[#ff7139]/10 px-4 py-2.5 text-xs font-semibold text-[#ff7139] hover:bg-[#ff7139]/20 transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 16.43c-.195.334-.413.65-.655.948-.494.61-1.07 1.084-1.7 1.41-.646.336-1.347.506-2.069.506-.723 0-1.424-.17-2.07-.506-.63-.326-1.205-.8-1.699-1.41-.242-.298-.46-.614-.655-.948C8.456 15.3 8 13.697 8 12c0-1.698.456-3.3 1.046-4.43.195-.334.413-.65.655-.948.494-.61 1.07-1.084 1.7-1.41C12.047 4.876 12.748 4.706 13.47 4.706c.722 0 1.423.17 2.069.506.63.326 1.206.8 1.7 1.41.242.298.46.614.655.948C18.484 8.7 19 10.303 19 12c0 1.697-.516 3.3-1.106 4.43z"/>
+                  </svg>
+                  {t("dl.extensionFirefox")}
+                </a>
+                {/* 离线包按钮（其他浏览器） */}
                 {loading ? (
-                  <div className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-blue/50 px-5 py-2.5 text-xs font-semibold text-white/70 cursor-wait">
+                  <div className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-blue/50 px-4 py-2.5 text-xs font-semibold text-white/70 cursor-wait">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     {t("dl.loading")}
                   </div>
                 ) : release?.assets.extension ? (
                   <a
                     href={release.assets.extension.download_url}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-brand-blue/30 bg-brand-blue/10 px-5 py-2.5 text-xs font-semibold text-brand-blue hover:bg-brand-blue/20 transition-colors"
+                    title={t("dl.extensionOtherNote")}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-brand-blue/30 bg-brand-blue/10 px-4 py-2.5 text-xs font-semibold text-brand-blue hover:bg-brand-blue/20 transition-colors"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    {t("dl.downloadExtension")}
+                    {t("dl.extensionOffline")}
                   </a>
                 ) : (
-                  <div className="inline-flex items-center justify-center gap-2 rounded-lg border border-dark-border px-5 py-2.5 text-xs font-medium text-dark-text-muted">
-                    {t("dl.comingSoon")}
+                  <div className="inline-flex items-center justify-center gap-2 rounded-lg border border-dark-border px-4 py-2.5 text-xs font-medium text-dark-text-muted">
+                    {t("dl.extensionOffline")}
                   </div>
                 )}
               </div>

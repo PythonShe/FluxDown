@@ -192,7 +192,10 @@ const zhCN: Messages = {
   "dl.portablePkg": "便携版",
   "dl.extensionTitle": "浏览器扩展",
   "dl.extensionDesc":
-    "拦截浏览器下载并发送到 FluxDown，支持 Chrome 和 Firefox。",
+    "拦截浏览器下载并发送到 FluxDown，支持 Chrome 和 Firefox。Firefox 扩展已在官方商店上架。",
+  "dl.extensionFirefox": "Firefox 官方商店",
+  "dl.extensionOffline": "离线安装包",
+  "dl.extensionOtherNote": "其他浏览器上架审核中，可先下载离线版使用",
   "dl.downloadExtension": "下载扩展",
   "dl.totalDownloads": "次下载",
   "dl.notifyMe": "上线通知",

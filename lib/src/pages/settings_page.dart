@@ -8,6 +8,8 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../main.dart';
 import '../bindings/bindings.dart';
 import '../i18n/locale_provider.dart';
+import '../models/download_controller.dart';
+import '../models/download_queue.dart';
 import '../models/settings_provider.dart';
 import '../services/update_service.dart';
 import '../theme/app_colors.dart';
@@ -194,12 +196,14 @@ List<SettingsSearchItem> get settingsSearchItems {
 class SettingsPage extends StatefulWidget {
   final VoidCallback onBack;
   final SettingsProvider settingsProvider;
+  final DownloadController? downloadController;
   final SettingsCategory? initialCategory;
 
   const SettingsPage({
     super.key,
     required this.onBack,
     required this.settingsProvider,
+    this.downloadController,
     this.initialCategory,
   });
 
@@ -281,6 +285,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: _SettingsContent(
                   category: _selected,
                   settingsProvider: widget.settingsProvider,
+                  downloadController: widget.downloadController,
                 ),
               ),
             ],
@@ -409,10 +414,12 @@ class _SettingsNavItemState extends State<_SettingsNavItem> {
 class _SettingsContent extends StatelessWidget {
   final SettingsCategory category;
   final SettingsProvider settingsProvider;
+  final DownloadController? downloadController;
 
   const _SettingsContent({
     required this.category,
     required this.settingsProvider,
+    this.downloadController,
   });
 
   @override
@@ -447,6 +454,7 @@ class _SettingsContent extends StatelessWidget {
                   SettingsCategory.download => _DownloadContent(
                     key: ValueKey('download'),
                     settingsProvider: settingsProvider,
+                    downloadController: downloadController,
                   ),
                   SettingsCategory.bt => _BtContent(
                     key: const ValueKey('bt'),
@@ -710,50 +718,120 @@ class _AppearanceContent extends StatelessWidget {
 
 class _DownloadContent extends StatelessWidget {
   final SettingsProvider settingsProvider;
+  final DownloadController? downloadController;
 
-  const _DownloadContent({super.key, required this.settingsProvider});
+  const _DownloadContent({
+    super.key,
+    required this.settingsProvider,
+    this.downloadController,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final listenable = downloadController != null
+        ? Listenable.merge([settingsProvider, downloadController!])
+        : settingsProvider;
     return ListenableBuilder(
-      listenable: settingsProvider,
+      listenable: listenable,
       builder: (context, _) {
+        final s = LocaleScope.of(context);
+        final queues = downloadController?.queues ?? [];
         return Column(
           children: [
             _SettingCard(
-              label: LocaleScope.of(context).defaultSaveDir,
-              description: LocaleScope.of(context).defaultSaveDirDesc,
+              label: s.defaultSaveDir,
+              description: s.defaultSaveDirDesc,
               vertical: true,
               child: _SaveDirPicker(settingsProvider: settingsProvider),
             ),
             const SizedBox(height: 10),
             _SettingCard(
-              label: LocaleScope.of(context).defaultThreads,
-              description: LocaleScope.of(context).defaultThreadsDesc,
+              label: s.defaultThreads,
+              description: s.defaultThreadsDesc,
               child: _SegmentSelector(settingsProvider: settingsProvider),
             ),
             const SizedBox(height: 10),
             _SettingCard(
-              label: LocaleScope.of(context).maxConcurrent,
-              description: LocaleScope.of(context).maxConcurrentDesc,
+              label: s.maxConcurrent,
+              description: s.maxConcurrentDesc,
               child: _ConcurrentSelector(settingsProvider: settingsProvider),
             ),
             const SizedBox(height: 10),
             _SettingCard(
-              label: LocaleScope.of(context).speedLimit,
-              description: LocaleScope.of(context).speedLimitDesc,
+              label: s.speedLimit,
+              description: s.speedLimitDesc,
               vertical: true,
               child: _SpeedLimitInput(settingsProvider: settingsProvider),
             ),
             const SizedBox(height: 10),
             _SettingCard(
-              label: LocaleScope.of(context).userAgent,
-              description: LocaleScope.of(context).userAgentDesc,
+              label: s.userAgent,
+              description: s.userAgentDesc,
               vertical: true,
               child: _UserAgentEditor(settingsProvider: settingsProvider),
             ),
+            if (queues.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              _SettingCard(
+                label: s.defaultQueueSetting,
+                description: s.defaultQueueSettingDesc,
+                child: _DefaultQueueSelector(
+                  settingsProvider: settingsProvider,
+                  queues: queues,
+                ),
+              ),
+            ],
           ],
         );
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 默认队列选择器（下载设置内）
+// ─────────────────────────────────────────────
+
+class _DefaultQueueSelector extends StatelessWidget {
+  final SettingsProvider settingsProvider;
+  final List<DownloadQueue> queues;
+
+  const _DefaultQueueSelector({
+    required this.settingsProvider,
+    required this.queues,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final s = LocaleScope.of(context);
+    final allOptions = <DownloadQueue>[
+      const DownloadQueue(
+        queueId: '',
+        name: '',
+        speedLimitKbps: 0,
+        maxConcurrent: 0,
+        defaultSaveDir: '',
+        position: -1,
+      ),
+      ...queues,
+    ];
+    return ShadSelect<String>(
+      initialValue: settingsProvider.defaultQueueId,
+      options: allOptions.map((q) {
+        final label = q.queueId.isEmpty ? s.defaultQueue : q.name;
+        return ShadOption(value: q.queueId, child: Text(label));
+      }).toList(),
+      selectedOptionBuilder: (context, value) {
+        if (value.isEmpty) return Text(s.defaultQueue);
+        final q = queues.where((q) => q.queueId == value).firstOrNull;
+        return Text(
+          q?.name ?? s.defaultQueue,
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        );
+      },
+      onChanged: (v) {
+        if (v != null) settingsProvider.setDefaultQueueId(v);
       },
     );
   }

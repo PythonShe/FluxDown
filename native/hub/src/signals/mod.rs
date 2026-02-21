@@ -383,10 +383,13 @@ pub struct CreateQueue {
     pub name: String,
     /// Speed limit in KB/s for this queue. 0 = no limit.
     pub speed_limit_kbps: i64,
-    /// Max concurrent downloads for this queue. 0 = use global setting.
+    /// Max simultaneous tasks for this queue. 0 = use global setting.
     pub max_concurrent: i32,
     /// Default save directory for tasks in this queue. Empty = use global default.
     pub default_save_dir: String,
+    /// Default segment count for new tasks in this queue. 0 = auto (global advisor).
+    #[serde(default)]
+    pub default_segments: i32,
 }
 
 /// Update an existing queue's settings (Dart → Rust)
@@ -397,6 +400,9 @@ pub struct UpdateQueue {
     pub speed_limit_kbps: i64,
     pub max_concurrent: i32,
     pub default_save_dir: String,
+    /// Default segment count for new tasks in this queue. 0 = auto (global advisor).
+    #[serde(default)]
+    pub default_segments: i32,
 }
 
 /// Delete a named queue (Dart → Rust). Tasks move to the default queue.
@@ -430,10 +436,12 @@ pub struct QueueInfo {
     pub name: String,
     /// Speed limit in KB/s. 0 = no limit.
     pub speed_limit_kbps: i64,
-    /// Max concurrent downloads. 0 = use global setting.
+    /// Max simultaneous tasks in this queue. 0 = use global setting.
     pub max_concurrent: i32,
     /// Default save directory. Empty = use global default.
     pub default_save_dir: String,
     /// Display order (lower = higher up).
     pub position: i32,
+    /// Default segment count for new tasks. 0 = auto (global segment advisor).
+    pub default_segments: i32,
 }

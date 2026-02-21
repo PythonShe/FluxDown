@@ -17,6 +17,8 @@ enum StatusTab { all, downloading, completed, paused, error }
 
 /// 核心状态管理器 — 桥接 Rust 信号和 Flutter UI
 class DownloadController extends ChangeNotifier {
+  /// 全局单例引用，供无 context 场景（如 ExternalDownloadService）读取队列信息
+  static DownloadController? globalInstance;
   final List<DownloadTask> _tasks = [];
   String? _selectedTaskId;
   FileCategory _categoryFilter = FileCategory.all;
@@ -54,6 +56,7 @@ class DownloadController extends ChangeNotifier {
 
   DownloadController() {
     logInfo(_tag, 'constructor — starting listeners');
+    globalInstance = this;
     _startListening();
     // 启动时请求所有持久化任务和队列
     const RequestAllTasks().sendSignalToRust();
@@ -64,6 +67,7 @@ class DownloadController extends ChangeNotifier {
   void dispose() {
     logInfo(_tag, 'dispose called');
     _disposed = true;
+    if (globalInstance == this) globalInstance = null;
     _progressSub?.cancel();
     _allTasksSub?.cancel();
     _segmentSub?.cancel();
@@ -601,16 +605,18 @@ class DownloadController extends ChangeNotifier {
     int speedLimitKbps = 0,
     int maxConcurrent = 0,
     String defaultSaveDir = '',
+    int defaultSegments = 0,
   }) {
     logInfo(
       _tag,
-      'createQueue: name=$name, speedLimit=$speedLimitKbps, maxConcurrent=$maxConcurrent',
+      'createQueue: name=$name, speedLimit=$speedLimitKbps, maxConcurrent=$maxConcurrent, defaultSegments=$defaultSegments',
     );
     CreateQueue(
       name: name,
       speedLimitKbps: speedLimitKbps,
       maxConcurrent: maxConcurrent,
       defaultSaveDir: defaultSaveDir,
+      defaultSegments: defaultSegments,
     ).sendSignalToRust();
   }
 
@@ -620,14 +626,16 @@ class DownloadController extends ChangeNotifier {
     int speedLimitKbps = 0,
     int maxConcurrent = 0,
     String defaultSaveDir = '',
+    int defaultSegments = 0,
   }) {
-    logInfo(_tag, 'updateQueue: id=$queueId, name=$name');
+    logInfo(_tag, 'updateQueue: id=$queueId, name=$name, defaultSegments=$defaultSegments');
     UpdateQueue(
       queueId: queueId,
       name: name,
       speedLimitKbps: speedLimitKbps,
       maxConcurrent: maxConcurrent,
       defaultSaveDir: defaultSaveDir,
+      defaultSegments: defaultSegments,
     ).sendSignalToRust();
   }
 
@@ -717,6 +725,13 @@ class DownloadController extends ChangeNotifier {
     final idx = _tasks.indexWhere((t) => t.id == p.taskId);
     if (idx >= 0) {
       final oldStatus = _tasks[idx].status;
+      // 防止 Rust progress_reporter channel 中积压的 status=1 更新覆盖已
+      // 乐观设置的 paused 状态。pause_task 直接调用 send_signal_to_dart() 发
+      // 送 status=2，但 channel 里仍有 status=1 消息在排队，需丢弃。
+      // resume 时 Dart 端先设置 resuming，不会命中此条件。
+      if (oldStatus == TaskStatus.paused && newStatus == TaskStatus.downloading) {
+        return;
+      }
       _tasks[idx] = _tasks[idx].applyProgress(p);
       // 任务离开 downloading 状态时清空 recentSplits，避免内存泄漏
       if (oldStatus == TaskStatus.downloading &&

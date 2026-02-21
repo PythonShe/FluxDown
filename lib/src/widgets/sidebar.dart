@@ -223,12 +223,13 @@ class _SidebarState extends State<Sidebar> {
         nameCtrl: nameCtrl,
         s: s,
         c: c,
-        onConfirm: (name, speedLimit, maxConcurrent, saveDir) {
+        onConfirm: (name, speedLimit, maxConcurrent, saveDir, defaultSegments) {
           ctrl.createQueue(
             name: name,
             speedLimitKbps: speedLimit,
             maxConcurrent: maxConcurrent,
             defaultSaveDir: saveDir,
+            defaultSegments: defaultSegments,
           );
         },
       ),
@@ -251,13 +252,15 @@ class _SidebarState extends State<Sidebar> {
         initialSpeedLimit: queue.speedLimitKbps,
         initialMaxConcurrent: queue.maxConcurrent,
         initialSaveDir: queue.defaultSaveDir,
-        onConfirm: (name, speedLimit, maxConcurrent, saveDir) {
+        initialDefaultSegments: queue.defaultSegments,
+        onConfirm: (name, speedLimit, maxConcurrent, saveDir, defaultSegments) {
           ctrl.updateQueue(
             queueId: queue.queueId,
             name: name,
             speedLimitKbps: speedLimit,
             maxConcurrent: maxConcurrent,
             defaultSaveDir: saveDir,
+            defaultSegments: defaultSegments,
           );
         },
       ),
@@ -746,7 +749,8 @@ class _QueueDialog extends StatefulWidget {
   final int initialSpeedLimit;
   final int initialMaxConcurrent;
   final String initialSaveDir;
-  final void Function(String name, int speedLimit, int maxConcurrent, String saveDir) onConfirm;
+  final int initialDefaultSegments;
+  final void Function(String name, int speedLimit, int maxConcurrent, String saveDir, int defaultSegments) onConfirm;
 
   const _QueueDialog({
     required this.title,
@@ -756,6 +760,7 @@ class _QueueDialog extends StatefulWidget {
     this.initialSpeedLimit = 0,
     this.initialMaxConcurrent = 0,
     this.initialSaveDir = '',
+    this.initialDefaultSegments = 0,
     required this.onConfirm,
   });
 
@@ -767,6 +772,9 @@ class _QueueDialogState extends State<_QueueDialog> {
   late final TextEditingController _speedCtrl;
   late final TextEditingController _concurrentCtrl;
   late final TextEditingController _saveDirCtrl;
+  late String _selectedSegments;
+
+  static const _segmentOptions = ['0', '4', '8', '16', '32', '64'];
 
   @override
   void initState() {
@@ -778,6 +786,9 @@ class _QueueDialogState extends State<_QueueDialog> {
       text: widget.initialMaxConcurrent > 0 ? widget.initialMaxConcurrent.toString() : '',
     );
     _saveDirCtrl = TextEditingController(text: widget.initialSaveDir);
+    _selectedSegments = widget.initialDefaultSegments > 0
+        ? widget.initialDefaultSegments.toString()
+        : '0';
   }
 
   @override
@@ -797,8 +808,9 @@ class _QueueDialogState extends State<_QueueDialog> {
     final maxConcurrent =
         (int.tryParse(_concurrentCtrl.text.trim()) ?? 0).clamp(0, 100);
     final saveDir = _saveDirCtrl.text.trim();
+    final defaultSegments = int.tryParse(_selectedSegments) ?? 0;
     Navigator.of(context).pop();
-    widget.onConfirm(name, speedLimit, maxConcurrent, saveDir);
+    widget.onConfirm(name, speedLimit, maxConcurrent, saveDir, defaultSegments);
   }
 
   @override
@@ -871,6 +883,28 @@ class _QueueDialogState extends State<_QueueDialog> {
                       ),
                     ],
                   ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  s.queueDefaultSegments,
+                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w500, color: c.textSecondary),
+                ),
+                const SizedBox(height: 6),
+                ShadSelect<String>(
+                  initialValue: _selectedSegments,
+                  onChanged: (v) {
+                    if (v != null) setState(() => _selectedSegments = v);
+                  },
+                  options: _segmentOptions.map((opt) => ShadOption(
+                    value: opt,
+                    child: Text(opt == '0' ? s.queueDefaultSegmentsHint : opt),
+                  )).toList(),
+                  selectedOptionBuilder: (ctx, v) => Text(v == '0' ? s.queueDefaultSegmentsHint : v),
                 ),
               ],
             ),

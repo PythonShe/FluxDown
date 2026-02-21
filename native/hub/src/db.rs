@@ -89,6 +89,11 @@ impl Db {
             "ALTER TABLE tasks ADD COLUMN queue_id TEXT NOT NULL DEFAULT '';"
         );
 
+        // Phase 4: per-queue default segment count
+        let _ = conn.execute_batch(
+            "ALTER TABLE queues ADD COLUMN default_segments INTEGER NOT NULL DEFAULT 0;"
+        );
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -725,6 +730,7 @@ impl Db {
         max_concurrent: i32,
         default_save_dir: &str,
         position: i32,
+        default_segments: i32,
     ) -> Result<(), DbError> {
         let conn = self.conn.clone();
         let id = id.to_owned();
@@ -733,9 +739,9 @@ impl Db {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
             conn.execute(
-                "INSERT INTO queues (id, name, speed_limit_kbps, max_concurrent, default_save_dir, position)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id, name, speed_limit_kbps, max_concurrent, default_save_dir, position],
+                "INSERT INTO queues (id, name, speed_limit_kbps, max_concurrent, default_save_dir, position, default_segments)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![id, name, speed_limit_kbps, max_concurrent, default_save_dir, position, default_segments],
             )?;
             Ok(())
         })
@@ -750,6 +756,7 @@ impl Db {
         speed_limit_kbps: i64,
         max_concurrent: i32,
         default_save_dir: &str,
+        default_segments: i32,
     ) -> Result<(), DbError> {
         let conn = self.conn.clone();
         let id = id.to_owned();
@@ -758,9 +765,9 @@ impl Db {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
             conn.execute(
-                "UPDATE queues SET name = ?1, speed_limit_kbps = ?2, max_concurrent = ?3, default_save_dir = ?4
-                 WHERE id = ?5",
-                params![name, speed_limit_kbps, max_concurrent, default_save_dir, id],
+                "UPDATE queues SET name = ?1, speed_limit_kbps = ?2, max_concurrent = ?3, \
+                 default_save_dir = ?4, default_segments = ?5 WHERE id = ?6",
+                params![name, speed_limit_kbps, max_concurrent, default_save_dir, default_segments, id],
             )?;
             Ok(())
         })
@@ -792,7 +799,7 @@ impl Db {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
             let mut stmt = conn.prepare(
-                "SELECT id, name, speed_limit_kbps, max_concurrent, default_save_dir, position
+                "SELECT id, name, speed_limit_kbps, max_concurrent, default_save_dir, position, default_segments
                  FROM queues ORDER BY position ASC",
             )?;
             let rows = stmt.query_map([], |row| {
@@ -803,6 +810,7 @@ impl Db {
                     max_concurrent: row.get(3)?,
                     default_save_dir: row.get(4)?,
                     position: row.get(5)?,
+                    default_segments: row.get(6)?,
                 })
             })?;
             let mut queues = Vec::new();

@@ -47,6 +47,9 @@ class SettingsProvider extends ChangeNotifier {
   // UA 设置
   String _globalUserAgent = ''; // 空字符串 = 使用内置 Chrome UA
 
+  // 默认队列设置
+  String _defaultQueueId = ''; // 空字符串 = 默认队列
+
   /// 配置是否已从 Rust 端加载完成
   bool _loaded = false;
 
@@ -116,6 +119,9 @@ class SettingsProvider extends ChangeNotifier {
 
   // UA 设置 Getter
   String get globalUserAgent => _globalUserAgent;
+
+  // 默认队列 Getter
+  String get defaultQueueId => _defaultQueueId;
 
   // ---------------------------------------------------------------------------
   // Setters — 修改值 + 通知 Rust 持久化
@@ -275,6 +281,14 @@ class SettingsProvider extends ChangeNotifier {
     _saveToRust('global_user_agent', value);
   }
 
+  // 默认队列 Setter
+  void setDefaultQueueId(String value) {
+    if (_defaultQueueId == value) return;
+    _defaultQueueId = value;
+    notifyListeners();
+    _saveToRust('default_queue_id', value);
+  }
+
   // 文件关联操作
 
   /// 标记已弹窗提示过文件关联（持久化到 Rust SQLite）
@@ -417,6 +431,8 @@ class SettingsProvider extends ChangeNotifier {
           _proxyNoList = entry.value;
         case 'global_user_agent':
           _globalUserAgent = entry.value;
+        case 'default_queue_id':
+          _defaultQueueId = entry.value;
       }
     }
     _loaded = true;
