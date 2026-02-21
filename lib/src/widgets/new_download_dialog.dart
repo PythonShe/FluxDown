@@ -99,17 +99,28 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
   }
 
   /// 从文本中解析所有有效的 URL（http/https/ftp/magnet）
-  static List<String> _parseUrls(String text) {
+  ///
+  /// [loose] 为 true 时从行内任意位置提取，适合 TXT 文件导入场景；
+  /// 默认严格模式要求 URL 位于行首，适合手动输入。
+  static List<String> _parseUrls(String text, {bool loose = false}) {
     final lines = text.split('\n');
     final urls = <String>[];
-    final urlPattern = RegExp(r'^(https?|ftp)://\S+', caseSensitive: false);
+    final pattern = RegExp(r'(https?|ftp)://\S+', caseSensitive: false);
+    final strictPattern = RegExp(r'^(https?|ftp)://\S+', caseSensitive: false);
     for (final line in lines) {
       final trimmed = line.trim();
       if (trimmed.isEmpty) continue;
-      if (trimmed.toLowerCase().startsWith('magnet:?')) {
-        urls.add(trimmed);
+      final lower = trimmed.toLowerCase();
+      final magnetIdx = lower.indexOf('magnet:?');
+      if (magnetIdx != -1) {
+        urls.add(trimmed.substring(magnetIdx));
+      } else if (loose) {
+        for (final match in pattern.allMatches(trimmed)) {
+          final url = _trimUrlTail(match.group(0)!);
+          if (url.isNotEmpty) urls.add(url);
+        }
       } else {
-        final match = urlPattern.firstMatch(trimmed);
+        final match = strictPattern.firstMatch(trimmed);
         if (match != null) {
           urls.add(match.group(0)!);
         }
@@ -117,6 +128,10 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
     }
     return urls;
   }
+
+  /// 去掉 URL 末尾常见标点（TXT 文本中 URL 后可能跟随句号/逗号等）
+  static String _trimUrlTail(String url) =>
+      url.replaceAll(RegExp(r'[.,;:!?()\[\]{}]+$'), '');
 
   /// 读取剪切板内容，自动填入所有识别到的 URL
   Future<void> _pasteUrlFromClipboard() async {
@@ -174,6 +189,53 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
     setState(() {
       _torrentFilePaths.removeAt(index);
     });
+  }
+
+  /// 从 TXT 文件中导入链接，支持多文件选择
+  Future<void> _importFromTxt() async {
+    if (_isPicking) return;
+    setState(() => _isPicking = true);
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: currentS.importTxtFile,
+        type: FileType.custom,
+        allowedExtensions: ['txt', 'text'],
+        allowMultiple: true,
+        lockParentWindow: true,
+      );
+      if (result == null || result.files.isEmpty || !mounted) return;
+
+      final extracted = <String>[];
+      for (final file in result.files) {
+        if (file.path == null) continue;
+        try {
+          final content = await File(file.path!).readAsString();
+          extracted.addAll(_parseUrls(content, loose: true));
+        } catch (_) {
+          // 单文件读取失败时跳过，继续处理其他文件
+        }
+      }
+
+      if (!mounted) return;
+
+      if (extracted.isEmpty) {
+        ShadSonner.of(context).show(
+          ShadToast(title: Text(currentS.importTxtNoUrls)),
+        );
+        return;
+      }
+
+      // 追加到已有内容，去重
+      final existing = _parseUrls(_urlController.text);
+      final merged = {...existing, ...extracted};
+      _urlController.text = merged.join('\n');
+
+      ShadSonner.of(context).show(
+        ShadToast(title: Text(currentS.importTxtFound(extracted.length))),
+      );
+    } finally {
+      if (mounted) setState(() => _isPicking = false);
+    }
   }
 
   Future<void> _pickSaveDir() async {
@@ -483,25 +545,42 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                 ),
               ),
               const SizedBox(height: 6),
-              // .torrent 文件选择按钮
-              Align(
-                alignment: Alignment.centerLeft,
-                child: ShadButton.ghost(
-                  size: ShadButtonSize.sm,
-                  enabled: !_isPicking,
-                  onPressed: _pickTorrentFiles,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(LucideIcons.fileDown, size: 13, color: c.accent),
-                      const SizedBox(width: 6),
-                      Text(
-                        s.openTorrentFile,
-                        style: TextStyle(fontSize: 12, color: c.accent),
-                      ),
-                    ],
+              // .torrent 文件选择 + TXT 导入按钮
+              Row(
+                children: [
+                  ShadButton.ghost(
+                    size: ShadButtonSize.sm,
+                    enabled: !_isPicking,
+                    onPressed: _pickTorrentFiles,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(LucideIcons.fileDown, size: 13, color: c.accent),
+                        const SizedBox(width: 6),
+                        Text(
+                          s.openTorrentFile,
+                          style: TextStyle(fontSize: 12, color: c.accent),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                  ShadButton.ghost(
+                    size: ShadButtonSize.sm,
+                    enabled: !_isPicking,
+                    onPressed: _importFromTxt,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(LucideIcons.fileText, size: 13, color: c.textMuted),
+                        const SizedBox(width: 6),
+                        Text(
+                          s.importTxtFile,
+                          style: TextStyle(fontSize: 12, color: c.textMuted),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
             ],

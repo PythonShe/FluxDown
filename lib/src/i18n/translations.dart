@@ -254,6 +254,11 @@ class S {
   String urlCount(int count) => _t('$count 个链接', '$count URLs');
   String startBatchDownload(int count) =>
       _t('下载 $count 个文件', 'Download $count files');
+  String get importTxtFile => _t('导入 TXT 文件', 'Import TXT file');
+  String get importTxtNoUrls =>
+      _t('未在文件中找到有效链接', 'No valid URLs found in file');
+  String importTxtFound(int count) =>
+      _t('已导入 $count 个链接', 'Imported $count URLs');
 
   // ─────────────────────────────────────────────
   // StatusBar
