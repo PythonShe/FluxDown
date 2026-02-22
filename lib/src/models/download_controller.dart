@@ -331,6 +331,12 @@ class DownloadController extends ChangeNotifier {
     _safeNotifyListeners();
   }
 
+  void enterManageMode() {
+    if (_isManageMode) return;
+    _isManageMode = true;
+    _safeNotifyListeners();
+  }
+
   void exitManageMode() {
     if (!_isManageMode) return;
     _isManageMode = false;

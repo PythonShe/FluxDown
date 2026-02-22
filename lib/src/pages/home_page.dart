@@ -19,6 +19,7 @@ import '../widgets/task_list.dart';
 import '../widgets/detail_panel.dart';
 import '../widgets/status_bar.dart';
 import '../widgets/new_download_dialog.dart';
+import '../widgets/task_list_item.dart';
 import '../widgets/title_drag_area.dart';
 import 'settings_page.dart';
 
@@ -168,12 +169,47 @@ class _HomePageState extends State<HomePage> {
   /// 全局快捷键处理 — 不依赖焦点树
   bool _onGlobalKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
+
+    final isCtrl = HardwareKeyboard.instance.isControlPressed;
+
     // Ctrl+F → 聚焦搜索框
-    if (HardwareKeyboard.instance.isControlPressed &&
-        event.logicalKey == LogicalKeyboardKey.keyF) {
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyF) {
       _headerBarKey.currentState?.focusSearch();
       return true;
     }
+
+    // Ctrl+A → 全选当前筛选列表（自动进入管理模式）
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyA) {
+      if (!_controller.isManageMode) {
+        _controller.enterManageMode();
+      }
+      _controller.selectAllFiltered();
+      return true;
+    }
+
+    // Esc → 退出管理模式
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
+        _controller.isManageMode) {
+      _controller.exitManageMode();
+      return true;
+    }
+
+    // Del → 弹出批量删除确认（含删任务 / 删任务+文件 两个操作）
+    if (event.logicalKey == LogicalKeyboardKey.delete &&
+        _controller.isManageMode &&
+        _controller.checkedCount > 0) {
+      if (!mounted) return false;
+      showBatchDeleteDialog(
+        context,
+        count: _controller.checkedCount,
+        onDeleteTask: () =>
+            _controller.deleteCheckedTasks(deleteFiles: false),
+        onDeleteTaskAndFile: () =>
+            _controller.deleteCheckedTasks(deleteFiles: true),
+      );
+      return true;
+    }
+
     return false;
   }
 

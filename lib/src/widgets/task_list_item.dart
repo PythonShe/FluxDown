@@ -506,7 +506,7 @@ Future<void> _openFile(String filePath) => openFile(filePath);
 Future<void> _openFolder(String filePath) => openFolder(filePath);
 
 // =============================================================================
-// 删除确认对话框
+// 单任务删除确认对话框（原有，保留兼容性）
 // =============================================================================
 
 void showDeleteConfirmDialog(
@@ -523,44 +523,23 @@ void showDeleteConfirmDialog(
     barrierColor: c.dialogBarrier,
     animateIn: const [],
     animateOut: const [],
-    builder: (ctx) => ShadDialog(
-      title: Text(
-        s.deleteConfirmTitle(deleteFiles),
-        style: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-          color: c.textPrimary,
-        ),
-      ),
-      description: Text(
-        s.deleteConfirmDesc(task.fileName, deleteFiles),
-        style: TextStyle(fontSize: 13, color: c.textSecondary),
-      ),
-      actions: [
-        ShadButton.outline(
-          onPressed: () => Navigator.of(ctx).pop(),
-          child: Text(
-            s.cancel,
-            style: TextStyle(fontSize: 13, color: c.textPrimary),
-          ),
-        ),
-        ShadButton.destructive(
-          onPressed: () {
-            Navigator.of(ctx).pop();
-            onConfirm();
-          },
-          child: Text(
-            s.deleteConfirmTitle(deleteFiles),
-            style: const TextStyle(fontSize: 13, color: Colors.white),
-          ),
-        ),
-      ],
+    builder: (ctx) => _DeleteConfirmDialogContent(
+      title: s.deleteConfirmTitle(deleteFiles),
+      description: s.deleteConfirmDesc(task.fileName, deleteFiles),
+      cancelLabel: s.cancel,
+      confirmLabel: s.deleteConfirmTitle(deleteFiles),
+      isDeleteFiles: deleteFiles,
+      onCancel: () => Navigator.of(ctx).pop(),
+      onConfirm: () {
+        Navigator.of(ctx).pop();
+        onConfirm();
+      },
     ),
   );
 }
 
 // =============================================================================
-// 批量删除确认对话框
+// 批量删除确认对话框（旧，保留兼容性，供管理栏按钮调用）
 // =============================================================================
 
 void showBatchDeleteConfirmDialog(
@@ -577,38 +556,348 @@ void showBatchDeleteConfirmDialog(
     barrierColor: c.dialogBarrier,
     animateIn: const [],
     animateOut: const [],
-    builder: (ctx) => ShadDialog(
-      title: Text(
-        s.batchDeleteConfirmTitle(deleteFiles),
-        style: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-          color: c.textPrimary,
-        ),
-      ),
-      description: Text(
-        s.batchDeleteConfirmDesc(count, deleteFiles),
-        style: TextStyle(fontSize: 13, color: c.textSecondary),
-      ),
-      actions: [
-        ShadButton.outline(
-          onPressed: () => Navigator.of(ctx).pop(),
-          child: Text(
-            s.cancel,
-            style: TextStyle(fontSize: 13, color: c.textPrimary),
-          ),
-        ),
-        ShadButton.destructive(
-          onPressed: () {
-            Navigator.of(ctx).pop();
-            onConfirm();
-          },
-          child: Text(
-            s.batchDeleteConfirmTitle(deleteFiles),
-            style: const TextStyle(fontSize: 13, color: Colors.white),
-          ),
-        ),
-      ],
+    builder: (ctx) => _DeleteConfirmDialogContent(
+      title: s.batchDeleteConfirmTitle(deleteFiles),
+      description: s.batchDeleteConfirmDesc(count, deleteFiles),
+      cancelLabel: s.cancel,
+      confirmLabel: s.batchDeleteConfirmTitle(deleteFiles),
+      isDeleteFiles: deleteFiles,
+      onCancel: () => Navigator.of(ctx).pop(),
+      onConfirm: () {
+        Navigator.of(ctx).pop();
+        onConfirm();
+      },
     ),
   );
+}
+
+// =============================================================================
+// 批量删除双选项对话框（Del 快捷键触发）
+// =============================================================================
+
+/// Del 快捷键触发的批量删除对话框。
+///
+/// 同时展示两个操作按钮：
+/// - 删除任务（保留文件）  → Enter
+/// - 删除任务和文件        → Ctrl+Enter
+void showBatchDeleteDialog(
+  BuildContext context, {
+  required int count,
+  required VoidCallback onDeleteTask,
+  required VoidCallback onDeleteTaskAndFile,
+}) {
+  if (!context.mounted) return;
+  final c = AppColors.of(context);
+  final s = LocaleScope.of(context);
+  showShadDialog(
+    context: context,
+    barrierColor: c.dialogBarrier,
+    animateIn: const [],
+    animateOut: const [],
+    builder: (ctx) => _BatchDeleteDialogContent(
+      count: count,
+      cancelLabel: s.cancel,
+      deleteTaskLabel: s.batchDeleteTask,
+      deleteTaskAndFileLabel: s.batchDeleteTaskAndFile,
+      description: s.batchDeleteConfirmDesc(count, false),
+      onCancel: () => Navigator.of(ctx).pop(),
+      onDeleteTask: () {
+        Navigator.of(ctx).pop();
+        onDeleteTask();
+      },
+      onDeleteTaskAndFile: () {
+        Navigator.of(ctx).pop();
+        onDeleteTaskAndFile();
+      },
+    ),
+  );
+}
+
+// =============================================================================
+// 删除确认对话框内容组件（单按钮确认，原有逻辑保留）
+// =============================================================================
+
+/// 单任务与管理栏批量删除的共用对话框内容组件（单确认按钮）。
+class _DeleteConfirmDialogContent extends StatefulWidget {
+  final String title;
+  final String description;
+  final String cancelLabel;
+  final String confirmLabel;
+  final bool isDeleteFiles;
+  final VoidCallback onCancel;
+  final VoidCallback onConfirm;
+
+  const _DeleteConfirmDialogContent({
+    required this.title,
+    required this.description,
+    required this.cancelLabel,
+    required this.confirmLabel,
+    required this.isDeleteFiles,
+    required this.onCancel,
+    required this.onConfirm,
+  });
+
+  @override
+  State<_DeleteConfirmDialogContent> createState() =>
+      _DeleteConfirmDialogContentState();
+}
+
+class _DeleteConfirmDialogContentState
+    extends State<_DeleteConfirmDialogContent> {
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _handleKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+    if (event.logicalKey == LogicalKeyboardKey.enter) {
+      widget.onConfirm();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return KeyboardListener(
+      focusNode: _focusNode,
+      onKeyEvent: _handleKey,
+      child: ShadDialog(
+        title: Text(
+          widget.title,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: c.textPrimary,
+          ),
+        ),
+        description: Text(
+          widget.description,
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        actions: [
+          ShadButton.outline(
+            onPressed: widget.onCancel,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(LucideIcons.x, size: 13, color: c.textPrimary),
+                const SizedBox(width: 5),
+                Text(
+                  widget.cancelLabel,
+                  style: TextStyle(fontSize: 13, color: c.textPrimary),
+                ),
+              ],
+            ),
+          ),
+          ShadButton.destructive(
+            onPressed: widget.onConfirm,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  widget.isDeleteFiles
+                      ? LucideIcons.fileX
+                      : LucideIcons.trash2,
+                  size: 13,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  widget.confirmLabel,
+                  style: const TextStyle(fontSize: 13, color: Colors.white),
+                ),
+                const SizedBox(width: 6),
+                _KeyBadge(label: '↵'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// 批量删除双选项对话框内容组件（Del 快捷键触发）
+// =============================================================================
+
+/// Del 快捷键弹出的对话框：同时展示两个删除操作。
+///
+/// 键盘行为：
+/// - Enter       → 删除任务（保留文件）
+/// - Ctrl+Enter  → 删除任务和文件
+/// - Escape      → 取消
+class _BatchDeleteDialogContent extends StatefulWidget {
+  final int count;
+  final String cancelLabel;
+  final String deleteTaskLabel;
+  final String deleteTaskAndFileLabel;
+  final String description;
+  final VoidCallback onCancel;
+  final VoidCallback onDeleteTask;
+  final VoidCallback onDeleteTaskAndFile;
+
+  const _BatchDeleteDialogContent({
+    required this.count,
+    required this.cancelLabel,
+    required this.deleteTaskLabel,
+    required this.deleteTaskAndFileLabel,
+    required this.description,
+    required this.onCancel,
+    required this.onDeleteTask,
+    required this.onDeleteTaskAndFile,
+  });
+
+  @override
+  State<_BatchDeleteDialogContent> createState() =>
+      _BatchDeleteDialogContentState();
+}
+
+class _BatchDeleteDialogContentState
+    extends State<_BatchDeleteDialogContent> {
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _handleKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+    if (event.logicalKey != LogicalKeyboardKey.enter) return;
+
+    if (HardwareKeyboard.instance.isControlPressed) {
+      widget.onDeleteTaskAndFile();
+    } else {
+      widget.onDeleteTask();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return KeyboardListener(
+      focusNode: _focusNode,
+      onKeyEvent: _handleKey,
+      child: ShadDialog(
+        title: Text(
+          widget.deleteTaskLabel,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: c.textPrimary,
+          ),
+        ),
+        description: Text(
+          widget.description,
+          style: TextStyle(fontSize: 13, color: c.textSecondary),
+        ),
+        actions: [
+          // 取消
+          ShadButton.outline(
+            onPressed: widget.onCancel,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(LucideIcons.x, size: 13, color: c.textPrimary),
+                const SizedBox(width: 5),
+                Text(
+                  widget.cancelLabel,
+                  style: TextStyle(fontSize: 13, color: c.textPrimary),
+                ),
+              ],
+            ),
+          ),
+          // 删除任务（保留文件）
+          ShadButton.destructive(
+            onPressed: widget.onDeleteTask,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(LucideIcons.trash2, size: 13, color: Colors.white),
+                const SizedBox(width: 5),
+                Text(
+                  widget.deleteTaskLabel,
+                  style: const TextStyle(fontSize: 13, color: Colors.white),
+                ),
+                const SizedBox(width: 6),
+                _KeyBadge(label: '↵'),
+              ],
+            ),
+          ),
+          // 删除任务和文件
+          ShadButton.destructive(
+            onPressed: widget.onDeleteTaskAndFile,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(LucideIcons.fileX, size: 13, color: Colors.white),
+                const SizedBox(width: 5),
+                Text(
+                  widget.deleteTaskAndFileLabel,
+                  style: const TextStyle(fontSize: 13, color: Colors.white),
+                ),
+                const SizedBox(width: 6),
+                _KeyBadge(label: 'Ctrl+↵'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// 快捷键 Badge 组件
+// =============================================================================
+
+/// 显示快捷键提示的小徽章（如 "↵"、"Ctrl+↵"）。
+class _KeyBadge extends StatelessWidget {
+  final String label;
+
+  const _KeyBadge({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 11,
+          color: Colors.white,
+          fontWeight: FontWeight.w500,
+          height: 1.3,
+        ),
+      ),
+    );
+  }
 }
