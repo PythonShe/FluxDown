@@ -110,6 +110,7 @@ class ExternalDownloadService {
         fileSize: req.fileSize.toInt(),
         mimeType: req.mimeType,
         cookies: req.cookies,
+        referrer: req.referrer,
         defaultSaveDir: effectiveSettings.defaultSaveDir,
         defaultQueueId: effectiveSettings.defaultQueueId,
       );

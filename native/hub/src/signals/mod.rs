@@ -140,6 +140,17 @@ pub struct ConfirmExternalDownload {
     pub segments: i32,     // 0 = auto
     #[serde(default)]
     pub cookies: String, // browser cookies for authenticated downloads
+    /// HTTP Referer header value captured by the browser extension.
+    /// Empty = do not send Referer (e.g. manually added downloads).
+    #[serde(default)]
+    pub referrer: String,
+    /// File size hint from the browser extension (bytes). 0 = unknown.
+    /// When > 0, the downloader skips the probe phase (HEAD + Range:0-0)
+    /// and uses this value as total_bytes directly.  This is critical for
+    /// one-time CDN URLs (e.g. Lanzou) where extra probe requests would
+    /// consume the URL token before the actual download begins.
+    #[serde(default)]
+    pub hint_file_size: i64,
     /// Per-task proxy URL override.
     /// Empty = use global proxy setting.
     #[serde(default)]

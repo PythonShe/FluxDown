@@ -99,6 +99,14 @@ export default defineUnlistedScript(() => {
         if (finalUrl && finalUrl !== url && isStreamingUrl(finalUrl)) {
           notify('fetch-detected', finalUrl, ct || classifyStreamUrl(finalUrl));
         }
+
+        // 拦截一次性 CDN 下载 URL（如蓝奏云 /ajaxm.php）
+        if (url && isOneTimeDownloadApi(url)) {
+          const cloned = response.clone();
+          cloned.json().then((json) => {
+            notifyPreemptDownload(json, url);
+          }).catch(() => {});
+        }
       } catch {
         // 不干扰原始响应
       }
@@ -138,6 +146,14 @@ export default defineUnlistedScript(() => {
         if (responseUrl !== url && isStreamingUrl(responseUrl)) {
           notify('xhr-detected', responseUrl, ct || classifyStreamUrl(responseUrl));
         }
+
+        // 拦截一次性 CDN 下载 URL（如蓝奏云 /ajaxm.php）
+        if (isOneTimeDownloadApi(url)) {
+          try {
+            const json = JSON.parse(this.responseText);
+            notifyPreemptDownload(json, url);
+          } catch { /* JSON 解析失败，忽略 */ }
+        }
       } catch {
         // ignore
       }
@@ -145,6 +161,59 @@ export default defineUnlistedScript(() => {
 
     return originalSend.apply(this, args);
   };
+
+  // ===== 一次性 CDN 下载 URL 抢先拦截 =====
+  // 针对使用 AJAX 获取一次性签名 URL 再跳转下载的网站（如蓝奏云）。
+  // 通过拦截 AJAX 响应，在浏览器发起 CDN GET 之前将 URL 发给 FluxDown，
+  // 并由 background 通过 declarativeNetRequest 阻断浏览器的 CDN 请求，
+  // 确保 FluxDown 是第一个（也是唯一的）请求方。
+  //
+  // 目前支持的规则：
+  //   - 蓝奏云系列 (/ajaxm.php)：响应 {zt:1, dom:"https://...", url:"/file/?token", inf:"filename"}
+
+  /** 检测 URL 是否为已知的"一次性 CDN 下载 AJAX"端点 */
+  function isOneTimeDownloadApi(url: string): boolean {
+    return url.includes('/ajaxm.php');
+  }
+
+  /**
+   * 解析 AJAX 响应 JSON，提取 CDN 下载 URL 并派发预抢占事件。
+   * @param json  解析后的响应 JSON
+   * @param apiUrl 发出请求的 API URL（用于提取 referrer）
+   */
+  function notifyPreemptDownload(json: any, apiUrl: string): void {
+    if (!json || typeof json !== 'object') return;
+
+    // 蓝奏云格式：{zt:1, dom:"https://cdn.example.com", url:"?token", inf:"filename.ext"}
+    // 页面 JS 实际拼接：dom + '/file/' + url
+    if (json.zt === 1 && typeof json.dom === 'string' && typeof json.url === 'string') {
+      const urlStr = json.url;
+      let cdnUrl: string;
+      if (urlStr.startsWith('http://') || urlStr.startsWith('https://')) {
+        // 完整 URL，直接使用
+        cdnUrl = urlStr;
+      } else if (urlStr.startsWith('/')) {
+        // 以路径开头（如 /file/?token）
+        cdnUrl = json.dom + urlStr;
+      } else {
+        // 仅查询字符串（如 ?token）— 蓝奏云标准格式，路径为 /file/
+        cdnUrl = json.dom + '/file/' + urlStr;
+      }
+      if (!cdnUrl.startsWith('http')) return;
+
+      const key = `preempt:${cdnUrl}`;
+      if (notifiedUrls.has(key)) return;
+      notifiedUrls.add(key);
+
+      document.dispatchEvent(new CustomEvent('fluxdown-preempt-download', {
+        detail: {
+          url: cdnUrl,
+          filename: typeof json.inf === 'string' ? json.inf : '',
+          referrer: window.location.href,
+        },
+      }));
+    }
+  }
 
   // ===== 拦截 URL.createObjectURL =====
 

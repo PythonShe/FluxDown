@@ -215,7 +215,7 @@ pub async fn run(db_dir: PathBuf) {
             Some(signal) = create_recv.recv() => {
                 let msg = signal.message;
                 manager
-                    .create_task(msg.url, msg.save_dir, msg.file_name, msg.segments, msg.cookies, msg.torrent_file_bytes, msg.proxy_url, msg.user_agent, msg.queue_id, msg.checksum)
+                    .create_task(msg.url, msg.save_dir, msg.file_name, msg.segments, msg.cookies, String::new(), 0, msg.torrent_file_bytes, msg.proxy_url, msg.user_agent, msg.queue_id, msg.checksum)
                     .await;
                 // 立即推送 AllTasks，确保 Dart 端在收到 TaskProgress 之前
                 // 已通过 AllTasks 获得正确的 queue_id，防止新任务被错误归入默认队列。
@@ -229,7 +229,7 @@ pub async fn run(db_dir: PathBuf) {
                 );
                 for entry in msg.entries {
                     manager
-                        .create_task(entry.url, msg.save_dir.clone(), entry.file_name, msg.segments, String::new(), Vec::new(), msg.proxy_url.clone(), msg.user_agent.clone(), msg.queue_id.clone(), entry.checksum)
+                        .create_task(entry.url, msg.save_dir.clone(), entry.file_name, msg.segments, String::new(), String::new(), 0, Vec::new(), msg.proxy_url.clone(), msg.user_agent.clone(), msg.queue_id.clone(), entry.checksum)
                         .await;
                 }
                 // 批量创建完成后统一推送一次 AllTasks，同步 queue_id 到 Dart。
@@ -376,7 +376,7 @@ pub async fn run(db_dir: PathBuf) {
                     msg.cookies.len()
                 );
                 manager
-                    .create_task(msg.url, msg.save_dir, msg.file_name, msg.segments, msg.cookies, Vec::new(), msg.proxy_url, msg.user_agent, msg.queue_id, String::new())
+                    .create_task(msg.url, msg.save_dir, msg.file_name, msg.segments, msg.cookies, msg.referrer, msg.hint_file_size, Vec::new(), msg.proxy_url, msg.user_agent, msg.queue_id, String::new())
                     .await;
                 // 推送 AllTasks 确保 Dart 端获得正确 queue_id。
                 manager.load_and_send_all_tasks().await;

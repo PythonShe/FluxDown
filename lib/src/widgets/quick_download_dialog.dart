@@ -47,6 +47,7 @@ void showQuickDownloadDialog(
   required String mimeType,
   required String cookies,
   required String defaultSaveDir,
+  String referrer = '',
   String defaultQueueId = '',
 }) {
   showShadDialog(
@@ -60,6 +61,7 @@ void showQuickDownloadDialog(
       fileSize: fileSize,
       mimeType: mimeType,
       cookies: cookies,
+      referrer: referrer,
       defaultSaveDir: defaultSaveDir,
       defaultQueueId: defaultQueueId,
     ),
@@ -72,6 +74,7 @@ class _QuickDownloadDialogContent extends StatefulWidget {
   final int fileSize;
   final String mimeType;
   final String cookies;
+  final String referrer;
   final String defaultSaveDir;
   final String defaultQueueId;
 
@@ -81,6 +84,7 @@ class _QuickDownloadDialogContent extends StatefulWidget {
     required this.fileSize,
     required this.mimeType,
     required this.cookies,
+    required this.referrer,
     required this.defaultSaveDir,
     required this.defaultQueueId,
   });
@@ -251,6 +255,8 @@ class _QuickDownloadDialogContentState
         fileName: fileName,
         segments: segments,
         cookies: widget.cookies,
+        referrer: widget.referrer,
+        hintFileSize: widget.fileSize,
         proxyUrl: proxyUrl,
         userAgent: userAgent,
         queueId: _selectedQueueId,

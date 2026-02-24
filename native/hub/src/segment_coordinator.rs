@@ -181,6 +181,7 @@ pub async fn run_coordinated_download(
     cancel_token: &CancellationToken,
     speed_limiter: &SpeedLimiter,
     cookies: &str,
+    referrer: &str,
 ) -> Result<(), DownloadError> {
     // ----- 0. Defensive checks ------------------------------------------------
     if total_bytes <= 0 {
@@ -347,6 +348,7 @@ pub async fn run_coordinated_download(
             progress_tx.clone(),
             speed_limiter.clone(),
             cookies.to_string(),
+            referrer.to_string(),
         );
 
         worker_assign_txs.push(Some(assign_tx));
@@ -1010,6 +1012,7 @@ fn spawn_worker(
     progress_tx: mpsc::Sender<ProgressUpdate>,
     speed_limiter: SpeedLimiter,
     cookies: String,
+    referrer: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Worker loop: keep accepting assignments until the channel closes.
@@ -1035,6 +1038,7 @@ fn spawn_worker(
                 &seg_states,
                 &speed_limiter,
                 &cookies,
+                &referrer,
             )
             .await;
 
@@ -1091,6 +1095,7 @@ async fn do_segment_with_retry(
     seg_states: &Arc<StdMutex<Vec<SegmentProgressInfo>>>,
     speed_limiter: &SpeedLimiter,
     cookies: &str,
+    referrer: &str,
 ) -> Result<i64, DownloadError> {
     let mut attempts = 0u32;
 
@@ -1112,6 +1117,7 @@ async fn do_segment_with_retry(
             seg_states,
             speed_limiter,
             cookies,
+            referrer,
         )
         .await
         {
@@ -1166,6 +1172,7 @@ async fn do_segment(
     seg_states: &Arc<StdMutex<Vec<SegmentProgressInfo>>>,
     speed_limiter: &SpeedLimiter,
     cookies: &str,
+    referrer: &str,
 ) -> Result<i64, DownloadError> {
     if actual_start > seg_end {
         // Already complete.
@@ -1176,6 +1183,9 @@ async fn do_segment(
     let mut req = client.get(url).header("Range", range);
     if !cookies.is_empty() {
         req = req.header("Cookie", cookies);
+    }
+    if !referrer.is_empty() {
+        req = req.header(reqwest::header::REFERER, referrer);
     }
     let resp = req.send().await?.error_for_status()?;
 

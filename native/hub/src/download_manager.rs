@@ -118,6 +118,10 @@ struct QueuedTask {
     segments: i32,
     is_resume: bool,
     cookies: String,
+    /// HTTP Referer header value. Empty = do not send Referer.
+    referrer: String,
+    /// File size hint from the browser extension. 0 = no hint / use probe.
+    hint_file_size: i64,
     /// Raw .torrent file bytes (empty for magnet/HTTP/FTP tasks).
     torrent_file_bytes: Vec<u8>,
     /// Per-task proxy URL override (e.g. "socks5://user:pass@host:port").
@@ -645,6 +649,8 @@ impl DownloadManager {
         file_name: String,
         segments: i32,
         cookies: String,
+        referrer: String,
+        hint_file_size: i64,
         torrent_file_bytes: Vec<u8>,
         proxy_url: String,
         user_agent: String,
@@ -705,6 +711,8 @@ impl DownloadManager {
             segments: seg,
             is_resume: false,
             cookies,
+            referrer,
+            hint_file_size,
             torrent_file_bytes,
             proxy_url,
             user_agent,
@@ -763,6 +771,8 @@ impl DownloadManager {
             segments,
             is_resume: _,
             cookies,
+            referrer,
+            hint_file_size,
             torrent_file_bytes,
             proxy_url,
             user_agent,
@@ -938,6 +948,8 @@ impl DownloadManager {
                 cancel_token,
                 speed_limiter,
                 cookies,
+                referrer,
+                hint_file_size,
                 proxy_config: task_proxy,
                 hls_quality_rx,
                 checksum,
@@ -1111,6 +1123,8 @@ impl DownloadManager {
                     segments: 0, // not used for resume
                     is_resume: true,
                     cookies: String::new(), // cookies not available for resume from DB
+                    referrer: String::new(), // referrer not persisted; not needed for resume
+                    hint_file_size: 0, // no hint on resume; use probe to get current size
                     torrent_file_bytes: Vec::new(), // loaded from DB in do_resume_task
                     proxy_url: t.proxy_url,
                     user_agent: String::new(), // use global UA on resume
@@ -1326,6 +1340,8 @@ impl DownloadManager {
                 cancel_token,
                 speed_limiter,
                 cookies: String::new(),
+                referrer: String::new(), // referrer not persisted; not needed for resume
+                hint_file_size: 0, // no hint on resume; use probe to get current size
                 proxy_config: task_proxy,
                 hls_quality_rx,
                 checksum: task.checksum,

@@ -122,7 +122,24 @@ export default defineContentScript({
       document.removeEventListener('mousedown', handleAltMousedown, true);
     });
 
-    // ===== 6. 磁力链接点击拦截 =====
+    // ===== 6. 一次性 CDN 下载 URL 预抢占 =====
+    // 监听 Main World 脚本检测到的"AJAX 生成一次性 CDN URL"事件，
+    // 立刻转发给 background，在浏览器发起 CDN GET 之前通知 FluxDown。
+    const handlePreemptEvent = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        { url: string; filename: string; referrer: string } | undefined;
+      if (!detail?.url) return;
+      browser.runtime.sendMessage({
+        action: 'preemptDownload',
+        url: detail.url,
+        filename: detail.filename || '',
+        referrer: detail.referrer || '',
+      }).catch(() => {});
+    };
+    document.addEventListener('fluxdown-preempt-download', handlePreemptEvent);
+    ctx.onInvalidated(() => document.removeEventListener('fluxdown-preempt-download', handlePreemptEvent));
+
+    // ===== 7. 磁力链接点击拦截 =====
     // 用户直接点击 <a href="magnet:..."> 时，阻止浏览器弹出 OS 应用选择框，
     // 改由 FluxDown 接管。使用捕获阶段，早于页面自身的 click 处理器执行。
     const handleMagnetClick = (e: MouseEvent) => {

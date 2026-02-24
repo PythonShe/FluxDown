@@ -42,6 +42,9 @@ pub struct FileInfo {
     pub file_name: String,
     pub total_bytes: i64,
     pub supports_range: bool,
+    /// MIME content type from the server (e.g. "text/html", "application/octet-stream").
+    /// Empty when the probe phase was skipped (hint_file_size > 0).
+    pub content_type: String,
 }
 
 pub struct ProgressUpdate {
@@ -84,6 +87,13 @@ pub struct DownloadParams {
     /// Browser cookies for authenticated downloads (e.g. GitHub private repos).
     /// Format: "name1=val1; name2=val2"
     pub cookies: String,
+    /// HTTP Referer header value captured by the browser extension.
+    /// Empty = do not send Referer (manually added downloads).
+    pub referrer: String,
+    /// File size hint from the browser extension (bytes). 0 = unknown.
+    /// When > 0, the probe phase (HEAD + Range:0-0) is skipped entirely.
+    /// This prevents one-time CDN URLs from being "consumed" by probe requests.
+    pub hint_file_size: i64,
     /// Proxy configuration — used by FTP downloader for SOCKS/HTTP CONNECT tunneling.
     /// HTTP downloads use the proxy via the `client` field (already configured).
     pub proxy_config: crate::proxy_config::ProxyConfig,
@@ -263,10 +273,10 @@ const PROBE_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 /// On Windows, the very first HTTPS request from a new process can fail due to
 /// DNS resolver cold-start, rustls TLS session initialisation, or firewall
 /// first-connection inspection.  Retrying transparently hides this from users.
-pub async fn resolve_file_info(client: &Client, url: &str, cookies: &str) -> Result<FileInfo, DownloadError> {
+pub async fn resolve_file_info(client: &Client, url: &str, cookies: &str, referrer: &str) -> Result<FileInfo, DownloadError> {
     let mut last_err = None;
     for attempt in 0..PROBE_MAX_RETRIES {
-        match resolve_file_info_once(client, url, cookies).await {
+        match resolve_file_info_once(client, url, cookies, referrer).await {
             Ok(info) => return Ok(info),
             Err(e) => {
                 rinf::debug_print!(
@@ -300,7 +310,7 @@ fn format_error_chain(mut src: Option<&dyn StdError>) -> String {
     s
 }
 
-async fn resolve_file_info_once(client: &Client, url: &str, cookies: &str) -> Result<FileInfo, DownloadError> {
+async fn resolve_file_info_once(client: &Client, url: &str, cookies: &str, referrer: &str) -> Result<FileInfo, DownloadError> {
     // --- Concurrent HEAD + GET probe ----------------------------------------
     // Fire both HEAD and GET Range:0-0 in parallel.  HEAD is faster when it
     // works, but many servers/CDNs omit Content-Disposition on HEAD.  By
@@ -310,6 +320,9 @@ async fn resolve_file_info_once(client: &Client, url: &str, cookies: &str) -> Re
         let mut req = client.head(url).timeout(PROBE_TIMEOUT);
         if !cookies.is_empty() {
             req = req.header("Cookie", cookies);
+        }
+        if !referrer.is_empty() {
+            req = req.header(reqwest::header::REFERER, referrer);
         }
         req.send()
     };
@@ -321,6 +334,9 @@ async fn resolve_file_info_once(client: &Client, url: &str, cookies: &str) -> Re
             .timeout(PROBE_TIMEOUT);
         if !cookies.is_empty() {
             req = req.header("Cookie", cookies);
+        }
+        if !referrer.is_empty() {
+            req = req.header(reqwest::header::REFERER, referrer);
         }
         req.send()
     };
@@ -439,16 +455,23 @@ async fn resolve_file_info_once(client: &Client, url: &str, cookies: &str) -> Re
             .unwrap_or(0)
     };
 
+    let content_type = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
     let file_name = extract_filename(&headers, final_url.as_str());
     rinf::debug_print!(
-        "[resolve] url={} → name={}, size={}, range={}",
-        url, file_name, total_bytes, supports_range
+        "[resolve] url={} → name={}, size={}, range={}, ct={}",
+        url, file_name, total_bytes, supports_range, content_type
     );
 
     Ok(FileInfo {
         file_name,
         total_bytes,
         supports_range,
+        content_type,
     })
 }
 
@@ -951,15 +974,66 @@ async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
 
     let client = &p.client;
 
-    rinf::debug_print!("[download] task {} resolving file info...", p.task_id);
-    let info = resolve_file_info(client, &p.url, &p.cookies).await?;
-    rinf::debug_print!(
-        "[download] task {} resolved: name={}, size={}, range={}",
-        p.task_id,
-        info.file_name,
-        info.total_bytes,
-        info.supports_range
-    );
+    // When the browser extension provides a valid file size hint, skip the
+    // probe phase (HEAD + GET Range:0-0) entirely.  One-time CDN URLs (e.g.
+    // Lanzou, some OSS signed URLs) treat every HTTP request as a download
+    // attempt.  The probe would "consume" the URL token, leaving the actual
+    // download to receive an HTML error page instead of the real file.
+    let info = if p.hint_file_size > 0 {
+        let name = if p.file_name.is_empty() {
+            extract_filename(&reqwest::header::HeaderMap::new(), &p.url)
+        } else {
+            p.file_name.clone()
+        };
+        rinf::debug_print!(
+            "[download] task {} using hint: name={}, size={} (probe skipped)",
+            p.task_id, name, p.hint_file_size
+        );
+        FileInfo {
+            file_name: name,
+            total_bytes: p.hint_file_size,
+            // Conservative: assume no range support when skipping probe.
+            // download_single will detect and handle the actual response.
+            supports_range: false,
+            content_type: String::new(),
+        }
+    } else {
+        rinf::debug_print!("[download] task {} resolving file info...", p.task_id);
+        let info = resolve_file_info(client, &p.url, &p.cookies, &p.referrer).await?;
+        rinf::debug_print!(
+            "[download] task {} resolved: name={}, size={}, range={}",
+            p.task_id,
+            info.file_name,
+            info.total_bytes,
+            info.supports_range
+        );
+        info
+    };
+
+    // Safety net: if the server returned HTML but the user expects a binary file,
+    // the URL is likely a redirect/landing page (e.g. Lanzou CDN transit page).
+    // Abort early instead of saving an HTML file with a wrong extension.
+    if !info.content_type.is_empty() {
+        let ct_lower = info.content_type.to_ascii_lowercase();
+        let mime = ct_lower.split(';').next().unwrap_or("").trim();
+        if mime == "text/html" || mime == "application/xhtml+xml" {
+            let expected = if p.file_name.is_empty() {
+                &info.file_name
+            } else {
+                &p.file_name
+            };
+            let looks_like_html = expected.ends_with(".html")
+                || expected.ends_with(".htm")
+                || expected.ends_with(".xhtml");
+            if !looks_like_html {
+                return Err(DownloadError::Other(format!(
+                    "server returned HTML page (Content-Type: {}) instead of the expected file — \
+                     the URL may be a redirect/transit page",
+                    mime
+                )));
+            }
+        }
+    }
 
     let auto_name = if p.file_name.is_empty() {
         info.file_name.clone()
@@ -1052,6 +1126,7 @@ async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
             &p.cancel_token,
             &p.speed_limiter,
             &p.cookies,
+            &p.referrer,
         )
         .await?;
     } else {
@@ -1067,6 +1142,7 @@ async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
             &p.cancel_token,
             &p.speed_limiter,
             &p.cookies,
+            &p.referrer,
         )
         .await?;
     }
@@ -1174,6 +1250,7 @@ async fn download_single(
     cancel_token: &CancellationToken,
     speed_limiter: &SpeedLimiter,
     cookies: &str,
+    referrer: &str,
 ) -> Result<(), DownloadError> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -1195,6 +1272,9 @@ async fn download_single(
     let mut req = client.get(url);
     if !cookies.is_empty() {
         req = req.header("Cookie", cookies);
+    }
+    if !referrer.is_empty() {
+        req = req.header(reqwest::header::REFERER, referrer);
     }
     if resume {
         req = req.header("Range", format!("bytes={}-", existing_len));
@@ -1329,6 +1409,7 @@ async fn download_multi_segment(
     cancel_token: &CancellationToken,
     speed_limiter: &SpeedLimiter,
     cookies: &str,
+    referrer: &str,
 ) -> Result<(), DownloadError> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -1364,6 +1445,7 @@ async fn download_multi_segment(
         cancel_token,
         speed_limiter,
         cookies,
+        referrer,
     )
     .await
 }

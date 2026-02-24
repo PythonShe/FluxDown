@@ -19,6 +19,7 @@ export default defineConfig({
       "downloads",
       "cookies",
       "webRequest",
+      "declarativeNetRequest",
       "storage",
       "notifications",
       "activeTab",
