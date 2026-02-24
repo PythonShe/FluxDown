@@ -183,6 +183,9 @@ const en = {
   "dl.extensionOtherNote": "For Chrome, Edge, Brave and other Chromium-based browsers",
   "dl.downloadExtension": "Download Extension",
   "dl.totalDownloads": "total downloads",
+  "dl.appimage": "AppImage",
+  "dl.linuxPortable": "Portable",
+  "dl.moreFormats": "More Formats",
   "dl.notifyMe": "Notify Me",
   "dl.emailPlaceholder": "Your email address",
   "dl.subscribing": "Subscribing...",
@@ -291,7 +294,7 @@ const en = {
   "faq.items.5.q": "Does FluxDown support resume after interruption?",
   "faq.items.5.a": "Yes, FluxDown has full breakpoint resume support. All download progress is persisted to a local SQLite database. You can safely close the app or restart your computer without losing any progress.",
   "faq.items.6.q": "Which platforms are supported?",
-  "faq.items.6.a": "Windows is fully supported right now. macOS and Linux support are planned and coming soon.",
+  "faq.items.6.a": "Windows and Linux (x64) are fully supported right now. macOS support is planned and coming soon.",
   "faq.items.7.q": "How do I install the browser extension?",
   "faq.items.7.a": "Download the extension zip from the Download section, extract it, then open your browser's extension management page (chrome://extensions), enable Developer Mode, and click 'Load unpacked' to select the extracted folder.",
 
@@ -395,7 +398,7 @@ const en = {
   "terms.s10.desc": "If you have any questions about these Terms of Service, please reach out to us through the Feedback page on our website.",
 
   // Footer
-  "footer.desc": "Open-source download manager engineered with Rust. HTTP, FTP, and BitTorrent multi-protocol acceleration, smart segmentation, and seamless browser integration — blazing fast, zero ads, free forever.",
+  "footer.desc": "Download manager engineered with Rust. HTTP, FTP, and BitTorrent multi-protocol acceleration, smart segmentation, and seamless browser integration — blazing fast, zero ads, free forever.",
   "footer.product": "Product",
   "footer.features": "Features",
   "footer.browserExtension": "Extension",

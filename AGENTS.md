@@ -5,13 +5,13 @@
 **技术栈**: Flutter (GUI) + Rust (下载引擎) + WXT 浏览器扩展
 **FFI 框架**: [Rinf 8.9](https://rinf.cunarist.org)（Dart↔Rust 信号通信，bincode 序列化）
 
-## 产品定位（来自官网）
+## 产品定位
 
 > **"Downloads, Supercharged."**（下载，全面加速。）
 
 - **核心价值主张**: Rust 驱动，10x 下载速度，永久免费，零广告，零追踪，无需账号
 - **目标用户**: 需要高速下载的用户、IDM 付费用户替代、关注隐私的用户、多协议需求专业用户
-- **与 IDM 对比优势**: 完全免费、现代技术栈（Rust + Flutter）、开源透明、本地优先架构
+- **与 IDM 对比优势**: 完全免费、现代技术栈（Rust + Flutter）、本地优先架构、零追踪零广告
 - **平台支持**: Windows（已发布）；macOS/Linux/Web/移动端（规划中）
 - **SEO 描述**: "A blazing fast, multi-protocol download manager with browser extension. Powered by Rust engine with HTTP/HTTPS/FTP support, intelligent segmentation, and speed optimization."
 
@@ -71,21 +71,25 @@ x_down/
 │       ├── pages/                     # 页面
 │       │   ├── home_page.dart         # 主页面（三栏布局：侧边栏+列表+详情）
 │       │   └── settings_page.dart     # 设置页面（6个分类：通用/外观/下载/BT/代理/关于）
+│       ├── i18n/                      # 国际化
+│       │   ├── locale_provider.dart   # 语言切换与持久化
+│       │   └── translations.dart      # 中英双语翻译字符串
 │       ├── services/                  # 服务层
-│       │   ├── external_download_service.dart  # 监听浏览器扩展请求 (HTTP :19527)
+│       │   ├── external_download_service.dart  # 监听浏览器扩展请求（Rinf 信号）
 │       │   ├── hls_quality_service.dart        # HLS 画质选择服务
 │       │   ├── tray_service.dart               # 系统托盘
 │       │   ├── notification_service.dart       # 下载完成通知（2s 聚合）
 │       │   ├── update_service.dart             # 自动更新（GitHub Releases）
 │       │   ├── analytics_service.dart          # 匿名数据分析（GA4）
 │       │   ├── feedback_service.dart           # 反馈提交（GitHub Issues）
-│       │   └── log_service.dart                # 日志管理（10MB 轮转，保留3个）
+│       │   ├── log_service.dart                # 日志管理（10MB 轮转，保留3个）
+│       │   ├── open_folder.dart                # 打开文件夹（跨平台）
+│       │   └── windows_toast_helper.dart       # Windows Toast 通知辅助
 │       ├── theme/                     # 主题
 │       │   ├── app_theme.dart         # 浅色/深色主题构建
 │       │   ├── app_colors.dart        # 主题感知色板（AppColors.of(context)）
 │       │   └── theme_provider.dart    # 主题切换+持久化（SharedPreferences）
 │       ├── widgets/                   # UI 组件（见下方详细清单）
-│       ├── windows/                   # 子窗口
 │       └── bindings/                  # ⚠️ 自动生成 — 勿手动编辑
 ├── native/hub/                        # Rust 下载引擎 crate（edition 2024）
 │   └── src/
@@ -103,11 +107,14 @@ x_down/
 │       ├── proxy_config.rs            # 代理配置（无/系统/手动，读 Windows 注册表）
 │       ├── protocol_registry.rs       # fluxdown:// 自定义协议注册（Windows）
 │       ├── file_association.rs        # .torrent 文件关联注册（Windows）
-│       ├── native_messaging.rs        # HTTP Server :19527（浏览器扩展通信）
+│       ├── native_messaging.rs        # Windows: Named Pipe `\\.\pipe\fluxdown`；Linux: Unix socket 服务端
+│       ├── nmh_registry.rs            # NMH 清单注册（Linux: 写入 Chrome/Firefox NMH JSON）
 │       ├── updater.rs                 # 自动更新器（GitHub Releases API）
 │       ├── db.rs                      # SQLite 数据层（tasks/task_segments/config/queues）
 │       ├── speed_limiter.rs           # Token bucket 全局速度限制器
 │       └── segment_advisor.rs         # 动态分段计算（文件大小+CPU+带宽）
+├── native/nmh/                        # Native Messaging Host（Linux/macOS 平台）
+│   └── src/main.rs                    # 独立二进制：stdin/stdout ↔ Unix socket 桥接 + 启动 app
 ├── fluxDown/                          # WXT 浏览器扩展（Chrome MV3, TypeScript）
 ├── website/                           # 官网（Astro + React，部署到 Vercel）
 │   └── src/
@@ -117,8 +124,12 @@ x_down/
 │       ├── pages/feedback.astro       # 反馈页面
 │       ├── pages/vote.astro           # 社区投票页面
 │       ├── pages/qq-group.astro       # QQ 群页面（群号：832143651）
-│       └── pages/api/                 # API 路由（feedback/issues/release/vote/subscribe）
-├── scripts/release_tag.py             # 自动发布脚本（Claude CLI 生成 Release Notes）
+│       ├── pages/announcements.astro  # 公告页面
+│       └── pages/api/                 # API 路由（feedback/issues/release/vote/subscribe/changelog）
+├── scripts/
+│   ├── release_tag.py             # 自动发布脚本（Claude CLI 生成 Release Notes）
+│   ├── send_notify.py             # 通知推送（邮件/钉钉等）
+│   └── gen_ico.py                 # Windows 图标生成
 ├── Cargo.toml                         # Rust workspace（resolver = "3"）
 └── pubspec.yaml                       # Flutter 依赖
 ```
@@ -130,10 +141,13 @@ x_down/
                                           │
                           ┌───────────────┼──────────────────┐
                     [DownloadManager]    [Db]          [native_messaging]
-                     │    │    │    │  (SQLite)       (HTTP :19527)
-              [HTTP] [FTP] [BT] [HLS]                      ↑
-                     │                             [WXT 浏览器扩展]
-            [SpeedLimiter] + [segment_advisor] + [segment_coordinator]
+                     │    │    │    │  (SQLite)    Windows: Named Pipe
+              [HTTP] [FTP] [BT] [HLS]              Linux: Unix socket
+                     │                                      ↑
+            [SpeedLimiter] + [segment_advisor]       [fluxdown_nmh 进程]
+                        + [segment_coordinator]      (stdin/stdout NMH)
+                                                            ↑
+                                                    [WXT 浏览器扩展]
 ```
 
 **状态管理**: ChangeNotifier + ListenableBuilder（无 Provider/Riverpod/Bloc）
@@ -286,8 +300,19 @@ CREATE TABLE queues (
 ## 浏览器扩展（fluxDown/）
 
 ### 通信架构
-- 扩展 → FluxDown: HTTP POST `localhost:19527/download`（JSON）
-- 路由：`/download`（单个）、`/batch-download`（批量）、`/ping`（健康检查）
+全平台统一走 Native Messaging Host（NMH）协议，扩展与 app 间通过 IPC 通信：
+
+- **Windows**: 扩展 → NMH（stdin/stdout）→ `fluxdown_nmh.exe` → Named Pipe `\\.\pipe\fluxdown`
+- **Linux/macOS**: 扩展 → NMH（stdin/stdout）→ `fluxdown_nmh` → Unix socket `$XDG_RUNTIME_DIR/fluxdown.sock`
+
+消息协议（4字节 LE 长度前缀 + JSON）：
+- `{"action":"ping","msg_id":N}` → `{"success":true,"message":"pong","msg_id":N}`
+- `{"action":"download","msg_id":N,...}` → `{"success":true,"message":"download accepted","msg_id":N}`
+
+NMH 注册：
+- NMH 清单：`~/.config/google-chrome/NativeMessagingHosts/com.fluxdown.nmh.json`（Linux）
+- NMH 二进制：`target/debug/fluxdown_nmh`（workspace target/ 目录）
+- App 启动时自动调用 `nmh_registry::register()` 注册清单
 
 ### 下载拦截三层防线
 1. **第一层** `webRequest.onHeadersReceived`: 缓存响应元数据，检测 Content-Disposition/Content-Type
@@ -347,7 +372,7 @@ CREATE TABLE queues (
 
 | 服务 | 职责 |
 |------|------|
-| `external_download_service.dart` | HTTP Server :19527，接收浏览器扩展的下载请求 |
+| `external_download_service.dart` | 监听 Rust 发来的 ExternalDownloadRequest 信号，弹出快速下载确认对话框 |
 | `hls_quality_service.dart` | 监听 HLS 画质信号，弹窗让用户选择码率 |
 | `tray_service.dart` | 系统托盘图标+菜单（多语言），菜单项：显示窗口/新建下载/暂停恢复/退出 |
 | `notification_service.dart` | Windows Toast 通知，2s 内多个完成合并为摘要通知 |
@@ -355,10 +380,12 @@ CREATE TABLE queues (
 | `analytics_service.dart` | GA4 匿名埋点：启动/退出/创建/完成/失败/视图切换 |
 | `feedback_service.dart` | POST GitHub Issues API 提交反馈（含 OS/版本/语言系统信息） |
 | `log_service.dart` | 日志写入 `logs/flux_down.log`，10MB 轮转，保留最近 3 个文件 |
+| `open_folder.dart` | 跨平台打开文件夹（调用系统文件管理器） |
+| `windows_toast_helper.dart` | Windows Toast 通知底层辅助（win32_toast 封装） |
 
 ## 官网（website/）
 
-**技术栈**: Astro + React + TypeScript，部署到 Vercel
+**技术栈**: Astro 5.17+ + React 19 + TypeScript + Tailwind CSS 4，部署到 Vercel
 **多语言**: 中英双语（i18n 支持）
 
 ### 页面结构
@@ -368,16 +395,19 @@ CREATE TABLE queues (
 - `/feedback` — 反馈页面
 - `/vote` — 社区投票（选择社区平台：微信群/QQ群/公众号）
 - `/qq-group` — QQ 群（群号：832143651）
+- `/announcements` — 公告页面
 - `/privacy` — 隐私政策
 - `/terms` — 服务条款
 
 ### API 路由（/api/）
 - `POST /api/feedback` — 提交反馈
 - `GET /api/release` — 获取最新 GitHub Release
+- `GET /api/changelog` — 更新日志获取
 - `GET/POST /api/vote` — 社区投票
 - `POST /api/subscribe` — 订阅平台上线通知
 - `GET /api/issues/[number]` — 获取 GitHub Issue
 - `GET /api/issues/[number]/comments` — 获取 Issue 评论
+- `GET /api/download/*` — 下载相关子路由
 - `POST /api/webhooks/github` — GitHub Webhook
 
 ### 官网 8 大功能特性文案（供 AI 代码生成参考产品语言）
@@ -428,7 +458,7 @@ CREATE TABLE queues (
 ### 浏览器扩展（fluxDown/）
 
 - **框架**: WXT 0.20+，TypeScript（strict: true, target: ESNext）
-- **通信方式**: HTTP fetch → localhost:19527（非 Native Messaging 协议）
+- **通信方式**: Native Messaging Host（NMH）协议，stdin/stdout 与 IPC 通信（Windows Named Pipe / Linux Unix socket）
 - **存储**: chrome.storage.sync（设置）+ chrome.storage.local（统计/主题）
 
 ## 禁止事项（Anti-Patterns）

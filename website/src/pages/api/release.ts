@@ -122,6 +122,11 @@ export const GET: APIRoute = async () => {
       a.name.endsWith("-chrome.zip") || a.name.endsWith("-extension.zip"),
     );
     const firefoxExtensionAsset = latest.assets.find((a) => a.name.endsWith("-firefox.xpi"));
+    // Linux 资产
+    const linuxAppImageAsset = latest.assets.find((a) => a.name.endsWith("-linux-x64.AppImage"));
+    const linuxDebAsset = latest.assets.find((a) => a.name.endsWith("-linux-x64.deb"));
+    const linuxArchAsset = latest.assets.find((a) => a.name.endsWith("-linux-x64.pkg.tar.zst"));
+    const linuxTarballAsset = latest.assets.find((a) => a.name.endsWith("-linux-x64.tar.gz"));
 
     const formatAsset = (asset: GitHubAsset | undefined) => {
       if (!asset) return null;
@@ -153,6 +158,10 @@ export const GET: APIRoute = async () => {
         portable_arm64: formatAsset(portableArm64Asset),
         extension: formatAsset(extensionAsset),
         firefox_extension: formatAsset(firefoxExtensionAsset),
+        linux_appimage: formatAsset(linuxAppImageAsset),
+        linux_deb: formatAsset(linuxDebAsset),
+        linux_arch: formatAsset(linuxArchAsset),
+        linux_tarball: formatAsset(linuxTarballAsset),
       },
     };
 

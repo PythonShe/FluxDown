@@ -198,6 +198,9 @@ const zhCN: Messages = {
   "dl.extensionOtherNote": "适用于 Chrome、Edge、Brave 等 Chromium 内核浏览器",
   "dl.downloadExtension": "下载扩展",
   "dl.totalDownloads": "次下载",
+  "dl.appimage": "AppImage",
+  "dl.linuxPortable": "便携版",
+  "dl.moreFormats": "更多格式",
   "dl.notifyMe": "上线通知",
   "dl.emailPlaceholder": "你的邮箱地址",
   "dl.subscribing": "订阅中...",
@@ -318,7 +321,7 @@ const zhCN: Messages = {
     "支持。FluxDown 具备完整的断点续传功能。所有下载进度都持久化到本地 SQLite 数据库中。你可以安全地关闭应用或重启电脑，不会丢失任何进度。",
   "faq.items.6.q": "支持哪些操作系统？",
   "faq.items.6.a":
-    "目前完整支持 Windows。macOS 和 Linux 支持已在规划中，即将推出。",
+    "目前完整支持 Windows 和 Linux（x64）。macOS 支持已在规划中，即将推出。",
   "faq.items.7.q": "如何安装浏览器扩展？",
   "faq.items.7.a":
     "从下载区域下载扩展 zip 文件，解压后打开浏览器的扩展管理页面（chrome://extensions），开启开发者模式，点击「加载已解压的扩展程序」选择解压后的文件夹即可。",
@@ -423,7 +426,7 @@ const zhCN: Messages = {
   "terms.s10.desc": "如果您对本服务条款有任何疑问，请通过我们网站的反馈页面与我们联系。",
 
   // Footer
-  "footer.desc": "基于 Rust 构建的开源下载管理器，支持 HTTP/FTP/BT 多协议加速、智能分段、浏览器无缝集成。极速可靠，零广告，永久免费。",
+  "footer.desc": "基于 Rust 构建的下载管理器，支持 HTTP/FTP/BT 多协议加速、智能分段、浏览器无缝集成。极速可靠，零广告，永久免费。",
   "footer.product": "产品",
   "footer.features": "功能特性",
   "footer.browserExtension": "浏览器扩展",

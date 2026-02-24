@@ -39,6 +39,10 @@ interface ReleaseInfo {
     portable_arm64: ReleaseAsset | null;
     extension: ReleaseAsset | null;
     firefox_extension: ReleaseAsset | null;
+    linux_appimage: ReleaseAsset | null;
+    linux_deb: ReleaseAsset | null;
+    linux_arch: ReleaseAsset | null;
+    linux_tarball: ReleaseAsset | null;
   };
 }
 
@@ -89,15 +93,47 @@ export default function DownloadSection() {
   }, [subscribeEmail]);
 
   const hasArm64Assets = !!(release?.assets.setup_arm64 || release?.assets.portable_arm64);
+  const hasLinuxAssets = !!(
+    release?.assets.linux_appimage ||
+    release?.assets.linux_deb ||
+    release?.assets.linux_arch ||
+    release?.assets.linux_tarball
+  );
 
-  const platforms: { key: string; name: string; icon: ComponentType<{ className?: string; size?: number; color?: string }>; arch: string; available: boolean; primary: boolean; badge: string; setup: ReleaseAsset | null; portable: ReleaseAsset | null }[] = [
+  const platforms: {
+    key: string;
+    name: string;
+    icon: ComponentType<{ className?: string; size?: number; color?: string }>;
+    arch: string;
+    available: boolean;
+    primary: boolean;
+    badge: string;
+    setup: ReleaseAsset | null;
+    portable: ReleaseAsset | null;
+    setupLabel?: string;
+    portableLabel?: string;
+    /** Linux 等平台的多格式下载列表，存在时替代单一 portable 按钮 */
+    packages?: Array<{ label: string; asset: ReleaseAsset | null }>;
+  }[] = [
     { key: "windows-x64", name: t("dl.windows"), icon: WindowsLogo, arch: "x64", available: true, primary: true, badge: t("dl.availableNow"), setup: release?.assets.setup ?? null, portable: release?.assets.portable ?? null },
     ...(hasArm64Assets ? [{
       key: "windows-arm64", name: t("dl.windows"), icon: WindowsLogo, arch: "ARM64", available: true, primary: false, badge: t("dl.availableNow"),
       setup: release?.assets.setup_arm64 ?? null, portable: release?.assets.portable_arm64 ?? null,
     }] : []),
     { key: "macos", name: t("dl.macos"), icon: SiApple, arch: "Apple Silicon", available: false, primary: false, badge: t("dl.comingSoon"), setup: null, portable: null },
-    { key: "linux", name: t("dl.linux"), icon: SiLinux, arch: "x64", available: false, primary: false, badge: t("dl.comingSoon"), setup: null, portable: null },
+    {
+      key: "linux", name: t("dl.linux"), icon: SiLinux, arch: "x64",
+      available: hasLinuxAssets, primary: hasLinuxAssets,
+      badge: hasLinuxAssets ? t("dl.availableNow") : t("dl.comingSoon"),
+      setup: release?.assets.linux_appimage ?? null,
+      setupLabel: t("dl.appimage"),
+      portable: null,
+      packages: [
+        { label: "deb (Debian / Ubuntu)", asset: release?.assets.linux_deb ?? null },
+        { label: "pkg.tar.zst (Arch Linux)", asset: release?.assets.linux_arch ?? null },
+        { label: `tar.gz ${t("dl.linuxPortable")}`, asset: release?.assets.linux_tarball ?? null },
+      ],
+    },
     { key: "web", name: t("dl.web"), icon: Globe, arch: t("dl.webArch"), available: false, primary: false, badge: t("dl.comingSoon"), setup: null, portable: null },
     { key: "mobile", name: t("dl.mobile"), icon: Smartphone, arch: "Android / iOS", available: false, primary: false, badge: t("dl.comingSoon"), setup: null, portable: null },
   ];
@@ -199,7 +235,7 @@ export default function DownloadSection() {
                           className="inline-flex items-center justify-center gap-2 w-full rounded-lg bg-brand-blue px-5 py-2.5 text-xs font-semibold text-white hover:bg-brand-blue/90 transition-colors shadow-lg shadow-brand-blue/20"
                         >
                           <Download className="w-3.5 h-3.5" />
-                          {t("dl.downloadBtn")} — {t("dl.installPkg")}
+                          {t("dl.downloadBtn")} — {p.setupLabel ?? t("dl.installPkg")}
                         </a>
                       ) : (
                         <a
@@ -211,15 +247,43 @@ export default function DownloadSection() {
                         </a>
                       )}
 
-                      {/* 便携版下载（折叠） */}
-                      {p.portable && (
+                      {/* 多格式下载折叠（Linux 等平台） */}
+                      {p.packages && p.packages.some(pkg => pkg.asset) && (
                         <>
                           <button
                             type="button"
                             onClick={() => setShowPortable(showPortable === p.key ? null : p.key)}
                             className="inline-flex items-center justify-center gap-1 text-[10px] text-dark-text-muted hover:text-dark-text-secondary transition-colors"
                           >
-                            {t("dl.portablePkg")}
+                            {t("dl.moreFormats")}
+                            <ChevronDown className={`w-3 h-3 transition-transform ${showPortable === p.key ? "rotate-180" : ""}`} />
+                          </button>
+                          {showPortable === p.key && (
+                            <div className="flex flex-col gap-1.5 w-full">
+                              {p.packages.filter(pkg => pkg.asset).map(pkg => (
+                                <a
+                                  key={pkg.label}
+                                  href={pkg.asset!.download_url}
+                                  className="inline-flex items-center justify-center gap-2 w-full rounded-lg border border-dark-border px-5 py-2 text-[10px] font-medium text-dark-text-secondary hover:bg-dark-surface3 transition-colors"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  {pkg.label} ({formatSize(pkg.asset!.size)})
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* 便携版下载折叠（Windows 等单一便携格式平台） */}
+                      {!p.packages && p.portable && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setShowPortable(showPortable === p.key ? null : p.key)}
+                            className="inline-flex items-center justify-center gap-1 text-[10px] text-dark-text-muted hover:text-dark-text-secondary transition-colors"
+                          >
+                            {p.portableLabel ?? t("dl.portablePkg")}
                             <ChevronDown className={`w-3 h-3 transition-transform ${showPortable === p.key ? "rotate-180" : ""}`} />
                           </button>
                           {showPortable === p.key && (
@@ -228,7 +292,7 @@ export default function DownloadSection() {
                               className="inline-flex items-center justify-center gap-2 w-full rounded-lg border border-dark-border px-5 py-2 text-[10px] font-medium text-dark-text-secondary hover:bg-dark-surface3 transition-colors"
                             >
                               <Download className="w-3 h-3" />
-                              {t("dl.portablePkg")} ({formatSize(p.portable.size)})
+                              {p.portableLabel ?? t("dl.portablePkg")} ({formatSize(p.portable.size)})
                             </a>
                           )}
                         </>
