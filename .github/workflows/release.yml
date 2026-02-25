@@ -278,6 +278,65 @@ jobs:
           path: build/extension/FluxDown-*-chrome.zip
           if-no-files-found: error
 
+      # ── Chrome Web Store 自动发布（需 CHROME_CLIENT_ID / CHROME_CLIENT_SECRET / CHROME_REFRESH_TOKEN）──
+      # ⚠️  Refresh Token 在 Google OAuth 同意屏幕处于 Testing 模式时 7 天过期。
+      #    发布前必须将同意屏幕切换到 Production，再重新走一次 OAuth 流程获取长期 token。
+      - name: Publish Chrome extension to Web Store
+        continue-on-error: true
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          ZIP_FILE="build/extension/FluxDown-${VERSION}-chrome.zip"
+          EXTENSION_ID="meleenglfggcmcajknpeeeiobnpfmahc"
+
+          # 用 refresh_token 换取新的 access_token
+          ACCESS_TOKEN=$(curl -sf -X POST https://oauth2.googleapis.com/token \
+            -d "client_id=${CHROME_CLIENT_ID}" \
+            -d "client_secret=${CHROME_CLIENT_SECRET}" \
+            -d "refresh_token=${CHROME_REFRESH_TOKEN}" \
+            -d "grant_type=refresh_token" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+          # 上传新版本 zip
+          echo "Uploading ${ZIP_FILE} to Chrome Web Store..."
+          UPLOAD_RESP=$(curl -sf \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "x-goog-api-version: 2" \
+            -X PUT -T "${ZIP_FILE}" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/${EXTENSION_ID}")
+
+          echo "Upload response: ${UPLOAD_RESP}"
+          UPLOAD_STATE=$(echo "${UPLOAD_RESP}" | python3 -c \
+            "import sys,json; print(json.load(sys.stdin).get('uploadState','UNKNOWN'))")
+
+          if [ "${UPLOAD_STATE}" != "SUCCESS" ]; then
+            echo "::error::Chrome Web Store upload failed (uploadState=${UPLOAD_STATE})"
+            exit 1
+          fi
+
+          # 发布已上传的草稿版本
+          PUBLISH_RESP=$(curl -sf \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "x-goog-api-version: 2" \
+            -H "Content-Length: 0" \
+            -X POST \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/${EXTENSION_ID}/publish")
+
+          echo "Publish response: ${PUBLISH_RESP}"
+          STATUS=$(echo "${PUBLISH_RESP}" | python3 -c \
+            "import sys,json; print(','.join(json.load(sys.stdin).get('status',[])))")
+          echo "Publish status codes: ${STATUS}"
+
+          if echo "${STATUS}" | grep -qi "error"; then
+            echo "::error::Chrome Web Store publish failed (status=${STATUS})"
+            exit 1
+          fi
+
+          echo "::notice::Chrome extension v${VERSION} submitted to Web Store review"
+
       - name: Upload Firefox extension artifact
         uses: actions/upload-artifact@v4
         with:
