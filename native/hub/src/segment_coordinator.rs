@@ -56,10 +56,6 @@ use crate::speed_limiter::SpeedLimiter;
 /// Below this threshold the overhead of a new HTTP request outweighs the gain.
 const MIN_SPLIT_BYTES: i64 = 4 * 1024 * 1024; // 4 MB
 
-/// How often the coordinator checks for slow segments to split proactively
-/// (even when no worker is idle).
-const SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(2);
-
 /// Maximum total number of segments (including dynamically created ones).
 const MAX_SEGMENTS: i32 = 64;
 
@@ -375,9 +371,6 @@ pub async fn run_coordinated_download(
 
     // ----- 6. Coordinator event loop ----------------------------------------
     let mut final_error: Option<DownloadError> = None;
-    let mut split_timer = tokio::time::interval(SPLIT_CHECK_INTERVAL);
-    split_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
     loop {
         tokio::select! {
             biased;
@@ -476,28 +469,6 @@ pub async fn run_coordinated_download(
                 }
             }
 
-            _ = split_timer.tick() => {
-                // Sync downloaded_bytes before evaluating split candidates.
-                sync_downloaded_from_shared(&mut segments, &seg_states);
-
-                if segments.len() < MAX_SEGMENTS as usize
-                    && let Some((child_idx, parent_idx)) =
-                        try_proactive_split(&mut segments, &mut next_index)
-                {
-                    // Persist atomically so it survives crashes.
-                    persist_segment_change(
-                        db, task_id, &segments, child_idx, Some(parent_idx),
-                    ).await;
-
-                    // Notify Dart about the proactive split event.
-                    send_split_event(
-                        task_id, parent_idx, child_idx,
-                        &segments, true,
-                    );
-
-                    rebuild_seg_states(&segments, &seg_states);
-                }
-            }
         }
     }
 
@@ -753,79 +724,6 @@ fn try_split_largest(
         assignment,
         split_parent: Some(best_idx),
     })
-}
-
-/// Proactive split: even without an idle worker, create a Pending segment from
-/// the largest Active segment.  The next worker that finishes will pick it up.
-///
-/// Uses a higher threshold (`MIN_SPLIT_BYTES * 2`) than reactive splits to
-/// avoid creating many tiny Pending segments that never get assigned.
-///
-/// Returns `Some((child_idx, parent_idx))` on success so the caller can
-/// persist and notify without fragile adjacency heuristics.
-fn try_proactive_split(
-    segments: &mut BTreeMap<i32, LiveSegment>,
-    next_index: &mut i32,
-) -> Option<(i32, i32)> {
-    if segments.len() >= MAX_SEGMENTS as usize {
-        return None;
-    }
-
-    // Only count pending segments that haven't been picked up yet.
-    // If there's already a Pending segment waiting, don't create another one.
-    let has_pending = segments.values().any(|s| s.state == SegState::Pending);
-    if has_pending {
-        return None;
-    }
-
-    let best_idx = segments
-        .values()
-        .filter(|s| s.state == SegState::Active && s.remaining() >= MIN_SPLIT_BYTES * 2)
-        .max_by_key(|s| s.remaining())
-        .map(|s| s.index)?;
-
-    let best = segments.get(&best_idx)?;
-
-    let current_pos = best.start_byte + best.downloaded_bytes;
-    let remaining = best.end_byte - current_pos + 1;
-
-    if remaining < MIN_SPLIT_BYTES * 2 {
-        return None;
-    }
-
-    let split_point = current_pos + remaining / 2;
-
-    // Validate split point.
-    if split_point <= current_pos || split_point > best.end_byte {
-        return None;
-    }
-
-    let old_end = best.end_byte;
-    let new_index = *next_index;
-    *next_index += 1;
-
-    let new_seg = LiveSegment {
-        index: new_index,
-        start_byte: split_point,
-        end_byte: old_end,
-        downloaded_bytes: 0,
-        state: SegState::Pending,
-    };
-
-    if let Some(orig) = segments.get_mut(&best_idx) {
-        orig.end_byte = split_point - 1;
-    }
-
-    segments.insert(new_index, new_seg);
-
-    rinf::debug_print!(
-        "[coordinator] proactive split: segment {} → new pending segment {} at byte {}",
-        best_idx,
-        new_index,
-        split_point
-    );
-
-    Some((new_index, best_idx))
 }
 
 // ---------------------------------------------------------------------------

@@ -68,6 +68,12 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
   /// 选中的队列 ID（空字符串 = 默认队列）
   String _selectedQueueId = '';
 
+  /// 用户是否手动修改过线程数（用于判断切换队列时是否需要自动更新）
+  bool _threadsUserModified = false;
+
+  /// 线程选择器的 key 版本，切换队列时递增以强制重建 ShadSelect
+  int _threadsSelectVersion = 0;
+
   /// 是否展开高级选项（含任务代理）
   bool _showAdvanced = false;
 
@@ -83,6 +89,22 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
   /// 防止重复打开文件选择器
   bool _isPicking = false;
 
+  /// 根据队列 ID 计算有效的线程数选项字符串。
+  ///
+  /// 优先级：自定义队列的 defaultSegments → 全局 defaultSegments → null（Auto）
+  String? _effectiveSegmentsOption(String queueId) {
+    if (queueId.isNotEmpty) {
+      final queue = widget.controller.queues
+          .where((q) => q.queueId == queueId)
+          .firstOrNull;
+      if (queue != null && queue.defaultSegments > 0) {
+        return queue.defaultSegments.toString();
+      }
+    }
+    final global = widget.settingsProvider.defaultSegments;
+    return global > 0 ? global.toString() : null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -92,6 +114,8 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
     // 优先使用侧边栏队列筛选，否则使用设置中的默认队列
     final qf = widget.controller.queueFilter;
     _selectedQueueId = qf ?? widget.settingsProvider.defaultQueueId;
+    // 根据队列/全局设置初始化默认线程数
+    selectedThreads = _effectiveSegmentsOption(_selectedQueueId);
   }
 
   void _onUrlChanged() {
@@ -693,7 +717,9 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                         _SectionLabel(text: s.threads, c: c),
                         const SizedBox(height: 6),
                         ShadSelect<String>(
+                          key: ValueKey('threads_$_threadsSelectVersion'),
                           placeholder: Text(s.auto),
+                          initialValue: selectedThreads,
                           options: ['auto', '4', '8', '16', '32', '64'].map((
                             v,
                           ) {
@@ -705,7 +731,10 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                           selectedOptionBuilder: (context, value) {
                             return Text(value == 'auto' ? s.auto : value);
                           },
-                          onChanged: (v) => setState(() => selectedThreads = v),
+                          onChanged: (v) => setState(() {
+                            selectedThreads = v;
+                            _threadsUserModified = true;
+                          }),
                         ),
                       ],
                     ),
@@ -912,7 +941,16 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
             return Text(q?.name ?? s.defaultQueue, overflow: TextOverflow.ellipsis, maxLines: 1);
           },
           onChanged: (v) {
-            if (v != null) setState(() => _selectedQueueId = v);
+            if (v != null) {
+              setState(() {
+                _selectedQueueId = v;
+                // 用户未手动改过线程数时，跟随新队列/全局默认设置
+                if (!_threadsUserModified) {
+                  selectedThreads = _effectiveSegmentsOption(v);
+                  _threadsSelectVersion++;
+                }
+              });
+            }
           },
         ),
       ],

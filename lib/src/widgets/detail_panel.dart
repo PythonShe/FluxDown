@@ -376,7 +376,9 @@ class DetailPanel extends StatelessWidget {
 
   Widget _buildInfoTable(AppColors c, DownloadTask task) {
     final segs = task.segments;
-    final segCount = segs != null && segs.isNotEmpty ? segs.length : null;
+    final activeCount =
+        segs != null ? segs.where((s) => s.progress < 1.0).length : 0;
+    final segCount = activeCount > 0 ? activeCount : null;
     final splitCount = task.recentSplits.length;
 
     return Column(

@@ -992,9 +992,12 @@ async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
         FileInfo {
             file_name: name,
             total_bytes: p.hint_file_size,
-            // Conservative: assume no range support when skipping probe.
-            // download_single will detect and handle the actual response.
-            supports_range: false,
+            // When a specific segment count was requested (> 1), optimistically
+            // assume Range support so multi-segment can be attempted.  Most
+            // servers that advertise Content-Length also support Range requests.
+            // For auto mode (segment_count <= 1) remain conservative to avoid
+            // corrupting one-time CDN download tokens (e.g. Lanzou cloud).
+            supports_range: p.segment_count > 1,
             content_type: String::new(),
         }
     } else {
