@@ -58,8 +58,17 @@ static bool SendArgsToExistingInstance(const std::vector<std::string>& args) {
   ::SendMessage(existing, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds));
 
   // Bring existing window to foreground.
+  // Handle all possible window states:
+  //   - Minimized (IsIconic)  → SW_RESTORE
+  //   - Hidden to tray (SW_HIDE, !IsWindowVisible) → SW_SHOW
+  //   - Normal/visible        → just SetForegroundWindow
   if (::IsIconic(existing)) {
     ::ShowWindow(existing, SW_RESTORE);
+  } else if (!::IsWindowVisible(existing)) {
+    // Window is hidden (tray mode via window_manager.hide()).
+    // ShowWindow(SW_SHOW) makes it visible; window_manager.show() called
+    // via the WM_COPYDATA → Dart channel will also run and sync state.
+    ::ShowWindow(existing, SW_SHOW);
   }
   ::SetForegroundWindow(existing);
 

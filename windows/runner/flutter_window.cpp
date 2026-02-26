@@ -82,7 +82,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     auto* cds = reinterpret_cast<COPYDATASTRUCT*>(lparam);
     if (cds && cds->dwData == kCopyDataId && single_instance_channel_) {
       // Reconstruct the argument list (newline-separated UTF-8).
-      std::string payload(static_cast<const char*>(cds->lpData), cds->cbData);
+      // Guard against cbData=0 cross-process case where lpData may be null.
+      std::string payload;
+      if (cds->cbData > 0 && cds->lpData != nullptr) {
+        payload = std::string(static_cast<const char*>(cds->lpData),
+                              cds->cbData);
+      }
       flutter::EncodableList args_list;
       size_t start = 0;
       while (start < payload.size()) {
