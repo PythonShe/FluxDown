@@ -91,6 +91,7 @@ def _call_claude_streaming(prompt: str, model: str = "sonnet") -> str:
         [
             "claude", "-p", prompt,
             "--output-format", "stream-json",
+            "--verbose",
             "--include-partial-messages",
             "--model", model,
             "--max-turns", "10",

@@ -131,10 +131,7 @@ sudo pacman -U build/installer/FluxDown-${VERSION}-linux-x64.pkg.tar.zst
 
 ```shell
 # 日常发布（推荐）
-python scripts/release_tag.py v0.1.7 --push --github-release --update-changelog
-
-# 高质量双语发布
-python scripts/release_tag.py v0.1.7 --model sonnet --lang both --push --github-release
+python scripts/release_tag.py v0.1.7 --model sonnet --lang both --push
 
 # 仅预览效果
 python scripts/release_tag.py v0.1.7 --dry-run
