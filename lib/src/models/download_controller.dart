@@ -411,8 +411,8 @@ class DownloadController extends ChangeNotifier {
     );
     if (ids.isEmpty) return;
 
-    // 进度追踪：超过阈值时启用，等待 Rust 逐个发回删除确认信号。
-    const progressThreshold = 20;
+    // 进度追踪：批量删除 ≥2 个任务时启用，等待 Rust 逐个发回删除确认信号。
+    const progressThreshold = 2;
     if (ids.length >= progressThreshold || _pendingDeleteIds.isNotEmpty) {
       _pendingDeleteIds.addAll(ids);
       _batchDeleteTotal = _batchDeleteDone + _pendingDeleteIds.length;

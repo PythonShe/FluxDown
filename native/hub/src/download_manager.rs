@@ -1663,8 +1663,11 @@ impl DownloadManager {
         // 1. Remove from pending queue in one pass.
         self.pending_queue.retain(|q| !id_set.contains(q.task_id.as_str()));
 
-        // 2. Cancel all active downloads + collect JoinHandles.
-        let mut handles: Vec<JoinHandle<()>> = Vec::new();
+        // 2. Cancel all active downloads + collect (task_id, JoinHandle) pairs.
+        //    We pair each handle with its task ID so we can send per-task
+        //    "deleted" confirmation as soon as that handle completes, rather
+        //    than waiting for ALL handles before starting any cleanup.
+        let mut handle_map: HashMap<String, JoinHandle<()>> = HashMap::new();
         for tid in task_ids {
             if let Some((token, _gen)) = self.active_tokens.remove(tid.as_str()) {
                 token.cancel();
@@ -1673,117 +1676,165 @@ impl DownloadManager {
                 self.active_task_queue.remove(tid.as_str());
             }
             if let Some(h) = self.active_handles.remove(tid.as_str()) {
-                handles.push(h);
+                handle_map.insert(tid.clone(), h);
             }
         }
 
-        // 3. Wait for all handles concurrently (with timeout).
-        if !handles.is_empty() {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                futures_util::future::join_all(handles),
-            )
-            .await;
-        }
-
-        // 4. File cleanup — batch-load all task info from DB in one query,
-        //    then spawn concurrent file cleanup tasks.
+        // 3. Batch-load all task info from DB in one query (non-blocking, no
+        //    need to wait for handles first).
         let task_infos = self.db.load_tasks_by_ids(task_ids).await.unwrap_or_default();
-        let mut file_futs: Vec<JoinHandle<()>> = Vec::new();
-        let mut bt_futs: Vec<JoinHandle<()>> = Vec::new();
-        let file_sem = Arc::new(Semaphore::new(64));
-        for t in &task_infos {
-            let path = PathBuf::from(&t.save_dir).join(&t.file_name);
+        let info_map: HashMap<&str, &TaskInfo> = task_infos
+            .iter()
+            .map(|t| (t.task_id.as_str(), t))
+            .collect();
 
-            if is_bt_url(&t.url) {
-                if let Some(ref bt) = self.bt_session {
-                    let bt_clone = bt.clone();
-                    let tid = t.task_id.clone();
-                    bt_futs.push(tokio::spawn(async move {
-                        let found = bt_clone.delete_task(&tid, delete_files).await;
-                        if !found {
-                            bt_clone.register_pending_delete(&tid, delete_files).await;
+        // 4. Spawn per-task cleanup futures.  Each future:
+        //    a) waits for its own JoinHandle (if any) — only blocks THIS task
+        //    b) does file cleanup
+        //    c) sends its own "deleted" confirmation signal to Dart
+        //    This gives Dart incremental progress as each task finishes
+        //    independently, instead of all-at-once after a global barrier.
+        let file_sem = Arc::new(Semaphore::new(64));
+        let mut cleanup_futs: Vec<JoinHandle<()>> = Vec::new();
+
+        for tid in task_ids {
+            let ptx = self.progress_tx.clone();
+            let tid_owned = tid.clone();
+            let maybe_handle = handle_map.remove(tid.as_str());
+            let sem = file_sem.clone();
+
+            if let Some(t) = info_map.get(tid.as_str()) {
+                // Task has DB info → needs file cleanup.
+                let path = PathBuf::from(&t.save_dir).join(&t.file_name);
+
+                if is_bt_url(&t.url) {
+                    let bt_session = self.bt_session.clone();
+                    let safe = is_safe_file_name(&t.file_name);
+                    cleanup_futs.push(tokio::spawn(async move {
+                        // Wait for this task's download handle (10s per-task timeout).
+                        if let Some(h) = maybe_handle {
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                h,
+                            )
+                            .await;
                         }
+                        // BT session delete
+                        if let Some(ref bt) = bt_session {
+                            let found = bt.delete_task(&tid_owned, delete_files).await;
+                            if !found {
+                                bt.register_pending_delete(&tid_owned, delete_files).await;
+                            }
+                        }
+                        // BT file cleanup
+                        if delete_files && safe {
+                            let _permit = sem.acquire().await.unwrap();
+                            if path.is_dir() {
+                                let _ = tokio::fs::remove_dir_all(&path).await;
+                            } else {
+                                let _ = tokio::fs::remove_file(&path).await;
+                            }
+                        }
+                        // Signal completion
+                        let _ = ptx
+                            .send(ProgressUpdate {
+                                task_id: tid_owned,
+                                downloaded_bytes: 0,
+                                total_bytes: 0,
+                                status: 4,
+                                error_message: "deleted".to_string(),
+                                file_name: String::new(),
+                                segment_details: None,
+                            })
+                            .await;
                     }));
-                }
-                if delete_files && is_safe_file_name(&t.file_name) {
-                    let sem = file_sem.clone();
-                    file_futs.push(tokio::spawn(async move {
+                } else {
+                    let url = t.url.clone();
+                    let file_name = t.file_name.clone();
+                    cleanup_futs.push(tokio::spawn(async move {
+                        // Wait for this task's download handle (10s per-task timeout).
+                        if let Some(h) = maybe_handle {
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                h,
+                            )
+                            .await;
+                        }
                         let _permit = sem.acquire().await.unwrap();
-                        if path.is_dir() {
-                            let _ = tokio::fs::remove_dir_all(&path).await;
-                        } else {
+                        // Remove temp file
+                        let temp_path = PathBuf::from(format!(
+                            "{}{}",
+                            path.display(),
+                            crate::downloader::TEMP_EXT
+                        ));
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+
+                        // DASH audio sidecar cleanup
+                        if dash_downloader::is_dash_url(&url) {
+                            let audio_path = dash_downloader::build_audio_path(&path);
+                            let audio_temp = PathBuf::from(format!(
+                                "{}{}",
+                                audio_path.display(),
+                                crate::downloader::TEMP_EXT
+                            ));
+                            let _ = tokio::fs::remove_file(&audio_temp).await;
+                            if delete_files {
+                                let _ = tokio::fs::remove_file(&audio_path).await;
+                            }
+                        }
+
+                        if delete_files && is_safe_file_name(&file_name) {
                             let _ = tokio::fs::remove_file(&path).await;
                         }
+
+                        // Signal completion
+                        let _ = ptx
+                            .send(ProgressUpdate {
+                                task_id: tid_owned,
+                                downloaded_bytes: 0,
+                                total_bytes: 0,
+                                status: 4,
+                                error_message: "deleted".to_string(),
+                                file_name: String::new(),
+                                segment_details: None,
+                            })
+                            .await;
                     }));
                 }
             } else {
-                let url = t.url.clone();
-                let file_name = t.file_name.clone();
-                let sem = file_sem.clone();
-                file_futs.push(tokio::spawn(async move {
-                    let _permit = sem.acquire().await.unwrap();
-                    // Remove temp file
-                    let temp_path = PathBuf::from(format!(
-                        "{}{}",
-                        path.display(),
-                        crate::downloader::TEMP_EXT
-                    ));
-                    let _ = tokio::fs::remove_file(&temp_path).await;
-
-                    // DASH audio sidecar cleanup
-                    if dash_downloader::is_dash_url(&url) {
-                        let audio_path = dash_downloader::build_audio_path(&path);
-                        let audio_temp = PathBuf::from(format!(
-                            "{}{}",
-                            audio_path.display(),
-                            crate::downloader::TEMP_EXT
-                        ));
-                        let _ = tokio::fs::remove_file(&audio_temp).await;
-                        if delete_files {
-                            let _ = tokio::fs::remove_file(&audio_path).await;
-                        }
+                // Task NOT in DB (already cleaned / no record) — just wait
+                // for handle (if any) then signal immediately.
+                cleanup_futs.push(tokio::spawn(async move {
+                    if let Some(h) = maybe_handle {
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            h,
+                        )
+                        .await;
                     }
-
-                    if delete_files && is_safe_file_name(&file_name) {
-                        let _ = tokio::fs::remove_file(&path).await;
-                    }
+                    let _ = ptx
+                        .send(ProgressUpdate {
+                            task_id: tid_owned,
+                            downloaded_bytes: 0,
+                            total_bytes: 0,
+                            status: 4,
+                            error_message: "deleted".to_string(),
+                            file_name: String::new(),
+                            segment_details: None,
+                        })
+                        .await;
                 }));
             }
         }
 
-        // Wait for BT delete futures concurrently.
-        if !bt_futs.is_empty() {
+        // 5. Wait for all per-task cleanup futures (15s global timeout).
+        //    Progress signals arrive incrementally as each task completes.
+        if !cleanup_futs.is_empty() {
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(15),
-                futures_util::future::join_all(bt_futs),
+                futures_util::future::join_all(cleanup_futs),
             )
             .await;
-        }
-
-        // Wait for all file cleanup tasks.
-        if !file_futs.is_empty() {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(15),
-                futures_util::future::join_all(file_futs),
-            )
-            .await;
-        }
-
-        // 5. Batch notify progress_reporter for cleanup.
-        for tid in task_ids {
-            let _ = self
-                .progress_tx
-                .send(ProgressUpdate {
-                    task_id: tid.clone(),
-                    downloaded_bytes: 0,
-                    total_bytes: 0,
-                    status: 4,
-                    error_message: "deleted".to_string(),
-                    file_name: String::new(),
-                    segment_details: None,
-                })
-                .await;
         }
 
         // 6. Single-transaction batch DB delete.

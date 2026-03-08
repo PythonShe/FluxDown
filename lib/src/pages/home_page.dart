@@ -468,31 +468,8 @@ class _HomePageState extends State<HomePage> {
                 }),
               ),
             ),
-            // 批量删除进度覆盖层
-            ListenableBuilder(
-              listenable: _controller,
-              builder: (context, _) {
-                if (!_controller.isBatchDeleting) return const SizedBox.shrink();
-                final s = LocaleScope.of(context);
-                final c = AppColors.of(context);
-                return Positioned.fill(
-                  child: AbsorbPointer(
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      child: Center(
-                        child: _BatchDeleteProgressCard(
-                          done: _controller.batchDeleteDone,
-                          total: _controller.batchDeleteTotal,
-                          progress: _controller.batchDeleteProgress,
-                          s: s,
-                          c: c,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
+            // 批量删除进度覆盖层（带平滑动画）
+            _BatchDeleteOverlay(controller: _controller),
           ],
         );
       },
@@ -595,18 +572,133 @@ class _BoostBanner extends StatelessWidget {
   }
 }
 
-/// 批量删除进度卡片（覆盖层内容）
+/// 批量删除进度覆盖层
+///
+/// 使用 AnimationController 确保进度条始终从 0% 平滑动画到目标值。
+/// 即使 Rust 端所有信号在同一帧内到达（导致 batchDeleteProgress 瞬间
+/// 从 0 跳到 1.0），用户也能看到完整的动画过渡。
+/// 动画完成后保持 500ms 显示最终状态再淡出。
+class _BatchDeleteOverlay extends StatefulWidget {
+  final DownloadController controller;
+
+  const _BatchDeleteOverlay({required this.controller});
+
+  @override
+  State<_BatchDeleteOverlay> createState() => _BatchDeleteOverlayState();
+}
+
+class _BatchDeleteOverlayState extends State<_BatchDeleteOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _anim;
+  bool _visible = false;
+  bool _fadingOut = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _anim = AnimationController(vsync: this);
+    widget.controller.addListener(_onControllerChanged);
+    // 首帧检查（以防 widget 挂载时已在删除中）
+    if (widget.controller.isBatchDeleting) {
+      _startAnimation();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChanged);
+    _anim.dispose();
+    super.dispose();
+  }
+
+  void _onControllerChanged() {
+    final deleting = widget.controller.isBatchDeleting;
+    if (deleting && !_visible) {
+      _startAnimation();
+    } else if (deleting && _visible) {
+      // 更新目标值 — 驱动进度条前进
+      _driveToProgress(widget.controller.batchDeleteProgress);
+    } else if (!deleting && _visible && !_fadingOut) {
+      // 删除完成：先驱动到 100%，保持短暂显示后淡出
+      _driveToProgress(1.0);
+      _fadingOut = true;
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          setState(() {
+            _visible = false;
+            _fadingOut = false;
+          });
+        }
+      });
+    }
+  }
+
+  void _startAnimation() {
+    _visible = true;
+    _fadingOut = false;
+    _anim.value = 0.0;
+    // 最小动画时长 400ms，保证用户看到进度移动
+    final target = widget.controller.batchDeleteProgress;
+    final duration = target >= 1.0
+        ? const Duration(milliseconds: 400)
+        : const Duration(milliseconds: 200);
+    _anim.animateTo(target, duration: duration, curve: Curves.easeOut);
+    setState(() {});
+  }
+
+  void _driveToProgress(double target) {
+    if (target <= _anim.value) return;
+    // 剩余进度越大，动画越长，但至少 150ms
+    final remaining = target - _anim.value;
+    final ms = (remaining * 400).clamp(150, 500).toInt();
+    _anim.animateTo(
+      target,
+      duration: Duration(milliseconds: ms),
+      curve: Curves.easeOut,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_visible) return const SizedBox.shrink();
+    final s = LocaleScope.of(context);
+    final c = AppColors.of(context);
+    return Positioned.fill(
+      child: AbsorbPointer(
+        child: ColoredBox(
+          color: Colors.black.withValues(alpha: 0.45),
+          child: Center(
+            child: AnimatedBuilder(
+              animation: _anim,
+              builder: (context, _) {
+                return _BatchDeleteProgressCard(
+                  animatedProgress: _anim.value,
+                  done: widget.controller.batchDeleteDone,
+                  total: widget.controller.batchDeleteTotal,
+                  s: s,
+                  c: c,
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 批量删除进度卡片（纯展示组件）
 class _BatchDeleteProgressCard extends StatelessWidget {
+  final double animatedProgress;
   final int done;
   final int total;
-  final double progress;
   final S s;
   final AppColors c;
 
   const _BatchDeleteProgressCard({
+    required this.animatedProgress,
     required this.done,
     required this.total,
-    required this.progress,
     required this.s,
     required this.c,
   });
@@ -643,7 +735,7 @@ class _BatchDeleteProgressCard extends StatelessWidget {
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
-              value: progress,
+              value: animatedProgress,
               backgroundColor: c.surface3,
               valueColor: AlwaysStoppedAnimation<Color>(c.accent),
               minHeight: 6,
