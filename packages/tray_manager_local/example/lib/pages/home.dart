@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:tray_manager/tray_manager.dart';
@@ -265,9 +264,13 @@ class _HomePageState extends State<HomePage> with TrayListener {
             if (bounds != null) {
               Size size = bounds.size;
               Offset origin = bounds.topLeft;
-              BotToast.showText(
-                text: '${size.toString()}\n${origin.toString()}',
-              );
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${size.toString()}\n${origin.toString()}'),
+                  ),
+                );
+              }
             }
           },
         ),
@@ -320,8 +323,10 @@ class _HomePageState extends State<HomePage> with TrayListener {
     if (kDebugMode) {
       print(menuItem.toJson());
     }
-    BotToast.showText(
-      text: '${menuItem.toJson()}',
-    );
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${menuItem.toJson()}')),
+      );
+    }
   }
 }
