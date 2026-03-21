@@ -23,8 +23,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::db::Db;
 use crate::downloader::{
-    dedup_filename, extract_from_url, sanitize_filename, DownloadError, DownloadParams, FileInfo,
-    ProgressUpdate, SegmentProgressInfo, BUF_WRITER_CAPACITY, DB_SAVE_INTERVAL_SECS, TEMP_EXT,
+    BUF_WRITER_CAPACITY, DB_SAVE_INTERVAL_SECS, DownloadError, DownloadParams, FileInfo,
+    ProgressUpdate, SegmentProgressInfo, TEMP_EXT, dedup_filename, extract_from_url,
+    sanitize_filename,
 };
 use crate::proxy_config::{self, ProxyConfig};
 use crate::speed_limiter::SpeedLimiter;
@@ -103,12 +104,14 @@ fn url_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len()
-            && let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                result.push(byte);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            result.push(byte);
+            i += 3;
+            continue;
+        }
         result.push(bytes[i]);
         i += 1;
     }
@@ -161,12 +164,7 @@ fn ftp_connect_sync_with_proxy(
         );
 
         // Establish a TCP connection through the proxy
-        let tcp = proxy_config::proxy_connect_sync(
-            proxy,
-            &ftp_url.host,
-            ftp_url.port,
-            timeout,
-        )?;
+        let tcp = proxy_config::proxy_connect_sync(proxy, &ftp_url.host, ftp_url.port, timeout)?;
 
         // Build FtpStream from the pre-established (proxied) TCP connection
         let mut ftp = FtpStream::connect_with_stream(tcp)
@@ -180,9 +178,9 @@ fn ftp_connect_sync_with_proxy(
             let host = data_addr.ip().to_string();
             let port = data_addr.port();
             proxy_config::proxy_connect_sync(&proxy_clone, &host, port, Duration::from_secs(30))
-                .map_err(|e| suppaftp::FtpError::ConnectionError(
-                    std::io::Error::other(e.to_string())
-                ))
+                .map_err(|e| {
+                    suppaftp::FtpError::ConnectionError(std::io::Error::other(e.to_string()))
+                })
         });
 
         ftp
@@ -190,15 +188,13 @@ fn ftp_connect_sync_with_proxy(
         // Direct connection (no proxy)
         let addr = format!("{}:{}", ftp_url.host, ftp_url.port);
 
-        let sock_addr: std::net::SocketAddr = addr
-            .parse()
-            .or_else(|_| {
-                use std::net::ToSocketAddrs;
-                addr.to_socket_addrs()
-                    .map_err(|e| DownloadError::Other(format!("DNS resolve error: {}", e)))?
-                    .next()
-                    .ok_or_else(|| DownloadError::Other("DNS returned no addresses".to_string()))
-            })?;
+        let sock_addr: std::net::SocketAddr = addr.parse().or_else(|_| {
+            use std::net::ToSocketAddrs;
+            addr.to_socket_addrs()
+                .map_err(|e| DownloadError::Other(format!("DNS resolve error: {}", e)))?
+                .next()
+                .ok_or_else(|| DownloadError::Other("DNS returned no addresses".to_string()))
+        })?;
 
         FtpStream::connect_timeout(sock_addr, timeout)
             .map_err(|e| DownloadError::Other(format!("FTP connect error: {}", e)))?
@@ -222,7 +218,10 @@ fn ftp_connect_sync_with_proxy(
 const PROBE_MAX_RETRIES: u32 = 2;
 const PROBE_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 
-pub async fn resolve_ftp_file_info(url: &str, proxy: &ProxyConfig) -> Result<FileInfo, DownloadError> {
+pub async fn resolve_ftp_file_info(
+    url: &str,
+    proxy: &ProxyConfig,
+) -> Result<FileInfo, DownloadError> {
     let ftp_url = parse_ftp_url(url)?;
 
     let mut last_err = None;
@@ -325,7 +324,11 @@ pub async fn probe_ftp_bandwidth(
 
     let proxy_clone = proxy.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let proxy_opt = if proxy_clone.is_active() { Some(&proxy_clone) } else { None };
+        let proxy_opt = if proxy_clone.is_active() {
+            Some(&proxy_clone)
+        } else {
+            None
+        };
         let mut ftp = match ftp_connect_sync_with_proxy(&ftp_url, proxy_opt) {
             Ok(f) => f,
             Err(_) => return None,
@@ -457,7 +460,7 @@ pub async fn run_ftp_download(params: DownloadParams) {
 }
 
 async fn compute_ftp_segments(p: &DownloadParams, info: &FileInfo) -> i32 {
-    use crate::segment_advisor::{advise_static, advise_with_bandwidth, AdvisorInput};
+    use crate::segment_advisor::{AdvisorInput, advise_static, advise_with_bandwidth};
 
     let advisor_input = AdvisorInput {
         total_bytes: info.total_bytes,
@@ -543,13 +546,19 @@ async fn run_ftp_download_inner(p: &DownloadParams) -> Result<i64, DownloadError
 
     p.db.update_task_file_info(&p.task_id, &actual_name, info.total_bytes)
         .await?;
+
+    // 早期取消检查：probe 完成后、创建文件之前检测 pause/delete，
+    // 防止已取消的任务仍然在磁盘上创建临时文件。
+    if p.cancel_token.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
+
     let _ = p.db.update_task_status(&p.task_id, 1, "").await;
 
     // For resume tasks, send persisted downloaded bytes as baseline so speed
     // smoothing won't misinterpret resumed bytes as fresh transfer rate.
     let initial_downloaded = if p.is_resume {
-        p.db
-            .load_task_by_id(&p.task_id)
+        p.db.load_task_by_id(&p.task_id)
             .await
             .ok()
             .flatten()
@@ -596,7 +605,11 @@ async fn run_ftp_download_inner(p: &DownloadParams) -> Result<i64, DownloadError
     rinf::debug_print!(
         "[ftp-download] task {} mode={}, segments={}",
         p.task_id,
-        if use_segments { "multi-segment" } else { "single" },
+        if use_segments {
+            "multi-segment"
+        } else {
+            "single"
+        },
         segments,
     );
 
@@ -673,7 +686,8 @@ async fn run_ftp_download_inner(p: &DownloadParams) -> Result<i64, DownloadError
             }
             // Also verify actual file size on disk (guards against DB/disk mismatch
             // caused by crashes or external file modifications).
-            let file_len = tokio::fs::metadata(&temp_path).await
+            let file_len = tokio::fs::metadata(&temp_path)
+                .await
                 .map(|m| m.len() as i64)
                 .unwrap_or(0);
             if file_len < info.total_bytes {
@@ -704,21 +718,24 @@ async fn run_ftp_download_inner(p: &DownloadParams) -> Result<i64, DownloadError
             Err(e) => {
                 rinf::debug_print!(
                     "[ftp-download] task {} warning: cannot read temp file size: {}",
-                    p.task_id, e
+                    p.task_id,
+                    e
                 );
                 0
             }
         }
     };
 
-    tokio::fs::rename(&temp_path, &dest_path).await.map_err(|e| {
-        DownloadError::Other(format!(
-            "failed to rename {} → {}: {}",
-            temp_path.display(),
-            dest_path.display(),
-            e
-        ))
-    })?;
+    tokio::fs::rename(&temp_path, &dest_path)
+        .await
+        .map_err(|e| {
+            DownloadError::Other(format!(
+                "failed to rename {} → {}: {}",
+                temp_path.display(),
+                dest_path.display(),
+                e
+            ))
+        })?;
 
     Ok(actual_total)
 }
@@ -764,9 +781,8 @@ async fn ftp_download_single(
         Err(_) => 0,
     };
 
-    let resume = supports_range
-        && existing_len > 0
-        && (total_bytes == 0 || existing_len < total_bytes);
+    let resume =
+        supports_range && existing_len > 0 && (total_bytes == 0 || existing_len < total_bytes);
 
     // Reset DB progress if starting fresh
     if !resume {
@@ -805,7 +821,11 @@ async fn ftp_download_single(
         let proxy = proxy_config.clone();
 
         tokio::task::spawn_blocking(move || -> Result<(), DownloadError> {
-            let proxy_opt = if proxy.is_active() { Some(&proxy) } else { None };
+            let proxy_opt = if proxy.is_active() {
+                Some(&proxy)
+            } else {
+                None
+            };
             let mut ftp = ftp_connect_sync_with_proxy(&ftp_url, proxy_opt)?;
 
             if resume_offset > 0 {
@@ -840,8 +860,10 @@ async fn ftp_download_single(
                             break; // receiver dropped
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut
-                              || e.kind() == std::io::ErrorKind::WouldBlock => {
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::TimedOut
+                            || e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
                         consecutive_timeouts += 1;
                         if cancelled.load(Ordering::SeqCst)
                             || consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS
@@ -1000,10 +1022,11 @@ async fn ftp_download_multi_segment(
         if !existing_segments.is_empty() {
             let last_seg = existing_segments.iter().max_by_key(|s| s.index);
             if let Some(last) = last_seg
-                && last.end_byte != total_bytes - 1 {
-                    db.delete_segments(task_id).await?;
-                    existing_segments = Vec::new();
-                }
+                && last.end_byte != total_bytes - 1
+            {
+                db.delete_segments(task_id).await?;
+                existing_segments = Vec::new();
+            }
         }
     }
 
@@ -1196,12 +1219,13 @@ async fn ftp_do_segment_with_retry(
                     return Err(e);
                 }
                 if let Ok(segs) = db.load_segments(task_id).await
-                    && let Some(seg) = segs.iter().find(|s| s.index == seg_idx) {
-                        actual_start = seg_start + seg.downloaded_bytes;
-                        if actual_start > seg_end {
-                            return Ok(());
-                        }
+                    && let Some(seg) = segs.iter().find(|s| s.index == seg_idx)
+                {
+                    actual_start = seg_start + seg.downloaded_bytes;
+                    if actual_start > seg_end {
+                        return Ok(());
                     }
+                }
                 let delay = RETRY_BASE_DELAY * 2u32.saturating_pow(attempts - 1);
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(DownloadError::Cancelled),
@@ -1261,15 +1285,20 @@ async fn ftp_do_segment(
         let proxy = proxy_config.clone();
 
         tokio::task::spawn_blocking(move || -> Result<(), DownloadError> {
-            let proxy_opt = if proxy.is_active() { Some(&proxy) } else { None };
+            let proxy_opt = if proxy.is_active() {
+                Some(&proxy)
+            } else {
+                None
+            };
             let mut ftp = ftp_connect_sync_with_proxy(&ftp_url, proxy_opt)?;
 
-            ftp.resume_transfer(actual_start as usize)
-                .map_err(|e| DownloadError::Other(format!("FTP REST error (seg {}): {}", seg_idx, e)))?;
+            ftp.resume_transfer(actual_start as usize).map_err(|e| {
+                DownloadError::Other(format!("FTP REST error (seg {}): {}", seg_idx, e))
+            })?;
 
-            let mut data_stream = ftp
-                .retr_as_stream(&ftp_url.path)
-                .map_err(|e| DownloadError::Other(format!("FTP RETR error (seg {}): {}", seg_idx, e)))?;
+            let mut data_stream = ftp.retr_as_stream(&ftp_url.path).map_err(|e| {
+                DownloadError::Other(format!("FTP RETR error (seg {}): {}", seg_idx, e))
+            })?;
 
             // Set read timeout so cancellation eventually unblocks this thread.
             if let Err(e) = data_stream
@@ -1302,8 +1331,10 @@ async fn ftp_do_segment(
                             break;
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut
-                              || e.kind() == std::io::ErrorKind::WouldBlock => {
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::TimedOut
+                            || e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
                         consecutive_timeouts += 1;
                         if cancelled.load(Ordering::SeqCst)
                             || consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS
@@ -1342,7 +1373,8 @@ async fn ftp_do_segment(
     // Async writer: write to pre-allocated file at correct offset.
     let raw_file = OpenOptions::new().write(true).open(dest).await?;
     let mut file = tokio::io::BufWriter::with_capacity(BUF_WRITER_CAPACITY, raw_file);
-    file.seek(std::io::SeekFrom::Start(actual_start as u64)).await?;
+    file.seek(std::io::SeekFrom::Start(actual_start as u64))
+        .await?;
 
     let mut seg_downloaded = actual_start - seg_start;
     let mut last_report = std::time::Instant::now();
@@ -1420,10 +1452,13 @@ async fn ftp_do_segment(
 
     file.flush().await?;
     if let Ok(mut states) = seg_states.lock()
-        && let Some(s) = states.iter_mut().find(|s| s.index == seg_idx) {
-            s.downloaded_bytes = seg_downloaded;
-        }
-    let _ = db.update_segment_progress(task_id, seg_idx, seg_downloaded).await;
+        && let Some(s) = states.iter_mut().find(|s| s.index == seg_idx)
+    {
+        s.downloaded_bytes = seg_downloaded;
+    }
+    let _ = db
+        .update_segment_progress(task_id, seg_idx, seg_downloaded)
+        .await;
     cancel_watcher.abort();
 
     let reader_result = ftp_reader
@@ -1440,12 +1475,14 @@ async fn ftp_do_segment(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ftp_url, url_decode, FTP_DATA_READ_TIMEOUT, PROBE_MAX_RETRIES, PROBE_RETRY_BASE_DELAY};
+    use super::{
+        FTP_DATA_READ_TIMEOUT, PROBE_MAX_RETRIES, PROBE_RETRY_BASE_DELAY, parse_ftp_url, url_decode,
+    };
     use crate::downloader::sanitize_filename;
     use crate::speed_limiter::SpeedLimiter;
     use std::io::Read;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use tokio::sync::mpsc;
 
@@ -1631,8 +1668,10 @@ mod tests {
         assert_eq!(PROBE_MAX_RETRIES, 2);
         // Worst-case: 2 attempts × 30s timeout + 1s delay = 61s (acceptable)
         let worst_case = FTP_DATA_READ_TIMEOUT * PROBE_MAX_RETRIES + PROBE_RETRY_BASE_DELAY;
-        assert!(worst_case <= Duration::from_secs(90),
-            "worst-case probe time {worst_case:?} should be <= 90s after fix");
+        assert!(
+            worst_case <= Duration::from_secs(90),
+            "worst-case probe time {worst_case:?} should be <= 90s after fix"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1657,7 +1696,10 @@ mod tests {
         // i64 value > u32::MAX would silently wrap.
         let large_offset: i64 = 5_000_000_000; // 5 GB
         let as_u32 = large_offset as u32; // simulates 32-bit usize
-        assert_ne!(as_u32 as i64, large_offset, "truncation silently corrupts the offset");
+        assert_ne!(
+            as_u32 as i64, large_offset,
+            "truncation silently corrupts the offset"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1672,7 +1714,10 @@ mod tests {
         struct AlwaysTimedOutReader;
         impl Read for AlwaysTimedOutReader {
             fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "simulated timeout"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "simulated timeout",
+                ))
             }
         }
 
@@ -1695,8 +1740,9 @@ mod tests {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(_n) => { /* normal */ }
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut
-                    || e.kind() == std::io::ErrorKind::WouldBlock =>
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::WouldBlock =>
                 {
                     timeout_count += 1;
                     // BUG: current code just does `continue` with no limit
@@ -1711,11 +1757,16 @@ mod tests {
 
         // The loop hit our safety valve, proving the infinite loop bug:
         // without cancellation, timeouts cause unlimited retries.
-        assert_eq!(iterations, max_iterations + 1,
+        assert_eq!(
+            iterations,
+            max_iterations + 1,
             "BUG: timeout loop ran {iterations} times without bound — \
-             needs a retry limit");
-        assert_eq!(timeout_count, max_iterations,
-            "all iterations were timeouts, confirming infinite retry");
+             needs a retry limit"
+        );
+        assert_eq!(
+            timeout_count, max_iterations,
+            "all iterations were timeouts, confirming infinite retry"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1786,14 +1837,18 @@ mod tests {
         // But producer generates 20 × 64KB = 1.28MB of data.
         // The bounded channel (capacity 16) fills up quickly → producer blocks.
         // This demonstrates the backpressure: producer is WAY ahead of consumer.
-        assert!(total_produced > total_consumed,
+        assert!(
+            total_produced > total_consumed,
             "producer ({total_produced}) should be ahead of consumer ({total_consumed}) \
-             due to speed limiter backpressure");
+             due to speed limiter backpressure"
+        );
 
         // Consumer should only process ~3KB in 3 seconds at 1KB/s limit
-        assert!(total_consumed < 20_000,
+        assert!(
+            total_consumed < 20_000,
             "consumer processed {total_consumed} bytes in 3s at 1KB/s limit — \
-             expected < 20KB (with overhead)");
+             expected < 20KB (with overhead)"
+        );
 
         // The key insight: producer is stuck because channel is full, and consumer
         // is stuck in speed_limiter.consume(). In a real FTP download with the
@@ -1814,8 +1869,12 @@ mod tests {
         }
         let total_bytes: i64 = 1_000_000;
         let segments = [
-            SegRecord { downloaded_bytes: 500_000 },
-            SegRecord { downloaded_bytes: 500_000 },
+            SegRecord {
+                downloaded_bytes: 500_000,
+            },
+            SegRecord {
+                downloaded_bytes: 500_000,
+            },
         ];
         let seg_total: i64 = segments.iter().map(|s| s.downloaded_bytes).sum();
 
@@ -1824,8 +1883,10 @@ mod tests {
 
         // But the actual file on disk could be different (e.g., 0 bytes due to crash)
         let actual_file_size: i64 = 0; // simulated disk corruption
-        assert_ne!(actual_file_size, total_bytes,
+        assert_ne!(
+            actual_file_size, total_bytes,
             "BUG: DB integrity check passes but disk file is corrupted/empty — \
-             current code does not verify disk file size for multi-segment FTP");
+             current code does not verify disk file size for multi-segment FTP"
+        );
     }
 }

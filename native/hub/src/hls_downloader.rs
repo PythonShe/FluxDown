@@ -21,8 +21,8 @@ use tokio::io::AsyncWriteExt;
 use rinf::RustSignal;
 
 use crate::downloader::{
-    dedup_filename, extract_from_url, DownloadError, DownloadParams,
-    ProgressUpdate, DB_SAVE_INTERVAL_SECS, TEMP_EXT,
+    DB_SAVE_INTERVAL_SECS, DownloadError, DownloadParams, ProgressUpdate, TEMP_EXT, dedup_filename,
+    extract_from_url,
 };
 use crate::signals::{HlsQualityOption, HlsQualityOptions};
 
@@ -90,7 +90,9 @@ pub fn is_hls_url(url: &str) -> bool {
 /// Parsed M3U8 content — either a master playlist or a media playlist.
 #[allow(dead_code)]
 pub enum M3u8Content {
-    Master { variants: Vec<HlsVariant> },
+    Master {
+        variants: Vec<HlsVariant>,
+    },
     Media {
         segments: Vec<HlsSegment>,
         total_duration: f32,
@@ -326,7 +328,10 @@ async fn fetch_key(
 
 /// Parse an IV hex string (e.g. "0x1234abcd...") into 16 bytes.
 fn parse_iv_hex(iv_str: &str) -> Result<[u8; 16], DownloadError> {
-    let hex = iv_str.strip_prefix("0x").or_else(|| iv_str.strip_prefix("0X")).unwrap_or(iv_str);
+    let hex = iv_str
+        .strip_prefix("0x")
+        .or_else(|| iv_str.strip_prefix("0X"))
+        .unwrap_or(iv_str);
 
     if hex.len() != 32 {
         return Err(DownloadError::Other(format!(
@@ -356,11 +361,7 @@ fn compute_default_iv(media_sequence: u64, segment_index: usize) -> [u8; 16] {
 
 /// Decrypt AES-128-CBC encrypted segment data in-place.
 /// Returns the decrypted data (may be shorter than input due to PKCS7 padding removal).
-fn decrypt_segment(
-    data: &mut [u8],
-    key: &[u8],
-    iv: &[u8; 16],
-) -> Result<Vec<u8>, DownloadError> {
+fn decrypt_segment(data: &mut [u8], key: &[u8], iv: &[u8; 16]) -> Result<Vec<u8>, DownloadError> {
     let key_array: [u8; 16] = key
         .try_into()
         .map_err(|_| DownloadError::Other("AES key must be 16 bytes".to_string()))?;
@@ -411,10 +412,7 @@ pub async fn run_hls_download(mut params: DownloadParams) {
         Err(e) => {
             let msg = e.to_string();
             rinf::debug_print!("[hls-download] task {} error: {}", task_id_log, msg);
-            let _ = params
-                .db
-                .update_task_status(&params.task_id, 4, &msg)
-                .await;
+            let _ = params.db.update_task_status(&params.task_id, 4, &msg).await;
 
             let (dl, total) = match params.db.load_task_by_id(&params.task_id).await {
                 Ok(Some(t)) => (t.downloaded_bytes, t.total_bytes),
@@ -589,13 +587,8 @@ async fn run_hls_download_inner(
 
     let (segments, media_sequence) = match content {
         M3u8Content::Master { variants } => {
-            let selected_uri = select_variant(
-                &p.task_id,
-                &variants,
-                quality_rx,
-                &p.cancel_token,
-            )
-            .await?;
+            let selected_uri =
+                select_variant(&p.task_id, &variants, quality_rx, &p.cancel_token).await?;
 
             if p.cancel_token.is_cancelled() {
                 return Err(DownloadError::Cancelled);
@@ -653,6 +646,13 @@ async fn run_hls_download_inner(
     // total_bytes is unknown for HLS until we download all segments
     p.db.update_task_file_info(&p.task_id, &actual_name, 0)
         .await?;
+
+    // 早期取消检查：probe/解析完成后、创建文件之前检测 pause/delete，
+    // 防止已取消的任务仍然在磁盘上创建临时文件。
+    if p.cancel_token.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
+
     let _ = p.db.update_task_status(&p.task_id, 1, "").await;
 
     // Notify Dart: downloading started with file name
@@ -690,7 +690,9 @@ async fn run_hls_download_inner(
         // Check cancellation between segments
         if p.cancel_token.is_cancelled() {
             file.flush().await?;
-            let _ = p.db.update_task_progress(&p.task_id, downloaded_bytes).await;
+            let _ =
+                p.db.update_task_progress(&p.task_id, downloaded_bytes)
+                    .await;
             return Err(DownloadError::Cancelled);
         }
 
@@ -762,7 +764,9 @@ async fn run_hls_download_inner(
 
         // DB persistence (every DB_SAVE_INTERVAL_SECS)
         if last_db_save.elapsed().as_secs() >= DB_SAVE_INTERVAL_SECS {
-            let _ = p.db.update_task_progress(&p.task_id, downloaded_bytes).await;
+            let _ =
+                p.db.update_task_progress(&p.task_id, downloaded_bytes)
+                    .await;
             last_db_save = std::time::Instant::now();
         }
 
@@ -779,7 +783,9 @@ async fn run_hls_download_inner(
     drop(file);
 
     // Save final progress
-    let _ = p.db.update_task_progress(&p.task_id, downloaded_bytes).await;
+    let _ =
+        p.db.update_task_progress(&p.task_id, downloaded_bytes)
+            .await;
 
     tokio::fs::rename(&temp_path, &dest_path)
         .await
@@ -1023,7 +1029,10 @@ mod tests {
     #[test]
     fn test_resolve_uri_absolute() {
         assert_eq!(
-            resolve_uri("https://cdn.example.com/live/master.m3u8", "https://other.com/seg.ts"),
+            resolve_uri(
+                "https://cdn.example.com/live/master.m3u8",
+                "https://other.com/seg.ts"
+            ),
             "https://other.com/seg.ts"
         );
     }

@@ -1094,6 +1094,12 @@ async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
         }
     }
 
+    // 早期取消检查：probe 完成后、创建文件之前检测 pause/delete，
+    // 防止已取消的任务仍然在磁盘上创建临时文件。
+    if p.cancel_token.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
+
     let auto_name = if p.file_name.is_empty() {
         info.file_name.clone()
     } else {
@@ -1112,6 +1118,11 @@ async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
 
     p.db.update_task_file_info(&p.task_id, &actual_name, info.total_bytes)
         .await?;
+
+    // 二次取消检查：缩小 DB 已更新但文件尚未创建的竞争窗口。
+    if p.cancel_token.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
 
     let _ = p.db.update_task_status(&p.task_id, 1, "").await;
 

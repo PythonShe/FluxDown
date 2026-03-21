@@ -1601,12 +1601,35 @@ impl DownloadManager {
             self.hls_quality_senders.remove(task_id);
             self.active_task_queue.remove(task_id);
         }
-        if let Some(handle) = self.active_handles.remove(task_id) {
+        let handle_timed_out = if let Some(handle) = self.active_handles.remove(task_id) {
             // Timeout guard: don't block forever if the task misbehaves.
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+                .await
+                .is_err()
+        } else {
+            false
+        };
+        if handle_timed_out {
+            rinf::debug_print!(
+                "[manager] delete_task {}: handle wait timed out, spawned task may still be running",
+                task_id
+            );
         }
 
+        // 记录文件信息，供 handle 超时后延迟二次清理使用
+        let mut deferred_cleanup: Option<(String, String, String, bool)> = None;
+
+        // 在 handle 等待之后加载 DB，确保获取到 spawned task 可能更新的最新 file_name。
         if let Ok(Some(t)) = self.db.load_task_by_id(task_id).await {
+            // 若 handle 超时且文件名已知，记录信息以便后续延迟清理
+            if handle_timed_out && !t.file_name.is_empty() {
+                deferred_cleanup = Some((
+                    t.save_dir.clone(),
+                    t.file_name.clone(),
+                    t.url.clone(),
+                    delete_files,
+                ));
+            }
             let path = PathBuf::from(&t.save_dir).join(&t.file_name);
 
             if is_bt_url(&t.url) {
@@ -1640,7 +1663,16 @@ impl DownloadManager {
                 // HTTP / FTP / HLS / DASH: always clean up the in-progress temp file
                 let temp_path =
                     PathBuf::from(format!("{}{}", path.display(), downloader::TEMP_EXT));
-                let _ = tokio::fs::remove_file(&temp_path).await;
+                if let Err(e) = tokio::fs::remove_file(&temp_path).await {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        rinf::debug_print!(
+                            "[manager] delete_task {}: remove temp {} failed: {}",
+                            task_id,
+                            temp_path.display(),
+                            e
+                        );
+                    }
+                }
 
                 // DASH audio sidecar: clean up .audio.m4a and its .part temp
                 if dash_downloader::is_dash_url(&t.url) {
@@ -1654,7 +1686,16 @@ impl DownloadManager {
                 }
 
                 if delete_files && is_safe_file_name(&t.file_name) {
-                    let _ = tokio::fs::remove_file(&path).await;
+                    if let Err(e) = tokio::fs::remove_file(&path).await {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            rinf::debug_print!(
+                                "[manager] delete_task {}: remove file {} failed: {}",
+                                task_id,
+                                path.display(),
+                                e
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1675,7 +1716,45 @@ impl DownloadManager {
             })
             .await;
 
-        let _ = self.db.delete_task(task_id).await;
+        if let Err(e) = self.db.delete_task(task_id).await {
+            rinf::debug_print!("[manager] delete_task {}: DB delete error: {}", task_id, e);
+        }
+
+        // 竞争修复：若 handle 等待超时（spawned task 可能仍在运行），它可能在首次
+        // 清理之后才创建临时文件。延迟二次清理以捕获这类孤立文件。
+        // 下载器中新增的早期 cancel 检查已大幅缩小竞争窗口，此处为兜底保护。
+        if let Some((save_dir, file_name, url, del_files)) = deferred_cleanup {
+            let tid = task_id.to_string();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let path = PathBuf::from(&save_dir).join(&file_name);
+                if is_bt_url(&url) {
+                    if del_files && is_safe_file_name(&file_name) {
+                        if path.is_dir() {
+                            let _ = tokio::fs::remove_dir_all(&path).await;
+                        } else {
+                            let _ = tokio::fs::remove_file(&path).await;
+                        }
+                    }
+                } else {
+                    let temp_path =
+                        PathBuf::from(format!("{}{}", path.display(), crate::downloader::TEMP_EXT));
+                    if let Err(e) = tokio::fs::remove_file(&temp_path).await {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            rinf::debug_print!(
+                                "[manager] delete_task {} deferred: remove temp {} failed: {}",
+                                tid,
+                                temp_path.display(),
+                                e
+                            );
+                        }
+                    }
+                    if del_files && is_safe_file_name(&file_name) {
+                        let _ = tokio::fs::remove_file(&path).await;
+                    }
+                }
+            });
+        }
 
         // Bug 4 修复：被删除的任务从 auto_paused_ids 中移除，
         // 避免 clear_priority 之后徒劳地对已删除任务调用 resume_task，
@@ -1814,7 +1893,14 @@ impl DownloadManager {
                             path.display(),
                             crate::downloader::TEMP_EXT
                         ));
-                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        if let Err(e) = tokio::fs::remove_file(&temp_path).await {
+                            if e.kind() != std::io::ErrorKind::NotFound {
+                                rinf::debug_print!(
+                                    "[manager] delete_tasks_batch {}: remove temp {} failed: {}",
+                                    tid_owned, temp_path.display(), e
+                                );
+                            }
+                        }
 
                         // DASH audio sidecar cleanup
                         if dash_downloader::is_dash_url(&url) {
@@ -1831,7 +1917,14 @@ impl DownloadManager {
                         }
 
                         if delete_files && is_safe_file_name(&file_name) {
-                            let _ = tokio::fs::remove_file(&path).await;
+                            if let Err(e) = tokio::fs::remove_file(&path).await {
+                                if e.kind() != std::io::ErrorKind::NotFound {
+                                    rinf::debug_print!(
+                                        "[manager] delete_tasks_batch {}: remove file {} failed: {}",
+                                        tid_owned, path.display(), e
+                                    );
+                                }
+                            }
                         }
 
                         // Signal completion

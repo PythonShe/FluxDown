@@ -1,4 +1,3 @@
-
 use std::path::{Path, PathBuf};
 
 use futures_util::StreamExt;
@@ -9,11 +8,10 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use rinf::RustSignal;
 
 use crate::downloader::{
-    dedup_filename, extract_from_url, DownloadError, DownloadParams, ProgressUpdate,
-    DB_SAVE_INTERVAL_SECS, TEMP_EXT,
+    DB_SAVE_INTERVAL_SECS, DownloadError, DownloadParams, ProgressUpdate, TEMP_EXT, dedup_filename,
+    extract_from_url,
 };
 use crate::signals::{HlsQualityOption, HlsQualityOptions};
-
 
 fn is_same_origin(base_url: &str, target_url: &str) -> bool {
     let base = match url::Url::parse(base_url) {
@@ -40,12 +38,10 @@ fn cookies_for_url<'a>(manifest_url: &str, target_url: &str, cookies: &'a str) -
     }
 }
 
-
 const MAX_RETRIES: u32 = 3;
 const RETRY_BASE_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 const QUALITY_SELECTION_TIMEOUT_SECS: u64 = 60;
 const MAX_SEGMENTS: usize = 100_000;
-
 
 pub fn is_dash_url(url: &str) -> bool {
     let path = url.split('?').next().unwrap_or(url);
@@ -53,7 +49,6 @@ pub fn is_dash_url(url: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.ends_with(".mpd")
 }
-
 
 #[derive(Clone)]
 struct DashSegment {
@@ -74,7 +69,6 @@ struct SegmentDownloadContext<'a> {
     cancel_token: &'a tokio_util::sync::CancellationToken,
     task_id: &'a str,
 }
-
 
 pub async fn run_dash_download(mut params: DownloadParams) {
     let task_id_log = params.task_id.clone();
@@ -108,10 +102,7 @@ pub async fn run_dash_download(mut params: DownloadParams) {
         Err(e) => {
             let msg = e.to_string();
             rinf::debug_print!("[dash-download] task {} error: {}", task_id_log, msg);
-            let _ = params
-                .db
-                .update_task_status(&params.task_id, 4, &msg)
-                .await;
+            let _ = params.db.update_task_status(&params.task_id, 4, &msg).await;
 
             let (dl, total) = match params.db.load_task_by_id(&params.task_id).await {
                 Ok(Some(t)) => (t.downloaded_bytes, t.total_bytes),
@@ -139,7 +130,6 @@ pub async fn run_dash_download(mut params: DownloadParams) {
         }
     }
 }
-
 
 async fn run_dash_download_inner(
     p: &DownloadParams,
@@ -173,7 +163,9 @@ async fn run_dash_download_inner(
         .filter(|a| is_video_adaptation(a))
         .collect();
     if video_adaptations.is_empty() {
-        return Err(DownloadError::Other("MPD contains no video AdaptationSet".to_string()));
+        return Err(DownloadError::Other(
+            "MPD contains no video AdaptationSet".to_string(),
+        ));
     }
 
     let best_video = select_best_adaptation(&video_adaptations)?;
@@ -224,6 +216,13 @@ async fn run_dash_download_inner(
 
     p.db.update_task_file_info(&p.task_id, &actual_name, 0)
         .await?;
+
+    // 早期取消检查：MPD 解析完成后、创建文件之前检测 pause/delete，
+    // 防止已取消的任务仍然在磁盘上创建临时文件。
+    if p.cancel_token.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
+
     let _ = p.db.update_task_status(&p.task_id, 1, "").await;
 
     let _ = p
@@ -257,10 +256,7 @@ async fn run_dash_download_inner(
     )
     .await?;
 
-    let audio_adaptation = period
-        .adaptations
-        .iter()
-        .find(|a| is_audio_adaptation(a));
+    let audio_adaptation = period.adaptations.iter().find(|a| is_audio_adaptation(a));
     let audio_bytes = if let Some(audio) = audio_adaptation {
         if audio.representations.is_empty() {
             0
@@ -270,7 +266,8 @@ async fn run_dash_download_inner(
                 .iter()
                 .max_by_key(|r| r.bandwidth.unwrap_or(0))
                 .ok_or_else(|| DownloadError::Other("audio Representation missing".to_string()))?;
-            let (audio_init, audio_segments) = build_segment_list(&p.url, &mpd, period, audio, audio_repr)?;
+            let (audio_init, audio_segments) =
+                build_segment_list(&p.url, &mpd, period, audio, audio_repr)?;
             if audio_segments.is_empty() {
                 0
             } else {
@@ -307,7 +304,6 @@ pub(crate) fn build_audio_path(video_path: &Path) -> PathBuf {
     }
 }
 
-
 async fn fetch_and_parse_mpd(
     client: &Client,
     url: &str,
@@ -321,10 +317,8 @@ async fn fetch_and_parse_mpd(
     let bytes = resp.bytes().await?;
     let xml = String::from_utf8(bytes.to_vec())
         .map_err(|e| DownloadError::Other(format!("MPD utf8 error: {e}")))?;
-    dash_mpd::parse(&xml)
-        .map_err(|e| DownloadError::Other(format!("MPD parse error: {e}")))
+    dash_mpd::parse(&xml).map_err(|e| DownloadError::Other(format!("MPD parse error: {e}")))
 }
-
 
 fn is_video_adaptation(a: &dash_mpd::AdaptationSet) -> bool {
     if let Some(ref ct) = a.contentType
@@ -474,7 +468,6 @@ async fn select_representation(
     }
 }
 
-
 fn resolve_url_template(
     template: &str,
     repr_id: &str,
@@ -617,7 +610,13 @@ fn build_segment_list(
     let base = resolve_base_url(mpd_url, mpd, period, adaptation, representation)?;
     if let Some(template) = merged_segment_template(period, adaptation, representation) {
         let fallback_duration_secs = mpd.mediaPresentationDuration.map(|d| d.as_secs_f64());
-        return build_from_template(&base, period, representation, &template, fallback_duration_secs);
+        return build_from_template(
+            &base,
+            period,
+            representation,
+            &template,
+            fallback_duration_secs,
+        );
     }
     if let Some(list) = merged_segment_list(period, adaptation, representation) {
         return build_from_list(&base, &list);
@@ -691,11 +690,7 @@ fn merged_segment_template(
         }
     }
 
-    if has_any {
-        Some(out)
-    } else {
-        None
-    }
+    if has_any { Some(out) } else { None }
 }
 
 fn merged_segment_list(
@@ -738,11 +733,7 @@ fn merged_segment_list(
         }
     }
 
-    if has_any {
-        Some(out)
-    } else {
-        None
-    }
+    if has_any { Some(out) } else { None }
 }
 
 fn build_from_template(
@@ -754,10 +745,10 @@ fn build_from_template(
 ) -> Result<(Option<DashSegment>, Vec<DashSegment>), DownloadError> {
     let media_tpl_str = template.media.as_deref().unwrap_or("");
     let init_tpl_str = template.initialization.as_deref().unwrap_or("");
-    let needs_repr_id = media_tpl_str.contains("$RepresentationID$")
-        || init_tpl_str.contains("$RepresentationID$");
-    let needs_bandwidth = media_tpl_str.contains("$Bandwidth$")
-        || init_tpl_str.contains("$Bandwidth$");
+    let needs_repr_id =
+        media_tpl_str.contains("$RepresentationID$") || init_tpl_str.contains("$RepresentationID$");
+    let needs_bandwidth =
+        media_tpl_str.contains("$Bandwidth$") || init_tpl_str.contains("$Bandwidth$");
 
     if needs_repr_id && representation.id.is_none() {
         return Err(DownloadError::Other(
@@ -781,7 +772,12 @@ fn build_from_template(
     let init_url = template
         .initialization
         .clone()
-        .or_else(|| template.Initialization.as_ref().and_then(|i| i.sourceURL.clone()))
+        .or_else(|| {
+            template
+                .Initialization
+                .as_ref()
+                .and_then(|i| i.sourceURL.clone())
+        })
         .map(|u| resolve_url_template(&u, &repr_id, bandwidth, None, None))
         .map(|u| join_base(base, &u))
         .transpose()?;
@@ -851,7 +847,7 @@ fn build_from_template(
                 Some(other) => {
                     return Err(DownloadError::Other(format!(
                         "unsupported SegmentTimeline repeat count: {other}"
-                    )))
+                    )));
                 }
             };
 
@@ -967,10 +963,7 @@ fn build_from_list(
         .map(|u| {
             Ok::<DashSegment, DownloadError>(DashSegment {
                 url: join_base(base, &u)?,
-                range: list
-                    .Initialization
-                    .as_ref()
-                    .and_then(|i| i.range.clone()),
+                range: list.Initialization.as_ref().and_then(|i| i.range.clone()),
             })
         })
         .transpose()?;
@@ -995,7 +988,6 @@ fn build_from_list(
 
     Ok((init, media_segments))
 }
-
 
 async fn download_track(
     p: &DownloadParams,
@@ -1026,10 +1018,9 @@ async fn download_track(
     for (idx, segment) in segment_iter.enumerate() {
         if p.cancel_token.is_cancelled() {
             file.flush().await?;
-            let _ = p
-                .db
-                .update_task_progress(&p.task_id, progress_state.downloaded_bytes)
-                .await;
+            let _ =
+                p.db.update_task_progress(&p.task_id, progress_state.downloaded_bytes)
+                    .await;
             return Err(DownloadError::Cancelled);
         }
 
@@ -1045,10 +1036,9 @@ async fn download_track(
         {
             Ok(b) => b,
             Err(e) => {
-                let _ = p
-                    .db
-                    .update_task_progress(&p.task_id, progress_state.downloaded_bytes)
-                    .await;
+                let _ =
+                    p.db.update_task_progress(&p.task_id, progress_state.downloaded_bytes)
+                        .await;
                 return Err(e);
             }
         };
@@ -1073,10 +1063,9 @@ async fn download_track(
         }
 
         if progress_state.last_db_save.elapsed().as_secs() >= DB_SAVE_INTERVAL_SECS {
-            let _ = p
-                .db
-                .update_task_progress(&p.task_id, progress_state.downloaded_bytes)
-                .await;
+            let _ =
+                p.db.update_task_progress(&p.task_id, progress_state.downloaded_bytes)
+                    .await;
             progress_state.last_db_save = std::time::Instant::now();
         }
     }
@@ -1112,9 +1101,10 @@ async fn download_segment_with_retry(
 ) -> Result<i64, DownloadError> {
     let mut attempts = 0u32;
     loop {
-        let start_pos = file.stream_position().await.map_err(|e| {
-            DownloadError::Other(format!("failed to get file position: {e}"))
-        })?;
+        let start_pos = file
+            .stream_position()
+            .await
+            .map_err(|e| DownloadError::Other(format!("failed to get file position: {e}")))?;
 
         match download_segment_streaming(ctx, url, range, file, speed_limiter).await {
             Ok(written) => return Ok(written),
@@ -1208,7 +1198,6 @@ async fn download_segment_streaming(
 
     Ok(written)
 }
-
 
 #[cfg(test)]
 mod tests {
