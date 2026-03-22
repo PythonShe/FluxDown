@@ -5,8 +5,12 @@
  * v2 改进：URL 归一化去重、可信度分级、按可信度+时间排序。
  */
 
-import { browser } from 'wxt/browser';
-import type { DetectedResource, ResourceMessagePayload, ConfidenceLevel } from './resource-types';
+import { browser } from "wxt/browser";
+import type {
+  DetectedResource,
+  ResourceMessagePayload,
+  ConfidenceLevel,
+} from "./resource-types";
 import {
   generateResourceId,
   classifyResource,
@@ -14,7 +18,7 @@ import {
   isWorthShowing,
   computeConfidence,
   isNoiseUrl,
-} from './resource-types';
+} from "./resource-types";
 
 // ===== 核心存储 =====
 
@@ -38,6 +42,8 @@ export function addResources(
   tabId: number,
   pageUrl: string,
   payloads: ResourceMessagePayload[],
+  cookies?: string,
+  headers?: Record<string, string>,
 ): number {
   let resourceMap = tabResources.get(tabId);
   if (!resourceMap) {
@@ -56,13 +62,14 @@ export function addResources(
 
     const existing = resourceMap.get(id);
     if (existing) {
-      mergeResource(existing, payload);
+      mergeResource(existing, payload, cookies, headers);
       continue;
     }
 
-    const type = payload.type !== 'other'
-      ? payload.type
-      : classifyResource(payload.url, payload.mimeType);
+    const type =
+      payload.type !== "other"
+        ? payload.type
+        : classifyResource(payload.url, payload.mimeType);
 
     const size = payload.size ?? -1;
 
@@ -78,8 +85,15 @@ export function addResources(
       detectedAt: Date.now(),
       tabId,
       pageUrl: payload.pageUrl || pageUrl,
-      confidence: computeConfidence(type, size, payload.detectedBy, payload.isAttachment),
+      confidence: computeConfidence(
+        type,
+        size,
+        payload.detectedBy,
+        payload.isAttachment,
+      ),
       isAttachment: payload.isAttachment,
+      cookies: cookies || undefined,
+      headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
     };
 
     if (isWorthShowing(resource)) {
@@ -101,16 +115,26 @@ export function addSniffedResource(
   contentLength: number,
   filename: string,
   isAttachment?: boolean,
+  cookies?: string,
+  headers?: Record<string, string>,
 ): number {
-  return addResources(tabId, '', [{
-    url,
-    type: classifyResource(url, contentType),
-    filename,
-    size: contentLength > 0 ? contentLength : undefined,
-    mimeType: contentType,
-    detectedBy: 'webRequest',
-    isAttachment,
-  }]);
+  return addResources(
+    tabId,
+    "",
+    [
+      {
+        url,
+        type: classifyResource(url, contentType),
+        filename,
+        size: contentLength > 0 ? contentLength : undefined,
+        mimeType: contentType,
+        detectedBy: "webRequest",
+        isAttachment,
+      },
+    ],
+    cookies,
+    headers,
+  );
 }
 
 /**
@@ -121,7 +145,8 @@ export function getResourcesForTab(tabId: number): DetectedResource[] {
   if (!resourceMap) return [];
   return Array.from(resourceMap.values()).sort((a, b) => {
     // 先按可信度降序
-    const confDiff = CONFIDENCE_ORDER[b.confidence] - CONFIDENCE_ORDER[a.confidence];
+    const confDiff =
+      CONFIDENCE_ORDER[b.confidence] - CONFIDENCE_ORDER[a.confidence];
     if (confDiff !== 0) return confDiff;
     // 同可信度按时间降序
     return b.detectedAt - a.detectedAt;
@@ -148,12 +173,15 @@ export function getTabsWithResources(): number[] {
 
 export async function updateBadgeForTab(tabId: number): Promise<void> {
   const count = getResourceCountForTab(tabId);
-  const text = count > 0 ? String(count) : '';
+  const text = count > 0 ? String(count) : "";
 
   try {
     await browser.action?.setBadgeText({ text, tabId });
     if (count > 0) {
-      await browser.action?.setBadgeBackgroundColor({ color: '#3B82F6', tabId });
+      await browser.action?.setBadgeBackgroundColor({
+        color: "#3B82F6",
+        tabId,
+      });
     }
   } catch {
     // tab 可能已关闭
@@ -162,9 +190,14 @@ export async function updateBadgeForTab(tabId: number): Promise<void> {
 
 // ===== 内部辅助 =====
 
-function mergeResource(existing: DetectedResource, incoming: ResourceMessagePayload): void {
+function mergeResource(
+  existing: DetectedResource,
+  incoming: ResourceMessagePayload,
+  cookies?: string,
+  headers?: Record<string, string>,
+): void {
   // 更精确的类型覆盖 other
-  if (existing.type === 'other' && incoming.type && incoming.type !== 'other') {
+  if (existing.type === "other" && incoming.type && incoming.type !== "other") {
     existing.type = incoming.type;
   }
   if (!existing.filename && incoming.filename) {
@@ -182,6 +215,13 @@ function mergeResource(existing: DetectedResource, incoming: ResourceMessagePayl
   // attachment 标记只升不降
   if (incoming.isAttachment) {
     existing.isAttachment = true;
+  }
+  // 合并请求头信息（webRequest 来源的更可靠，覆盖旧值）
+  if (cookies && !existing.cookies) {
+    existing.cookies = cookies;
+  }
+  if (headers && Object.keys(headers).length > 0 && !existing.headers) {
+    existing.headers = headers;
   }
 
   // 重新计算可信度（信息更丰富后可能升级）
@@ -204,7 +244,7 @@ export function initTabLifecycleListeners(): void {
   });
 
   browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (changeInfo.status === 'loading' && changeInfo.url) {
+    if (changeInfo.status === "loading" && changeInfo.url) {
       clearResourcesForTab(tabId);
       updateBadgeForTab(tabId);
     }

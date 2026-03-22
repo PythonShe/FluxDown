@@ -111,20 +111,32 @@ pub struct DownloadParams {
 }
 
 /// 将浏览器扩展捕获的额外 HTTP 头应用到请求构建器上。
+///
+/// 使用 `req.headers(map)` 而非逐个 `req.header()`，确保**覆盖**语义：
+/// 当 extra_headers 中包含 User-Agent、Accept 等已由 reqwest Client
+/// 默认设置的头时，浏览器的真实值会替代默认值，而不是追加产生重复头。
+/// 这是 IDM/NDM 的核心策略——原样复制浏览器的请求头。
+///
 /// 无效的 header name 或 value 会被静默跳过。
 pub(crate) fn apply_extra_headers(
-    mut req: reqwest::RequestBuilder,
+    req: reqwest::RequestBuilder,
     extra_headers: &std::collections::HashMap<String, String>,
 ) -> reqwest::RequestBuilder {
+    if extra_headers.is_empty() {
+        return req;
+    }
+    let mut map = reqwest::header::HeaderMap::with_capacity(extra_headers.len());
     for (name, value) in extra_headers {
         if let (Ok(header_name), Ok(header_value)) = (
             reqwest::header::HeaderName::from_bytes(name.as_bytes()),
             reqwest::header::HeaderValue::from_str(value),
         ) {
-            req = req.header(header_name, header_value);
+            map.insert(header_name, header_value);
         }
     }
-    req
+    // req.headers(map) 内部用 insert 逐个替换同名头，
+    // 确保浏览器的真实 User-Agent 等值覆盖 build_client 设的默认值。
+    req.headers(map)
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,33 +1065,49 @@ async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
 
     let client = &p.client;
 
-    // When the browser extension provides a valid file size hint, skip the
-    // probe phase (HEAD + GET Range:0-0) entirely.  One-time CDN URLs (e.g.
-    // Lanzou, some OSS signed URLs) treat every HTTP request as a download
+    // When the browser extension provides a file size hint, skip the probe
+    // phase (HEAD + GET Range:0-0) entirely.  One-time CDN URLs (e.g.
+    // Lanzou, ctbpsp.com signed URLs) treat every HTTP request as a download
     // attempt.  The probe would "consume" the URL token, leaving the actual
     // download to receive an HTML error page instead of the real file.
-    let info = if p.hint_file_size > 0 {
+    //
+    // hint_file_size semantics:
+    //   > 0  — known file size from browser extension, skip probe
+    //   -1   — size unknown but confirmed downloadable (webRequest sniffed),
+    //          skip probe to preserve one-time tokens
+    //    0   — no hint, run normal probe
+    let info = if p.hint_file_size != 0 {
         let name = if p.file_name.is_empty() {
             extract_filename(&reqwest::header::HeaderMap::new(), &p.url)
         } else {
             p.file_name.clone()
         };
+        // When hint is -1 (unknown size), use 0 as total_bytes so the
+        // downloader treats it as unknown-length and reads until EOF.
+        let effective_size = if p.hint_file_size > 0 {
+            p.hint_file_size
+        } else {
+            0
+        };
         rinf::debug_print!(
-            "[download] task {} using hint: name={}, size={} (probe skipped)",
+            "[download] task {} using hint: name={}, size={} (probe skipped, hint={})",
             p.task_id,
             name,
+            effective_size,
             p.hint_file_size
         );
         FileInfo {
             file_name: name,
-            total_bytes: p.hint_file_size,
+            total_bytes: effective_size,
             // Optimistically assume Range support for auto (0) and explicit
             // multi-segment (> 1) requests.  Most servers that expose a
             // Content-Length also honour Range headers.  The bandwidth probe
             // is intentionally skipped for hint-mode tasks (see below) so no
             // extra HTTP request is made that could consume a one-time CDN
             // token (e.g. Lanzou cloud signed URLs).
-            supports_range: p.segment_count != 1,
+            // Only assume Range support when we have a real file size;
+            // unknown-size downloads (-1 hint) fall back to single-stream.
+            supports_range: p.hint_file_size > 0 && p.segment_count != 1,
             content_type: String::new(),
         }
     } else {

@@ -252,6 +252,53 @@ export default defineBackground(() => {
     requestHeaderCache.set(details.url, { cookies, headers, ts: Date.now() });
   }
 
+  // === 认证信息提取辅助 ===
+
+  /**
+   * 浏览器内部头黑名单 — IDM/NDM 策略：只跳过连接管理和已单独处理的头，
+   * 其余（Accept、Sec-Fetch-*、Accept-Language 等）全部原样传递给 FluxDown。
+   *
+   * 许多站点（如 ctbpsp.com）的服务器会检查 Sec-Fetch-Dest / Sec-Fetch-Mode /
+   * Accept / Accept-Language 等头来判断请求是否来自真实的浏览器导航。
+   * 缺少这些头会导致服务器返回 HTML 错误页面而非实际文件。
+   */
+  const SKIP_HEADERS = new Set([
+    "cookie", // 已单独提取为 cookieString 字段
+    "host", // 由 URL 决定，reqwest 自动设置
+    "connection", // HTTP 连接管理，reqwest 自动处理
+    "content-length", // 请求体相关，GET 请求无需
+    "accept-encoding", // reqwest 自动处理压缩（gzip/deflate/brotli），传了会重复解压
+  ]);
+
+  /**
+   * 从 requestHeaderCache 提取认证信息（Cookie + 自定义头）。
+   * 不会删除缓存条目——调用方按需自行清理。
+   */
+  function extractAuthFromCache(
+    url: string,
+    fallbackUrl?: string,
+  ): {
+    cookies: string | undefined;
+    headers: Record<string, string> | undefined;
+  } {
+    const cached =
+      requestHeaderCache.get(url) ||
+      (fallbackUrl && fallbackUrl !== url
+        ? requestHeaderCache.get(fallbackUrl)
+        : undefined);
+    if (!cached) return { cookies: undefined, headers: undefined };
+
+    const cookies = cached.cookies || undefined;
+    const filtered: Record<string, string> = {};
+    for (const [name, value] of Object.entries(cached.headers)) {
+      if (!SKIP_HEADERS.has(name.toLowerCase())) {
+        filtered[name] = value;
+      }
+    }
+    const headers = Object.keys(filtered).length > 0 ? filtered : undefined;
+    return { cookies, headers };
+  }
+
   // === 响应头监听：检测"导航转下载"场景 ===
   // 当浏览器主框架导航的响应带有 Content-Disposition: attachment 或
   // 下载类 Content-Type 时，说明这是一个"导航转下载"的请求。
@@ -311,6 +358,9 @@ export default defineBackground(() => {
         // 同时将 main_frame 下载资源加入嗅探面板
         // （资源嗅探层只监听 media/xhr/object/other，main_frame 会绕过它）
         if (details.tabId >= 0) {
+          // 从 requestHeaderCache 提取该请求的认证信息，随资源一起持久存储
+          const { cookies: mainCookies, headers: mainHeaders } =
+            extractAuthFromCache(details.url);
           const added = addSniffedResource(
             details.tabId,
             details.url,
@@ -318,6 +368,8 @@ export default defineBackground(() => {
             contentLength,
             dispositionFilename,
             isAttachment,
+            mainCookies,
+            mainHeaders,
           );
           if (added > 0) {
             updateBadgeForTab(details.tabId);
@@ -382,7 +434,14 @@ export default defineBackground(() => {
           filename = extractFilenameFromUrl(details.url);
         }
 
-        // 添加到资源存储（传递 isAttachment 标记用于可信度计算）
+        // 从 requestHeaderCache 提取该请求的认证信息（Cookie / Authorization 等），
+        // 随资源一起持久存储到 resource-store。
+        // 确保用户稍后从资源面板点击下载时，即使 requestHeaderCache 已过期，
+        // 仍能携带正确的认证头发送给 FluxDown——这是 IDM 能成功而普通插件失败的关键。
+        const { cookies: sniffCookies, headers: sniffHeaders } =
+          extractAuthFromCache(details.url);
+
+        // 添加到资源存储（传递 isAttachment + cookies/headers 用于后续下载）
         const added = addSniffedResource(
           details.tabId,
           details.url,
@@ -390,6 +449,8 @@ export default defineBackground(() => {
           contentLength,
           filename,
           isAttachment,
+          sniffCookies,
+          sniffHeaders,
         );
 
         if (added > 0) {
@@ -1321,47 +1382,19 @@ export default defineBackground(() => {
     fileSize?: number,
     mimeType?: string,
     originalUrl?: string,
+    storedCookies?: string,
+    storedHeaders?: Record<string, string>,
   ): Promise<boolean> {
     // === 提取认证信息（Cookie / Authorization 等） ===
     // 策略 1：从 webRequest 缓存获取（最可靠 — 浏览器真正发出的请求头）
     // 重定向修复：onSendHeaders 以浏览器原始请求 URL 为 key 缓存 headers，
     // 但此处传入的 url 可能是 302 重定向后的 finalUrl，导致缓存 miss。
     // 若主 URL 查不到，回退用 originalUrl（重定向前的 URL）再查一次。
-    let cookieString = "";
-    let extraHeaders: Record<string, string> = {};
-    const cached =
-      requestHeaderCache.get(url) ||
-      (originalUrl && originalUrl !== url
-        ? requestHeaderCache.get(originalUrl)
-        : undefined);
-    if (cached) {
-      cookieString = cached.cookies;
-      // 提取有意义的自定义/认证头，排除浏览器内部头和已单独处理的 Cookie
-      const skipHeaders = new Set([
-        "cookie",
-        "host",
-        "connection",
-        "content-length",
-        "content-type",
-        "accept",
-        "accept-encoding",
-        "accept-language",
-        "sec-ch-ua",
-        "sec-ch-ua-mobile",
-        "sec-ch-ua-platform",
-        "sec-fetch-dest",
-        "sec-fetch-mode",
-        "sec-fetch-site",
-        "sec-fetch-user",
-        "upgrade-insecure-requests",
-        "cache-control",
-        "pragma",
-      ]);
-      for (const [name, value] of Object.entries(cached.headers)) {
-        if (!skipHeaders.has(name.toLowerCase())) {
-          extraHeaders[name] = value;
-        }
-      }
+    // 策略 1：从 webRequest 缓存获取（最可靠 — 浏览器真正发出的请求头）
+    const authFromCache = extractAuthFromCache(url, originalUrl);
+    let cookieString = authFromCache.cookies || "";
+    let extraHeaders: Record<string, string> = authFromCache.headers || {};
+    if (authFromCache.cookies || authFromCache.headers) {
       console.log(
         "[FluxDown] Cookies from webRequest cache:",
         cookieString.length,
@@ -1402,6 +1435,31 @@ export default defineBackground(() => {
           e,
         );
       }
+    }
+
+    // 策略 3：使用资源存储中保存的请求头信息（最终兜底）
+    // 资源嗅探时从 webRequest 捕获的 Cookie/Authorization 等认证信息，
+    // 即使 requestHeaderCache 已过期（60s）、cookies API 也未能提取到，
+    // 仍可从 resource-store 持久存储中恢复。
+    // 这是解决"PDF 无权限"等认证丢失问题的关键路径。
+    if (!cookieString && storedCookies) {
+      cookieString = storedCookies;
+      console.log(
+        "[FluxDown] Cookies from stored resource:",
+        cookieString.length,
+        "chars",
+      );
+    }
+    if (
+      Object.keys(extraHeaders).length === 0 &&
+      storedHeaders &&
+      Object.keys(storedHeaders).length > 0
+    ) {
+      extraHeaders = storedHeaders;
+      console.log(
+        "[FluxDown] Extra headers from stored resource:",
+        Object.keys(extraHeaders).length,
+      );
     }
 
     const request: DownloadRequest = {
@@ -1534,12 +1592,38 @@ export default defineBackground(() => {
         const dlSettings = await getCachedSettings();
         if (!dlSettings.enabled)
           return { success: false, message: "Extension disabled" };
+        // 从资源存储中查找匹配的资源，获取嗅探时保存的 cookies/headers/fileSize。
+        // 用户从资源面板点击下载时，原始请求的 requestHeaderCache 可能已过期，
+        // 必须依赖持久存储的认证信息才能成功下载需要认证的资源（如政务站点 PDF）。
+        const dlTabId = sender.tab?.id;
+        let resCookies: string | undefined;
+        let resHeaders: Record<string, string> | undefined;
+        let resFileSize: number | undefined;
+        if (dlTabId && dlTabId >= 0) {
+          const tabRes = getResourcesForTab(dlTabId);
+          const matched = tabRes.find((r) => r.url === url);
+          if (matched) {
+            resCookies = matched.cookies;
+            resHeaders = matched.headers;
+            resFileSize = matched.size > 0 ? matched.size : undefined;
+          }
+        }
+        // IDM/NDM 策略：对于从资源面板 / 嗅探触发的下载，必须跳过 probe。
+        // 一次性 token URL（如 ctbpsp.com）的 token 已被浏览器消费，
+        // probe（HEAD + GET Range:0-0）会再次请求导致 token 失效返回 HTML。
+        // fileSize > 0 → 已知大小，跳过 probe
+        // fileSize = -1 → 大小未知但确认是下载资源，跳过 probe
+        // fileSize = 0/undefined → 正常 probe（仅限手动添加的 URL）
+        const effectiveFileSize = message.fileSize || resFileSize || -1;
         await sendToFluxDown(
           url,
           message.referrer,
           message.filename,
-          message.fileSize,
+          effectiveFileSize,
           message.mimeType,
+          undefined,
+          resCookies,
+          resHeaders,
         );
         return { success: true };
       }
@@ -1564,40 +1648,18 @@ export default defineBackground(() => {
         // Bug 9 修复：cookies API 加 500ms 超时，与 sendToFluxDown 保持一致
         // Bug R4-6 修复：并发提取所有 URL 的 cookies，避免串行 N×500ms 超时
         // 需要排除的浏览器内部头（Cookie 已单独处理）
-        const skipHeaders = new Set([
-          "cookie",
-          "host",
-          "connection",
-          "content-length",
-          "content-type",
-          "accept",
-          "accept-encoding",
-          "accept-language",
-          "sec-ch-ua",
-          "sec-ch-ua-mobile",
-          "sec-ch-ua-platform",
-          "sec-fetch-dest",
-          "sec-fetch-mode",
-          "sec-fetch-site",
-          "sec-fetch-user",
-          "upgrade-insecure-requests",
-          "cache-control",
-          "pragma",
-        ]);
+        // 预加载当前 tab 的资源列表，用于 cookies/headers 兜底查找
+        const batchTabId = sender.tab?.id;
+        const batchTabResources =
+          batchTabId && batchTabId >= 0 ? getResourcesForTab(batchTabId) : [];
 
         const batchItems: BatchDownloadItem[] = await Promise.all(
           items.map(async (item) => {
-            let cookieString = "";
-            let extraHeaders: Record<string, string> = {};
-            const cached = requestHeaderCache.get(item.url);
-            if (cached) {
-              cookieString = cached.cookies;
-              // 提取有意义的自定义/认证头，排除浏览器内部头和已单独处理的 Cookie
-              for (const [name, value] of Object.entries(cached.headers)) {
-                if (!skipHeaders.has(name.toLowerCase())) {
-                  extraHeaders[name] = value;
-                }
-              }
+            // 策略 1：从 webRequest 缓存获取认证信息
+            const itemAuth = extractAuthFromCache(item.url);
+            let cookieString = itemAuth.cookies || "";
+            let extraHeaders: Record<string, string> = itemAuth.headers || {};
+            if (itemAuth.cookies || itemAuth.headers) {
               requestHeaderCache.delete(item.url);
             }
             if (!cookieString) {
@@ -1613,6 +1675,24 @@ export default defineBackground(() => {
                   .join("; ");
               } catch {
                 /* timeout 或权限不足，跳过 */
+              }
+            }
+            // 策略 3：从资源存储中恢复认证信息（兜底）
+            if (!cookieString || Object.keys(extraHeaders).length === 0) {
+              const matchedRes = batchTabResources.find(
+                (r) => r.url === item.url,
+              );
+              if (matchedRes) {
+                if (!cookieString && matchedRes.cookies) {
+                  cookieString = matchedRes.cookies;
+                }
+                if (
+                  Object.keys(extraHeaders).length === 0 &&
+                  matchedRes.headers &&
+                  Object.keys(matchedRes.headers).length > 0
+                ) {
+                  extraHeaders = matchedRes.headers;
+                }
               }
             }
             return {

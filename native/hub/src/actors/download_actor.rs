@@ -415,7 +415,7 @@ pub async fn run(db_dir: PathBuf) {
                     url: req.url,
                     filename: req.filename,
                     referrer: req.referrer,
-                    file_size: req.file_size.map(|s| s as i64).unwrap_or(0),
+                    file_size: req.file_size.unwrap_or(0),
                     mime_type: req.mime_type.unwrap_or_default(),
                     cookies: req.cookies,
                 }

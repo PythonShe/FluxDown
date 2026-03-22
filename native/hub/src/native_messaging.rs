@@ -37,9 +37,13 @@ pub struct DownloadRequest {
     /// 由 Rust 下载引擎在发起请求时附加到请求头中。
     #[serde(default)]
     pub headers: Option<std::collections::HashMap<String, String>>,
+    /// 文件大小提示（字节）。
+    ///   >0 = 已知大小，跳过 probe
+    ///   -1 = 大小未知但确认是下载资源（webRequest 嗅探），跳过 probe
+    ///    0 / None = 正常 probe
     #[serde(rename = "fileSize")]
     #[serde(default)]
-    pub file_size: Option<u64>,
+    pub file_size: Option<i64>,
     #[serde(rename = "mimeType")]
     #[serde(default)]
     pub mime_type: Option<String>,
@@ -485,6 +489,19 @@ mod tests {
         let req: DownloadRequest = serde_json::from_str(json).unwrap();
         let headers = req.headers.unwrap();
         assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn deserialize_download_request_skip_probe_hint() {
+        // fileSize: -1 表示"跳过 probe"（资源面板触发的下载，大小未知但确认可下载）
+        let json = r#"{
+            "url": "https://example.com/bulletinPDF/abc?u_atoken=xxx",
+            "cookies": "session=abc",
+            "fileSize": -1
+        }"#;
+        let req: DownloadRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.file_size, Some(-1));
+        assert_eq!(req.cookies, "session=abc");
     }
 
     #[test]

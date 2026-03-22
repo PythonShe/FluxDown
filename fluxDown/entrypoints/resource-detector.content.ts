@@ -10,12 +10,16 @@
  * 4. 将检测到的资源通过 runtime.sendMessage 转发给 Background
  */
 
-import type { ResourceMessagePayload, FetchInterceptDetail, ResourceType } from '@/utils/resource-types';
-import { classifyByExtension } from '@/utils/resource-types';
+import type {
+  ResourceMessagePayload,
+  FetchInterceptDetail,
+  ResourceType,
+} from "@/utils/resource-types";
+import { classifyByExtension, classifyByMime } from "@/utils/resource-types";
 
 export default defineContentScript({
-  matches: ['<all_urls>'],
-  runAt: 'document_idle',
+  matches: ["<all_urls>"],
+  runAt: "document_idle",
 
   async main(ctx) {
     /** 已报告的 URL 集合（防止重复上报） */
@@ -37,14 +41,19 @@ export default defineContentScript({
           if (!(node instanceof HTMLElement)) continue;
           found.push(...checkElement(node));
           // 检查子元素
-          const children = node.querySelectorAll('video, audio, source, track[src], a[href], embed, object');
+          const children = node.querySelectorAll(
+            "video, audio, source, track[src], a[href], embed, object",
+          );
           for (const child of children) {
             found.push(...checkElement(child as HTMLElement));
           }
         }
 
         // 属性变化（如 video.src 被 JS 修改）
-        if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement) {
+        if (
+          mutation.type === "attributes" &&
+          mutation.target instanceof HTMLElement
+        ) {
           found.push(...checkElement(mutation.target));
         }
       }
@@ -58,7 +67,7 @@ export default defineContentScript({
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['src', 'href', 'data'],
+      attributeFilter: ["src", "href", "data"],
     });
 
     // 扩展失效时断开观察
@@ -66,37 +75,44 @@ export default defineContentScript({
 
     // ===== 3. 注入 Main World 拦截脚本 =====
     try {
-      await injectScript('/fetch-interceptor.js', { keepInDom: true });
+      await injectScript("/fetch-interceptor.js", { keepInDom: true });
     } catch (e) {
-      console.warn('[FluxDown] Failed to inject fetch interceptor:', e);
+      console.warn("[FluxDown] Failed to inject fetch interceptor:", e);
     }
 
     // ===== 4. 监听 Main World 的 CustomEvent =====
     const handleFetchEvent = (event: Event) => {
-      const detail = (event as CustomEvent).detail as FetchInterceptDetail | undefined;
+      const detail = (event as CustomEvent).detail as
+        | FetchInterceptDetail
+        | undefined;
       if (!detail || !detail.url) return;
 
       const mappedType = mapFetchEventType(detail.type, detail.contentType);
 
       // MSE is a page-level capability signal (URL = page URL), not a downloadable resource
-      if (detail.type === 'mse-detected') return;
+      if (detail.type === "mse-detected") return;
 
       const payload: ResourceMessagePayload = {
         url: detail.url,
         type: mappedType,
         mimeType: detail.contentType,
         size: detail.size,
-        detectedBy: detail.type.startsWith('xhr') ? 'xhr-intercept'
-          : detail.type.startsWith('blob') ? 'blob-intercept'
-            : 'fetch-intercept',
+        detectedBy: detail.type.startsWith("xhr")
+          ? "xhr-intercept"
+          : detail.type.startsWith("blob")
+            ? "blob-intercept"
+            : "fetch-intercept",
       };
 
       reportResources([payload]);
     };
 
-    document.addEventListener('fluxdown-resource-detected', handleFetchEvent);
+    document.addEventListener("fluxdown-resource-detected", handleFetchEvent);
     ctx.onInvalidated(() => {
-      document.removeEventListener('fluxdown-resource-detected', handleFetchEvent);
+      document.removeEventListener(
+        "fluxdown-resource-detected",
+        handleFetchEvent,
+      );
     });
 
     // ===== 5. Alt+Click 绕过拦截 =====
@@ -105,21 +121,32 @@ export default defineContentScript({
     // 监听 mousedown（早于 click），确保令牌在浏览器发起请求前写入。
     const handleAltMousedown = (e: MouseEvent) => {
       if (!e.altKey) return;
-      const link = (e.target as Element).closest('a[href]') as HTMLAnchorElement | null;
+      const link = (e.target as Element).closest(
+        "a[href]",
+      ) as HTMLAnchorElement | null;
       if (!link) return;
       const href = link.href;
-      if (!href
-        || href.startsWith('javascript:')
-        || href.startsWith('#')
-        || href.startsWith('blob:')
-        || href.startsWith('data:')
-      ) return;
-      if (!href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('ftp://')) return;
-      browser.runtime.sendMessage({ action: 'addBypassToken', url: href }).catch(() => {});
+      if (
+        !href ||
+        href.startsWith("javascript:") ||
+        href.startsWith("#") ||
+        href.startsWith("blob:") ||
+        href.startsWith("data:")
+      )
+        return;
+      if (
+        !href.startsWith("http://") &&
+        !href.startsWith("https://") &&
+        !href.startsWith("ftp://")
+      )
+        return;
+      browser.runtime
+        .sendMessage({ action: "addBypassToken", url: href })
+        .catch(() => {});
     };
-    document.addEventListener('mousedown', handleAltMousedown, true);
+    document.addEventListener("mousedown", handleAltMousedown, true);
     ctx.onInvalidated(() => {
-      document.removeEventListener('mousedown', handleAltMousedown, true);
+      document.removeEventListener("mousedown", handleAltMousedown, true);
     });
 
     // ===== 6. 一次性 CDN 下载 URL 预抢占 =====
@@ -127,37 +154,49 @@ export default defineContentScript({
     // 立刻转发给 background，在浏览器发起 CDN GET 之前通知 FluxDown。
     const handlePreemptEvent = (event: Event) => {
       const detail = (event as CustomEvent).detail as
-        { url: string; filename: string; referrer: string } | undefined;
+        | { url: string; filename: string; referrer: string }
+        | undefined;
       if (!detail?.url) return;
-      browser.runtime.sendMessage({
-        action: 'preemptDownload',
-        url: detail.url,
-        filename: detail.filename || '',
-        referrer: detail.referrer || '',
-      }).catch(() => {});
+      browser.runtime
+        .sendMessage({
+          action: "preemptDownload",
+          url: detail.url,
+          filename: detail.filename || "",
+          referrer: detail.referrer || "",
+        })
+        .catch(() => {});
     };
-    document.addEventListener('fluxdown-preempt-download', handlePreemptEvent);
-    ctx.onInvalidated(() => document.removeEventListener('fluxdown-preempt-download', handlePreemptEvent));
+    document.addEventListener("fluxdown-preempt-download", handlePreemptEvent);
+    ctx.onInvalidated(() =>
+      document.removeEventListener(
+        "fluxdown-preempt-download",
+        handlePreemptEvent,
+      ),
+    );
 
     // ===== 7. 磁力链接点击拦截 =====
     // 用户直接点击 <a href="magnet:..."> 时，阻止浏览器弹出 OS 应用选择框，
     // 改由 FluxDown 接管。使用捕获阶段，早于页面自身的 click 处理器执行。
     const handleMagnetClick = (e: MouseEvent) => {
-      const link = (e.target as Element).closest('a[href]') as HTMLAnchorElement | null;
+      const link = (e.target as Element).closest(
+        "a[href]",
+      ) as HTMLAnchorElement | null;
       if (!link) return;
       const href = link.href;
-      if (!href || !href.toLowerCase().startsWith('magnet:')) return;
+      if (!href || !href.toLowerCase().startsWith("magnet:")) return;
       e.preventDefault();
       e.stopPropagation();
-      browser.runtime.sendMessage({
-        action: 'downloadResource',
-        url: href,
-        filename: parseMagnetDisplayName(href),
-      }).catch(() => {});
+      browser.runtime
+        .sendMessage({
+          action: "downloadResource",
+          url: href,
+          filename: parseMagnetDisplayName(href),
+        })
+        .catch(() => {});
     };
-    document.addEventListener('click', handleMagnetClick, true);
+    document.addEventListener("click", handleMagnetClick, true);
     ctx.onInvalidated(() => {
-      document.removeEventListener('click', handleMagnetClick, true);
+      document.removeEventListener("click", handleMagnetClick, true);
     });
 
     // ===== 扫描函数 =====
@@ -166,84 +205,115 @@ export default defineContentScript({
       const resources: ResourceMessagePayload[] = [];
 
       // <video> 元素
-      for (const video of document.querySelectorAll('video')) {
-        if (video.src && !video.src.startsWith('blob:') && !video.src.startsWith('data:')) {
+      for (const video of document.querySelectorAll("video")) {
+        if (
+          video.src &&
+          !video.src.startsWith("blob:") &&
+          !video.src.startsWith("data:")
+        ) {
           resources.push({
             url: video.src,
-            type: 'video',
+            type: "video",
             quality: detectQuality(video),
-            detectedBy: 'dom-scan',
+            detectedBy: "dom-scan",
           });
         }
-        if (video.currentSrc && video.currentSrc !== video.src
-          && !video.currentSrc.startsWith('blob:') && !video.currentSrc.startsWith('data:')) {
+        if (
+          video.currentSrc &&
+          video.currentSrc !== video.src &&
+          !video.currentSrc.startsWith("blob:") &&
+          !video.currentSrc.startsWith("data:")
+        ) {
           resources.push({
             url: video.currentSrc,
-            type: 'video',
+            type: "video",
             quality: detectQuality(video),
-            detectedBy: 'dom-scan',
+            detectedBy: "dom-scan",
           });
         }
       }
 
       // <audio> 元素
-      for (const audio of document.querySelectorAll('audio')) {
-        if (audio.src && !audio.src.startsWith('blob:') && !audio.src.startsWith('data:')) {
+      for (const audio of document.querySelectorAll("audio")) {
+        if (
+          audio.src &&
+          !audio.src.startsWith("blob:") &&
+          !audio.src.startsWith("data:")
+        ) {
           resources.push({
             url: audio.src,
-            type: 'audio',
-            detectedBy: 'dom-scan',
+            type: "audio",
+            detectedBy: "dom-scan",
           });
         }
       }
 
       // <source> 元素
-      for (const source of document.querySelectorAll('source')) {
-        if (source.src && !source.src.startsWith('blob:') && !source.src.startsWith('data:')) {
-          const type: ResourceType = source.type?.startsWith('video/') ? 'video'
-            : source.type?.startsWith('audio/') ? 'audio'
-              : 'other';
+      for (const source of document.querySelectorAll("source")) {
+        if (
+          source.src &&
+          !source.src.startsWith("blob:") &&
+          !source.src.startsWith("data:")
+        ) {
+          const type: ResourceType = source.type?.startsWith("video/")
+            ? "video"
+            : source.type?.startsWith("audio/")
+              ? "audio"
+              : "other";
           resources.push({
             url: source.src,
             type,
             mimeType: source.type || undefined,
-            detectedBy: 'dom-scan',
+            detectedBy: "dom-scan",
           });
         }
       }
 
       // <track> 字幕元素（视频播放器的字幕轨道）
-      for (const track of document.querySelectorAll<HTMLTrackElement>('track[src]')) {
-        if (track.src && track.src.startsWith('http')) {
+      for (const track of document.querySelectorAll<HTMLTrackElement>(
+        "track[src]",
+      )) {
+        if (track.src && track.src.startsWith("http")) {
           resources.push({
             url: track.src,
-            type: 'subtitle',
+            type: "subtitle",
             filename: track.label
-              ? `${track.label}${track.srclang ? `.${track.srclang}` : ''}.vtt`
+              ? `${track.label}${track.srclang ? `.${track.srclang}` : ""}.vtt`
               : undefined,
-            detectedBy: 'dom-scan',
+            detectedBy: "dom-scan",
           });
         }
       }
 
       // <a> 标签中的下载链接 + 磁力链接
-      for (const a of document.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+      for (const a of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
         const href = a.href;
-        if (!href || href.startsWith('blob:') || href.startsWith('data:')
-          || href.startsWith('javascript:') || href.startsWith('#')) continue;
+        if (
+          !href ||
+          href.startsWith("blob:") ||
+          href.startsWith("data:") ||
+          href.startsWith("javascript:") ||
+          href.startsWith("#")
+        )
+          continue;
 
         // 磁力链接
-        if (href.toLowerCase().startsWith('magnet:')) {
+        if (href.toLowerCase().startsWith("magnet:")) {
           resources.push({
             url: href,
-            type: 'magnet',
+            type: "magnet",
             filename: parseMagnetDisplayName(href),
-            detectedBy: 'dom-scan',
+            detectedBy: "dom-scan",
           });
           continue;
         }
 
-        if (!href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('ftp://')) continue;
+        if (
+          !href.startsWith("http://") &&
+          !href.startsWith("https://") &&
+          !href.startsWith("ftp://")
+        )
+          continue;
 
         if (a.download || isDownloadableUrl(href)) {
           const filename = a.download || undefined;
@@ -252,19 +322,22 @@ export default defineContentScript({
             url: href,
             type,
             filename,
-            detectedBy: 'dom-scan',
+            detectedBy: "dom-scan",
           });
         }
       }
 
       // <embed> / <object>
-      for (const el of document.querySelectorAll<HTMLEmbedElement | HTMLObjectElement>('embed[src], object[data]')) {
-        const url = (el as HTMLEmbedElement).src || (el as HTMLObjectElement).data;
-        if (url && url.startsWith('http')) {
+      for (const el of document.querySelectorAll<
+        HTMLEmbedElement | HTMLObjectElement
+      >("embed[src], object[data]")) {
+        const url =
+          (el as HTMLEmbedElement).src || (el as HTMLObjectElement).data;
+        if (url && url.startsWith("http")) {
           resources.push({
             url,
-            type: 'other',
-            detectedBy: 'dom-scan',
+            type: "other",
+            detectedBy: "dom-scan",
           });
         }
       }
@@ -276,56 +349,74 @@ export default defineContentScript({
       const results: ResourceMessagePayload[] = [];
       const tag = el.tagName.toLowerCase();
 
-      if (tag === 'video' || tag === 'audio') {
+      if (tag === "video" || tag === "audio") {
         const media = el as HTMLMediaElement;
-        if (media.src && !media.src.startsWith('blob:') && !media.src.startsWith('data:')) {
+        if (
+          media.src &&
+          !media.src.startsWith("blob:") &&
+          !media.src.startsWith("data:")
+        ) {
           results.push({
             url: media.src,
-            type: tag === 'video' ? 'video' : 'audio',
-            quality: tag === 'video' ? detectQuality(media as HTMLVideoElement) : undefined,
-            detectedBy: 'mutation-observer',
+            type: tag === "video" ? "video" : "audio",
+            quality:
+              tag === "video"
+                ? detectQuality(media as HTMLVideoElement)
+                : undefined,
+            detectedBy: "mutation-observer",
           });
         }
-      } else if (tag === 'source') {
+      } else if (tag === "source") {
         const source = el as HTMLSourceElement;
-        if (source.src && !source.src.startsWith('blob:') && !source.src.startsWith('data:')) {
+        if (
+          source.src &&
+          !source.src.startsWith("blob:") &&
+          !source.src.startsWith("data:")
+        ) {
           results.push({
             url: source.src,
-            type: source.type?.startsWith('video/') ? 'video'
-              : source.type?.startsWith('audio/') ? 'audio' : 'other',
+            type: source.type?.startsWith("video/")
+              ? "video"
+              : source.type?.startsWith("audio/")
+                ? "audio"
+                : "other",
             mimeType: source.type || undefined,
-            detectedBy: 'mutation-observer',
+            detectedBy: "mutation-observer",
           });
         }
-    } else if (tag === 'track') {
+      } else if (tag === "track") {
         const track = el as HTMLTrackElement;
-        if (track.src && track.src.startsWith('http')) {
+        if (track.src && track.src.startsWith("http")) {
           results.push({
             url: track.src,
-            type: 'subtitle',
+            type: "subtitle",
             filename: track.label
-              ? `${track.label}${track.srclang ? `.${track.srclang}` : ''}.vtt`
+              ? `${track.label}${track.srclang ? `.${track.srclang}` : ""}.vtt`
               : undefined,
-            detectedBy: 'mutation-observer',
+            detectedBy: "mutation-observer",
           });
         }
-      } else if (tag === 'a') {
+      } else if (tag === "a") {
         const a = el as HTMLAnchorElement;
-        if (a.href?.toLowerCase().startsWith('magnet:')) {
+        if (a.href?.toLowerCase().startsWith("magnet:")) {
           results.push({
             url: a.href,
-            type: 'magnet',
+            type: "magnet",
             filename: parseMagnetDisplayName(a.href),
-            detectedBy: 'mutation-observer',
+            detectedBy: "mutation-observer",
           });
-        } else if (a.href
-          && (a.href.startsWith('http://') || a.href.startsWith('https://') || a.href.startsWith('ftp://'))
-          && (a.download || isDownloadableUrl(a.href))) {
+        } else if (
+          a.href &&
+          (a.href.startsWith("http://") ||
+            a.href.startsWith("https://") ||
+            a.href.startsWith("ftp://")) &&
+          (a.download || isDownloadableUrl(a.href))
+        ) {
           results.push({
             url: a.href,
             type: classifyByUrlExtension(a.href),
             filename: a.download || undefined,
-            detectedBy: 'mutation-observer',
+            detectedBy: "mutation-observer",
           });
         }
       }
@@ -359,44 +450,98 @@ export default defineContentScript({
         }
       }
 
-      browser.runtime.sendMessage({
-        action: 'resourceDetected',
-        resources: fresh,
-      }).catch(() => {
-        // 扩展可能已失效
-      });
+      browser.runtime
+        .sendMessage({
+          action: "resourceDetected",
+          resources: fresh,
+        })
+        .catch(() => {
+          // 扩展可能已失效
+        });
     }
 
     // ===== 辅助函数 =====
 
     function detectQuality(video: HTMLVideoElement): string | undefined {
       const h = video.videoHeight;
-      if (h >= 2160) return '4K';
-      if (h >= 1440) return '1440p';
-      if (h >= 1080) return '1080p';
-      if (h >= 720) return '720p';
-      if (h >= 480) return '480p';
-      if (h >= 360) return '360p';
+      if (h >= 2160) return "4K";
+      if (h >= 1440) return "1440p";
+      if (h >= 1080) return "1080p";
+      if (h >= 720) return "720p";
+      if (h >= 480) return "480p";
+      if (h >= 360) return "360p";
       if (h > 0) return `${h}p`;
       return undefined;
     }
 
     const DOWNLOADABLE_EXTS = new Set([
-      'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'zst',
-      'exe', 'msi', 'dmg', 'deb', 'rpm', 'appimage', 'apk', 'ipa',
-      'iso', 'img',
-      'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'ts', 'm4v',
-      'mp3', 'flac', 'wav', 'aac', 'ogg', 'wma', 'm4a', 'opus',
-      'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
-      'bin', 'torrent',
-      'm3u8', 'mpd',
-      'vtt', 'srt', 'ass', 'ssa', 'sub', 'idx', 'sup', 'lrc',
+      "zip",
+      "rar",
+      "7z",
+      "tar",
+      "gz",
+      "bz2",
+      "xz",
+      "zst",
+      "exe",
+      "msi",
+      "dmg",
+      "deb",
+      "rpm",
+      "appimage",
+      "apk",
+      "ipa",
+      "iso",
+      "img",
+      "mp4",
+      "mkv",
+      "avi",
+      "mov",
+      "wmv",
+      "flv",
+      "webm",
+      "ts",
+      "m4v",
+      "mp3",
+      "flac",
+      "wav",
+      "aac",
+      "ogg",
+      "wma",
+      "m4a",
+      "opus",
+      "pdf",
+      "doc",
+      "docx",
+      "xls",
+      "xlsx",
+      "ppt",
+      "pptx",
+      "bin",
+      "torrent",
+      "m3u8",
+      "mpd",
+      "vtt",
+      "srt",
+      "ass",
+      "ssa",
+      "sub",
+      "idx",
+      "sup",
+      "lrc",
     ]);
 
     /** 常见下载路径关键词（无扩展名的下载链接识别） */
     const DOWNLOAD_PATH_KEYWORDS = [
-      '/download', '/get/', '/fetch/', '/file/', '/files/',
-      '/attachment', '/export', '/dl/', '/release/',
+      "/download",
+      "/get/",
+      "/fetch/",
+      "/file/",
+      "/files/",
+      "/attachment",
+      "/export",
+      "/dl/",
+      "/release/",
     ];
 
     /**
@@ -413,8 +558,8 @@ export default defineContentScript({
         const pathname = u.pathname.toLowerCase();
 
         // 策略 1: pathname 末尾的扩展名
-        const lastSegment = pathname.split('/').pop() || '';
-        const dotIndex = lastSegment.lastIndexOf('.');
+        const lastSegment = pathname.split("/").pop() || "";
+        const dotIndex = lastSegment.lastIndexOf(".");
         if (dotIndex > 0 && dotIndex < lastSegment.length - 1) {
           const ext = lastSegment.substring(dotIndex + 1);
           if (DOWNLOADABLE_EXTS.has(ext)) return ext;
@@ -423,7 +568,7 @@ export default defineContentScript({
         // 策略 2: 查询参数值中的扩展名（如 ?file=report.pdf&type=doc）
         for (const val of u.searchParams.values()) {
           const valLower = val.toLowerCase();
-          const valDot = valLower.lastIndexOf('.');
+          const valDot = valLower.lastIndexOf(".");
           if (valDot > 0 && valDot < valLower.length - 1) {
             const ext = valLower.substring(valDot + 1);
             if (DOWNLOADABLE_EXTS.has(ext)) return ext;
@@ -431,9 +576,9 @@ export default defineContentScript({
         }
 
         // 策略 3: pathname 任意段含已知扩展名（如 /file.pdf/download）
-        const segments = pathname.split('/');
+        const segments = pathname.split("/");
         for (const seg of segments) {
-          const segDot = seg.lastIndexOf('.');
+          const segDot = seg.lastIndexOf(".");
           if (segDot > 0 && segDot < seg.length - 1) {
             const ext = seg.substring(segDot + 1);
             if (DOWNLOADABLE_EXTS.has(ext)) return ext;
@@ -442,7 +587,7 @@ export default defineContentScript({
       } catch {
         // ignore
       }
-      return '';
+      return "";
     }
 
     function isDownloadableUrl(url: string): boolean {
@@ -469,25 +614,34 @@ export default defineContentScript({
      */
     function classifyByUrlExtension(url: string): ResourceType {
       const ext = extractExtFromUrl(url);
-      if (!ext) return 'other';
+      if (!ext) return "other";
       // classifyByExtension 内部使用 extractExtension(url) 只看 pathname 末尾，
       // 这里我们已经确认 ext 存在，构造一个简单的 fake URL 让它查表
       return classifyByExtension(`https://x/f.${ext}`);
     }
 
-    function mapFetchEventType(type: string, contentType?: string): ResourceType {
-      if (type === 'hls-manifest' || type === 'dash-manifest') return 'stream';
+    function mapFetchEventType(
+      type: string,
+      contentType?: string,
+    ): ResourceType {
+      if (type === "hls-manifest" || type === "dash-manifest") return "stream";
       // Also classify by contentType for fetch-detected events that carry stream info
-      if (contentType === 'hls-manifest' || contentType === 'dash-manifest') return 'stream';
+      if (contentType === "hls-manifest" || contentType === "dash-manifest")
+        return "stream";
       // MSE detection is a page-level signal, not a downloadable resource — skip it
-      if (type === 'mse-detected') return 'other';
-      return 'other';
+      if (type === "mse-detected") return "other";
+      // 利用 MIME 类型分类 fetch/XHR 检测到的非流媒体资源（如 PDF、压缩包等）
+      if (contentType) {
+        const byMime = classifyByMime(contentType);
+        if (byMime !== "other") return byMime;
+      }
+      return "other";
     }
 
     function parseMagnetDisplayName(magnetUri: string): string | undefined {
       try {
-        const params = new URLSearchParams(magnetUri.split('?')[1] || '');
-        const dn = params.get('dn');
+        const params = new URLSearchParams(magnetUri.split("?")[1] || "");
+        const dn = params.get("dn");
         // URLSearchParams.get() already percent-decodes; no double decode needed
         return dn || undefined;
       } catch {

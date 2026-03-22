@@ -10,27 +10,27 @@
 
 /** 资源分类 */
 export type ResourceType =
-  | 'video'
-  | 'audio'
-  | 'document'
-  | 'archive'
-  | 'image'
-  | 'executable'
-  | 'torrent'
-  | 'stream'
-  | 'subtitle'
-  | 'magnet'
-  | 'other';
+  | "video"
+  | "audio"
+  | "document"
+  | "archive"
+  | "image"
+  | "executable"
+  | "torrent"
+  | "stream"
+  | "subtitle"
+  | "magnet"
+  | "other";
 
 /** 资源检测来源 */
 export type DetectionMethod =
-  | 'webRequest'
-  | 'dom-scan'
-  | 'mutation-observer'
-  | 'fetch-intercept'
-  | 'xhr-intercept'
-  | 'blob-intercept'
-  | 'mse-intercept';
+  | "webRequest"
+  | "dom-scan"
+  | "mutation-observer"
+  | "fetch-intercept"
+  | "xhr-intercept"
+  | "blob-intercept"
+  | "mse-intercept";
 
 /**
  * 资源可信度等级
@@ -39,13 +39,13 @@ export type DetectionMethod =
  *  medium — 大概率有价值（HTTP 媒体 >阈值、文档、压缩包）
  *  low    — 可能有价值但噪音风险高（小 XHR、blob、未知类型）
  */
-export type ConfidenceLevel = 'high' | 'medium' | 'low';
+export type ConfidenceLevel = "high" | "medium" | "low";
 
 /** HLS/DASH 多画质选项 */
 export interface QualityOption {
   url: string;
-  label: string;       // "1080p", "720p"
-  bandwidth: number;   // bps
+  label: string; // "1080p", "720p"
+  bandwidth: number; // bps
   estimatedSize: number; // bytes, -1 = 未知
 }
 
@@ -56,7 +56,7 @@ export interface DetectedResource {
   finalUrl?: string;
   filename: string;
   type: ResourceType;
-  size: number;         // bytes, -1 = 未知
+  size: number; // bytes, -1 = 未知
   mimeType?: string;
   quality?: string;
   qualities?: QualityOption[];
@@ -68,11 +68,15 @@ export interface DetectedResource {
   confidence: ConfidenceLevel;
   /** 是否有 Content-Disposition: attachment */
   isAttachment?: boolean;
+  /** 资源请求的 Cookie（webRequest 嗅探时捕获，下载时传递给 FluxDown） */
+  cookies?: string;
+  /** 资源请求的自定义头（Authorization 等，webRequest 嗅探时捕获） */
+  headers?: Record<string, string>;
 }
 
 /** Content Script / Main World → Background 的资源消息格式 */
 export interface ResourceMessage {
-  action: 'resourceDetected';
+  action: "resourceDetected";
   resources: ResourceMessagePayload[];
 }
 
@@ -90,7 +94,13 @@ export interface ResourceMessagePayload {
 
 /** Main World → Content Script 的 CustomEvent detail 格式 */
 export interface FetchInterceptDetail {
-  type: 'fetch-detected' | 'xhr-detected' | 'blob-detected' | 'hls-manifest' | 'dash-manifest' | 'mse-detected';
+  type:
+    | "fetch-detected"
+    | "xhr-detected"
+    | "blob-detected"
+    | "hls-manifest"
+    | "dash-manifest"
+    | "mse-detected";
   url: string;
   contentType?: string;
   size?: number;
@@ -100,15 +110,98 @@ export interface FetchInterceptDetail {
 // ===== 扩展名 → 类型映射 =====
 
 const EXTENSION_CATEGORIES: Record<ResourceType, string[]> = {
-  video: ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'ts', 'm4v', '3gp', 'mpg', 'mpeg', 'f4v', 'vob', 'ogv'],
-  audio: ['mp3', 'flac', 'wav', 'aac', 'ogg', 'wma', 'm4a', 'opus', 'ape', 'alac', 'aiff'],
-  document: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'epub', 'mobi', 'csv', 'odt', 'ods', 'odp'],
-  archive: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'iso', 'img', 'zst', 'lz', 'cab', 'z'],
-  image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'tiff', 'psd', 'raw', 'heic', 'avif'],
-  executable: ['exe', 'msi', 'dmg', 'deb', 'rpm', 'appimage', 'apk', 'ipa', 'snap', 'flatpak'],
-  torrent: ['torrent'],
-  stream: ['m3u8', 'mpd'],
-  subtitle: ['vtt', 'srt', 'ass', 'ssa', 'sub', 'idx', 'sup', 'lrc'],
+  video: [
+    "mp4",
+    "mkv",
+    "avi",
+    "mov",
+    "wmv",
+    "flv",
+    "webm",
+    "ts",
+    "m4v",
+    "3gp",
+    "mpg",
+    "mpeg",
+    "f4v",
+    "vob",
+    "ogv",
+  ],
+  audio: [
+    "mp3",
+    "flac",
+    "wav",
+    "aac",
+    "ogg",
+    "wma",
+    "m4a",
+    "opus",
+    "ape",
+    "alac",
+    "aiff",
+  ],
+  document: [
+    "pdf",
+    "doc",
+    "docx",
+    "xls",
+    "xlsx",
+    "ppt",
+    "pptx",
+    "txt",
+    "rtf",
+    "epub",
+    "mobi",
+    "csv",
+    "odt",
+    "ods",
+    "odp",
+  ],
+  archive: [
+    "zip",
+    "rar",
+    "7z",
+    "tar",
+    "gz",
+    "bz2",
+    "xz",
+    "iso",
+    "img",
+    "zst",
+    "lz",
+    "cab",
+    "z",
+  ],
+  image: [
+    "jpg",
+    "jpeg",
+    "png",
+    "gif",
+    "webp",
+    "svg",
+    "bmp",
+    "ico",
+    "tiff",
+    "psd",
+    "raw",
+    "heic",
+    "avif",
+  ],
+  executable: [
+    "exe",
+    "msi",
+    "dmg",
+    "deb",
+    "rpm",
+    "appimage",
+    "apk",
+    "ipa",
+    "snap",
+    "flatpak",
+  ],
+  torrent: ["torrent"],
+  stream: ["m3u8", "mpd"],
+  subtitle: ["vtt", "srt", "ass", "ssa", "sub", "idx", "sup", "lrc"],
   magnet: [],
   other: [],
 };
@@ -124,63 +217,66 @@ for (const [type, exts] of Object.entries(EXTENSION_CATEGORIES)) {
 
 const MIME_CATEGORIES: Record<string, ResourceType> = {
   // 视频
-  'video/mp4': 'video',
-  'video/webm': 'video',
-  'video/x-flv': 'video',
-  'video/x-matroska': 'video',
-  'video/quicktime': 'video',
-  'video/x-msvideo': 'video',
-  'video/x-ms-wmv': 'video',
-  'video/mp2t': 'video',
-  'video/3gpp': 'video',
+  "video/mp4": "video",
+  "video/webm": "video",
+  "video/x-flv": "video",
+  "video/x-matroska": "video",
+  "video/quicktime": "video",
+  "video/x-msvideo": "video",
+  "video/x-ms-wmv": "video",
+  "video/mp2t": "video",
+  "video/3gpp": "video",
   // 音频
-  'audio/mpeg': 'audio',
-  'audio/mp4': 'audio',
-  'audio/ogg': 'audio',
-  'audio/flac': 'audio',
-  'audio/wav': 'audio',
-  'audio/aac': 'audio',
-  'audio/x-ms-wma': 'audio',
-  'audio/opus': 'audio',
-  'audio/x-wav': 'audio',
+  "audio/mpeg": "audio",
+  "audio/mp4": "audio",
+  "audio/ogg": "audio",
+  "audio/flac": "audio",
+  "audio/wav": "audio",
+  "audio/aac": "audio",
+  "audio/x-ms-wma": "audio",
+  "audio/opus": "audio",
+  "audio/x-wav": "audio",
   // 流媒体清单
-  'application/vnd.apple.mpegurl': 'stream',
-  'application/x-mpegurl': 'stream',
-  'application/dash+xml': 'stream',
+  "application/vnd.apple.mpegurl": "stream",
+  "application/x-mpegurl": "stream",
+  "application/dash+xml": "stream",
   // 文档
-  'application/pdf': 'document',
-  'application/msword': 'document',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document',
-  'application/vnd.ms-excel': 'document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'document',
-  'application/vnd.ms-powerpoint': 'document',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'document',
-  'application/epub+zip': 'document',
-  'text/csv': 'document',
+  "application/pdf": "document",
+  "application/msword": "document",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+    "document",
+  "application/vnd.ms-excel": "document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+    "document",
+  "application/vnd.ms-powerpoint": "document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+    "document",
+  "application/epub+zip": "document",
+  "text/csv": "document",
   // 压缩包
-  'application/zip': 'archive',
-  'application/x-rar-compressed': 'archive',
-  'application/x-7z-compressed': 'archive',
-  'application/gzip': 'archive',
-  'application/x-tar': 'archive',
-  'application/x-bzip2': 'archive',
-  'application/x-xz': 'archive',
-  'application/x-iso9660-image': 'archive',
-  'application/zstd': 'archive',
+  "application/zip": "archive",
+  "application/x-rar-compressed": "archive",
+  "application/x-7z-compressed": "archive",
+  "application/gzip": "archive",
+  "application/x-tar": "archive",
+  "application/x-bzip2": "archive",
+  "application/x-xz": "archive",
+  "application/x-iso9660-image": "archive",
+  "application/zstd": "archive",
   // 可执行
-  'application/x-msdownload': 'executable',
-  'application/x-msi': 'executable',
-  'application/vnd.android.package-archive': 'executable',
-  'application/x-apple-diskimage': 'executable',
-  'application/vnd.debian.binary-package': 'executable',
+  "application/x-msdownload": "executable",
+  "application/x-msi": "executable",
+  "application/vnd.android.package-archive": "executable",
+  "application/x-apple-diskimage": "executable",
+  "application/vnd.debian.binary-package": "executable",
   // 种子
-  'application/x-bittorrent': 'torrent',
+  "application/x-bittorrent": "torrent",
   // 字幕
-  'text/vtt': 'subtitle',
-  'application/x-subrip': 'subtitle',
-  'text/x-ssa': 'subtitle',
-  'text/x-ass': 'subtitle',
-  'application/x-subtitle': 'subtitle',
+  "text/vtt": "subtitle",
+  "application/x-subrip": "subtitle",
+  "text/x-ssa": "subtitle",
+  "text/x-ass": "subtitle",
+  "application/x-subtitle": "subtitle",
 };
 
 // ===== 分类型大小阈值 =====
@@ -213,84 +309,84 @@ export function getSizeThreshold(type: ResourceType): number {
 /** 匹配方式：域名包含这些字符串即命中 */
 const NOISE_DOMAIN_PATTERNS: string[] = [
   // Analytics
-  'google-analytics.com',
-  'googletagmanager.com',
-  'analytics.google.com',
-  'doubleclick.net',
-  'googlesyndication.com',
-  'googleadservices.com',
-  'google.com/pagead',
+  "google-analytics.com",
+  "googletagmanager.com",
+  "analytics.google.com",
+  "doubleclick.net",
+  "googlesyndication.com",
+  "googleadservices.com",
+  "google.com/pagead",
   // Facebook
-  'facebook.com/tr',
-  'connect.facebook.net',
-  'fbcdn.net/signals',
+  "facebook.com/tr",
+  "connect.facebook.net",
+  "fbcdn.net/signals",
   // 其他追踪
-  'hotjar.com',
-  'clarity.ms',
-  'mixpanel.com',
-  'segment.io',
-  'segment.com',
-  'amplitude.com',
-  'sentry.io',
-  'bugsnag.com',
-  'newrelic.com',
-  'nr-data.net',
+  "hotjar.com",
+  "clarity.ms",
+  "mixpanel.com",
+  "segment.io",
+  "segment.com",
+  "amplitude.com",
+  "sentry.io",
+  "bugsnag.com",
+  "newrelic.com",
+  "nr-data.net",
   // Ads
-  'adsense',
-  'adservice',
-  'ad.doubleclick',
-  'moat.com',
-  'adsrvr.org',
-  'advertising.com',
-  'criteo.com',
-  'outbrain.com',
-  'taboola.com',
-  'adnxs.com',
+  "adsense",
+  "adservice",
+  "ad.doubleclick",
+  "moat.com",
+  "adsrvr.org",
+  "advertising.com",
+  "criteo.com",
+  "outbrain.com",
+  "taboola.com",
+  "adnxs.com",
   // CDN 追踪/监控
-  'cdn.mxpnl.com',
-  'stats.wp.com',
-  'pixel.wp.com',
-  'bat.bing.com',
-  'sb.scorecardresearch.com',
-  'b.scorecardresearch.com',
+  "cdn.mxpnl.com",
+  "stats.wp.com",
+  "pixel.wp.com",
+  "bat.bing.com",
+  "sb.scorecardresearch.com",
+  "b.scorecardresearch.com",
 ];
 
 /** 域名精确黑名单 */
 const NOISE_DOMAINS_EXACT = new Set<string>([
-  'www.google-analytics.com',
-  'ssl.google-analytics.com',
-  'stats.g.doubleclick.net',
-  'cm.g.doubleclick.net',
-  'pixel.facebook.com',
-  'www.facebook.com',
-  'tr.snapchat.com',
-  'analytics.tiktok.com',
-  'analytics.twitter.com',
+  "www.google-analytics.com",
+  "ssl.google-analytics.com",
+  "stats.g.doubleclick.net",
+  "cm.g.doubleclick.net",
+  "pixel.facebook.com",
+  "www.facebook.com",
+  "tr.snapchat.com",
+  "analytics.tiktok.com",
+  "analytics.twitter.com",
 ]);
 
 /** URL 路径黑名单模式（部分匹配） */
 const NOISE_PATH_PATTERNS: string[] = [
-  '/api/v',        // API 端点
-  '/graphql',
-  '/_next/static', // Next.js 静态资源
-  '/static/js/',
-  '/static/css/',
-  '/static/media/', // 一般是小图标
-  '/assets/fonts/',
-  '/fonts/',
-  '/favicon',
-  '/sw.js',        // Service Worker
-  '/workbox-',
-  '/manifest.json',
-  '/robots.txt',
-  '/sitemap',
-  '/__/',          // Firebase 等内部路径
-  '/beacon',
-  '/collect',      // analytics collect 端点
-  '/pixel',
-  '/track',
-  '/log',
-  '/telemetry',
+  "/api/v", // API 端点
+  "/graphql",
+  "/_next/static", // Next.js 静态资源
+  "/static/js/",
+  "/static/css/",
+  "/static/media/", // 一般是小图标
+  "/assets/fonts/",
+  "/fonts/",
+  "/favicon",
+  "/sw.js", // Service Worker
+  "/workbox-",
+  "/manifest.json",
+  "/robots.txt",
+  "/sitemap",
+  "/__/", // Firebase 等内部路径
+  "/beacon",
+  "/collect", // analytics collect 端点
+  "/pixel",
+  "/track",
+  "/log",
+  "/telemetry",
 ];
 
 /**
@@ -316,7 +412,11 @@ export function isNoiseUrl(url: string): boolean {
     }
 
     // data URI / extension internal
-    if (url.startsWith('data:') || url.startsWith('chrome-extension://') || url.startsWith('moz-extension://')) {
+    if (
+      url.startsWith("data:") ||
+      url.startsWith("chrome-extension://") ||
+      url.startsWith("moz-extension://")
+    ) {
       return true;
     }
   } catch {
@@ -333,18 +433,55 @@ export function isNoiseUrl(url: string): boolean {
  */
 const STRIP_PARAMS = new Set<string>([
   // 缓存破坏
-  '_', '__', 't', 'ts', 'timestamp', 'v', 'ver', 'version', 'cache',
-  'cb', 'nocache', 'rand', 'random', 'r', 'bust',
+  "_",
+  "__",
+  "t",
+  "ts",
+  "timestamp",
+  "v",
+  "ver",
+  "version",
+  "cache",
+  "cb",
+  "nocache",
+  "rand",
+  "random",
+  "r",
+  "bust",
   // CDN / 签名（保留签名会导致同一资源多次出现）
-  'token', 'auth', 'signature', 'sig', 'sign', 'expire', 'expires',
-  'e', 'st', 'nva', 'nvb',
+  "token",
+  "auth",
+  "signature",
+  "sig",
+  "sign",
+  "expire",
+  "expires",
+  "e",
+  "st",
+  "nva",
+  "nvb",
   // 追踪
-  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-  'fbclid', 'gclid', 'msclkid', 'twclid',
-  'ref', 'referer', 'referrer', 'source',
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "fbclid",
+  "gclid",
+  "msclkid",
+  "twclid",
+  "ref",
+  "referer",
+  "referrer",
+  "source",
   // 流媒体动态参数
-  'start', 'end', 'begin', 'offset',
-  'sq', 'rn', 'rbuf',  // YouTube 片段参数
+  "start",
+  "end",
+  "begin",
+  "offset",
+  "sq",
+  "rn",
+  "rbuf", // YouTube 片段参数
 ]);
 
 /**
@@ -355,7 +492,7 @@ export function normalizeUrlForDedup(url: string): string {
   try {
     const u = new URL(url);
     // 去掉 hash
-    u.hash = '';
+    u.hash = "";
 
     // 去掉噪音参数
     const toDelete: string[] = [];
@@ -392,8 +529,8 @@ export function generateResourceId(url: string): string {
 export function extractExtension(url: string): string {
   try {
     const pathname = new URL(url).pathname;
-    const lastSegment = pathname.split('/').pop() || '';
-    const dotIndex = lastSegment.lastIndexOf('.');
+    const lastSegment = pathname.split("/").pop() || "";
+    const dotIndex = lastSegment.lastIndexOf(".");
     if (dotIndex > 0 && dotIndex < lastSegment.length - 1) {
       return lastSegment.substring(dotIndex + 1).toLowerCase();
     }
@@ -401,61 +538,70 @@ export function extractExtension(url: string): string {
     const match = url.match(/\.([a-zA-Z0-9]{1,10})(?:[?#]|$)/);
     if (match) return match[1].toLowerCase();
   }
-  return '';
+  return "";
 }
 
 export function extractFilenameFromUrl(url: string): string {
   try {
     const pathname = new URL(url).pathname;
-    const lastSegment = pathname.split('/').pop() || '';
+    const lastSegment = pathname.split("/").pop() || "";
     const decoded = decodeURIComponent(lastSegment);
     if (decoded && /\.[a-zA-Z0-9]{1,10}$/.test(decoded)) {
       return decoded;
     }
-  } catch { /* */ }
-  return '';
+  } catch {
+    /* */
+  }
+  return "";
 }
 
 export function classifyByExtension(url: string): ResourceType {
   const ext = extractExtension(url);
-  return EXT_TO_TYPE.get(ext) || 'other';
+  return EXT_TO_TYPE.get(ext) || "other";
 }
 
 export function classifyByMime(mime: string): ResourceType {
-  const lower = mime.toLowerCase().split(';')[0].trim();
+  const lower = mime.toLowerCase().split(";")[0].trim();
 
   const exact = MIME_CATEGORIES[lower];
   if (exact) return exact;
 
-  if (lower.startsWith('video/')) return 'video';
-  if (lower.startsWith('audio/')) return 'audio';
-  if (lower.startsWith('image/')) return 'image';
+  if (lower.startsWith("video/")) return "video";
+  if (lower.startsWith("audio/")) return "audio";
+  if (lower.startsWith("image/")) return "image";
 
-  if (lower === 'application/octet-stream' || lower === 'application/x-download' || lower === 'application/force-download') {
-    return 'other'; // 需配合扩展名
+  if (
+    lower === "application/octet-stream" ||
+    lower === "application/x-download" ||
+    lower === "application/force-download"
+  ) {
+    return "other"; // 需配合扩展名
   }
 
   // Office 前缀匹配
-  if (lower.startsWith('application/vnd.openxmlformats-officedocument')) return 'document';
-  if (lower.startsWith('application/vnd.ms-')) return 'document';
+  if (lower.startsWith("application/vnd.openxmlformats-officedocument"))
+    return "document";
+  if (lower.startsWith("application/vnd.ms-")) return "document";
 
-  return 'other';
+  return "other";
 }
 
 export function classifyResource(url: string, mime?: string): ResourceType {
   if (mime) {
     const byMime = classifyByMime(mime);
-    if (byMime !== 'other') return byMime;
+    if (byMime !== "other") return byMime;
   }
   return classifyByExtension(url);
 }
 
 export function isStreamingUrl(url: string): boolean {
   const lower = url.toLowerCase();
-  return lower.includes('.m3u8') ||
-    lower.includes('.mpd') ||
-    lower.includes('/manifest') ||
-    lower.includes('/playlist');
+  return (
+    lower.includes(".m3u8") ||
+    lower.includes(".mpd") ||
+    lower.includes("/manifest") ||
+    lower.includes("/playlist")
+  );
 }
 
 /**
@@ -471,14 +617,20 @@ export function isStreamSegment(url: string): boolean {
   const ext = extractExtension(url);
 
   // .m4s 一定是 DASH fragment
-  if (ext === 'm4s') return true;
+  if (ext === "m4s") return true;
 
   // .ts 需要结合上下文判断
-  if (ext === 'ts') {
+  if (ext === "ts") {
     const lower = url.toLowerCase();
     // HLS 特征路径
-    if (lower.includes('/seg') || lower.includes('/chunk') || lower.includes('/fragment')
-      || lower.includes('/hls') || lower.includes('/ts/') || lower.includes('/segments/')) {
+    if (
+      lower.includes("/seg") ||
+      lower.includes("/chunk") ||
+      lower.includes("/fragment") ||
+      lower.includes("/hls") ||
+      lower.includes("/ts/") ||
+      lower.includes("/segments/")
+    ) {
       return true;
     }
     // 分片序号模式（如 segment001.ts, chunk-3.ts, media-00042.ts）
@@ -493,35 +645,43 @@ export function isStreamSegment(url: string): boolean {
 }
 
 export function isSniffableContentType(contentType: string): boolean {
-  const ct = contentType.toLowerCase().split(';')[0].trim();
+  const ct = contentType.toLowerCase().split(";")[0].trim();
 
-  if (ct.startsWith('video/') || ct.startsWith('audio/')) return true;
+  if (ct.startsWith("video/") || ct.startsWith("audio/")) return true;
 
-  if (ct === 'application/vnd.apple.mpegurl' || ct === 'application/x-mpegurl') return true;
-  if (ct === 'application/dash+xml') return true;
-  if (ct === 'text/vtt' || ct === 'application/x-subrip' || ct === 'text/x-ssa' || ct === 'text/x-ass') return true;
+  if (ct === "application/vnd.apple.mpegurl" || ct === "application/x-mpegurl")
+    return true;
+  if (ct === "application/dash+xml") return true;
+  if (
+    ct === "text/vtt" ||
+    ct === "application/x-subrip" ||
+    ct === "text/x-ssa" ||
+    ct === "text/x-ass"
+  )
+    return true;
 
   const downloadTypes = [
-    'application/octet-stream',
-    'application/x-download',
-    'application/force-download',
-    'application/zip',
-    'application/x-rar-compressed',
-    'application/x-7z-compressed',
-    'application/gzip',
-    'application/x-tar',
-    'application/pdf',
-    'application/x-bittorrent',
-    'application/vnd.android.package-archive',
-    'application/x-msdownload',
-    'application/x-msi',
-    'application/epub+zip',
+    "application/octet-stream",
+    "application/x-download",
+    "application/force-download",
+    "application/zip",
+    "application/x-rar-compressed",
+    "application/x-7z-compressed",
+    "application/gzip",
+    "application/x-tar",
+    "application/pdf",
+    "application/x-bittorrent",
+    "application/vnd.android.package-archive",
+    "application/x-msdownload",
+    "application/x-msi",
+    "application/epub+zip",
   ];
   if (downloadTypes.includes(ct)) return true;
 
   // Office 文档
-  if (ct.startsWith('application/vnd.openxmlformats-officedocument')) return true;
-  if (ct.startsWith('application/vnd.ms-')) return true;
+  if (ct.startsWith("application/vnd.openxmlformats-officedocument"))
+    return true;
+  if (ct.startsWith("application/vnd.ms-")) return true;
 
   return false;
 }
@@ -553,37 +713,44 @@ export function computeConfidence(
   isAttachment?: boolean,
 ): ConfidenceLevel {
   // attachment 直接高可信度
-  if (isAttachment) return 'high';
+  if (isAttachment) return "high";
 
   // stream manifest 高可信度
-  if (type === 'stream') return 'high';
+  if (type === "stream") return "high";
 
   // torrent / executable / subtitle / magnet 高可信度
-  if (type === 'torrent' || type === 'executable' || type === 'subtitle' || type === 'magnet') return 'high';
+  if (
+    type === "torrent" ||
+    type === "executable" ||
+    type === "subtitle" ||
+    type === "magnet"
+  )
+    return "high";
 
   // 已知类型 + 超过阈值 → high
   const threshold = SIZE_THRESHOLDS[type];
-  if (type !== 'other' && type !== 'image') {
-    if (size > 0 && threshold > 0 && size >= threshold) return 'high';
-    if (size <= 0) return 'medium'; // 大小未知，但类型明确
+  if (type !== "other" && type !== "image") {
+    if (size > 0 && threshold > 0 && size >= threshold) return "high";
+    if (size <= 0) return "medium"; // 大小未知，但类型明确
     // 大小低于阈值
-    return 'low';
+    return "low";
   }
 
   // 图片
-  if (type === 'image') {
-    if (size > 0 && size >= (threshold > 0 ? threshold : 100 * 1024)) return 'medium';
-    return 'low';
+  if (type === "image") {
+    if (size > 0 && size >= (threshold > 0 ? threshold : 100 * 1024))
+      return "medium";
+    return "low";
   }
 
   // other 类型
-  if (size > 0 && size >= 1024 * 1024) return 'medium'; // > 1MB
-  if (size > 0 && size >= (threshold > 0 ? threshold : 50 * 1024)) return 'low';
+  if (size > 0 && size >= 1024 * 1024) return "medium"; // > 1MB
+  if (size > 0 && size >= (threshold > 0 ? threshold : 50 * 1024)) return "low";
 
   // blob 检测来源 → low
-  if (detectedBy === 'blob-intercept') return 'low';
+  if (detectedBy === "blob-intercept") return "low";
 
-  return 'low';
+  return "low";
 }
 
 // ===== 过滤判断 =====
@@ -593,10 +760,10 @@ export function computeConfidence(
  */
 export function isWorthShowing(resource: DetectedResource): boolean {
   // magnet: URI 始终展示
-  if (resource.type === 'magnet') return true;
+  if (resource.type === "magnet") return true;
 
   // 1. blob: / data: URL 不展示
-  if (resource.url.startsWith('blob:') || resource.url.startsWith('data:')) {
+  if (resource.url.startsWith("blob:") || resource.url.startsWith("data:")) {
     return false;
   }
 
@@ -606,9 +773,12 @@ export function isWorthShowing(resource: DetectedResource): boolean {
   }
 
   // 3. 流媒体分片不单独展示（.ts / .m4s）
-  if (isStreamSegment(resource.url) && resource.type !== 'stream') {
+  if (isStreamSegment(resource.url) && resource.type !== "stream") {
     // 但如果是 attachment 或大文件，可能是合法的 MPEG-TS
-    if (!resource.isAttachment && (resource.size <= 0 || resource.size < 10 * 1024 * 1024)) {
+    if (
+      !resource.isAttachment &&
+      (resource.size <= 0 || resource.size < 10 * 1024 * 1024)
+    ) {
       return false;
     }
   }
@@ -627,7 +797,11 @@ export function isWorthShowing(resource: DetectedResource): boolean {
   // 5. 图片默认不展示（除非 isAttachment 或用户开启了图片嗅探 — 由调用方控制）
   //    这里先放行 image 类型，让 store 层根据设置决定
   //    但过滤掉明显是小图标的（< 10KB 的图片）
-  if (resource.type === 'image' && resource.size > 0 && resource.size < 10 * 1024) {
+  if (
+    resource.type === "image" &&
+    resource.size > 0 &&
+    resource.size < 10 * 1024
+  ) {
     return false;
   }
 
@@ -637,20 +811,20 @@ export function isWorthShowing(resource: DetectedResource): boolean {
 // ===== 展示辅助 =====
 
 export function detectVideoQuality(width: number, height: number): string {
-  if (height >= 2160) return '4K';
-  if (height >= 1440) return '1440p';
-  if (height >= 1080) return '1080p';
-  if (height >= 720) return '720p';
-  if (height >= 480) return '480p';
-  if (height >= 360) return '360p';
+  if (height >= 2160) return "4K";
+  if (height >= 1440) return "1440p";
+  if (height >= 1080) return "1080p";
+  if (height >= 720) return "720p";
+  if (height >= 480) return "480p";
+  if (height >= 360) return "360p";
   if (height > 0) return `${height}p`;
-  return '';
+  return "";
 }
 
 export function formatFileSize(bytes: number): string {
-  if (bytes < 0) return '';
-  if (bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  if (bytes < 0) return "";
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
   const k = 1024;
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   const value = bytes / Math.pow(k, i);
@@ -659,17 +833,17 @@ export function formatFileSize(bytes: number): string {
 
 export function getResourceTypeIcon(type: ResourceType): string {
   const icons: Record<ResourceType, string> = {
-    video: '\u{1F4F9}',
-    audio: '\u{1F3B5}',
-    document: '\u{1F4C4}',
-    archive: '\u{1F4E6}',
-    image: '\u{1F5BC}',
-    executable: '\u{2699}',
-    torrent: '\u{1F9F2}',
-    stream: '\u{1F4FA}',
-    subtitle: '\u{1F4DD}',
-    magnet: '\u{1F9F2}',
-    other: '\u{1F4CE}',
+    video: "\u{1F4F9}",
+    audio: "\u{1F3B5}",
+    document: "\u{1F4C4}",
+    archive: "\u{1F4E6}",
+    image: "\u{1F5BC}",
+    executable: "\u{2699}",
+    torrent: "\u{1F9F2}",
+    stream: "\u{1F4FA}",
+    subtitle: "\u{1F4DD}",
+    magnet: "\u{1F9F2}",
+    other: "\u{1F4CE}",
   };
   return icons[type];
 }

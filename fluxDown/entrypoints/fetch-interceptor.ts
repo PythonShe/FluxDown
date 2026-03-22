@@ -11,7 +11,7 @@ export default defineUnlistedScript(() => {
   if ((window as any).__fluxdown_interceptor__) return;
   (window as any).__fluxdown_interceptor__ = true;
 
-  const FLUXDOWN_EVENT = 'fluxdown-resource-detected';
+  const FLUXDOWN_EVENT = "fluxdown-resource-detected";
 
   /** 已通知过的 URL 集合（防止重复通知） */
   const notifiedUrls = new Set<string>();
@@ -20,32 +20,81 @@ export default defineUnlistedScript(() => {
 
   function isStreamingUrl(url: string): boolean {
     const lower = url.toLowerCase();
-    return lower.includes('.m3u8') ||
-      lower.includes('.mpd') ||
-      lower.includes('/manifest') ||
-      lower.includes('/playlist');
+    return (
+      lower.includes(".m3u8") ||
+      lower.includes(".mpd") ||
+      lower.includes("/manifest") ||
+      lower.includes("/playlist")
+    );
   }
 
   function isMediaContentType(ct: string): boolean {
     const lower = ct.toLowerCase();
-    return lower.startsWith('video/') ||
-      lower.startsWith('audio/') ||
-      lower === 'application/vnd.apple.mpegurl' ||
-      lower === 'application/x-mpegurl' ||
-      lower === 'application/dash+xml';
+    return (
+      lower.startsWith("video/") ||
+      lower.startsWith("audio/") ||
+      lower === "application/vnd.apple.mpegurl" ||
+      lower === "application/x-mpegurl" ||
+      lower === "application/dash+xml"
+    );
+  }
+
+  /**
+   * 检测是否为可下载资源的 Content-Type（覆盖文档/压缩包/安装包等）。
+   * 用于 fetch/XHR 响应拦截，使扩展能捕获页面 JS 通过 AJAX 加载的 PDF 等资源。
+   */
+  function isDownloadableContentType(ct: string): boolean {
+    if (isMediaContentType(ct)) return true;
+    const lower = ct.toLowerCase();
+    // 文档类型
+    if (lower === "application/pdf") return true;
+    if (lower === "application/msword") return true;
+    if (lower.startsWith("application/vnd.openxmlformats-officedocument"))
+      return true;
+    if (lower.startsWith("application/vnd.ms-")) return true;
+    if (lower === "application/epub+zip") return true;
+    if (lower === "text/csv") return true;
+    // 通用二进制/强制下载
+    if (lower === "application/octet-stream") return true;
+    if (lower === "application/x-download") return true;
+    if (lower === "application/force-download") return true;
+    // 压缩包
+    if (lower === "application/zip") return true;
+    if (lower === "application/x-rar-compressed") return true;
+    if (lower === "application/x-7z-compressed") return true;
+    if (lower === "application/gzip") return true;
+    if (lower === "application/x-tar") return true;
+    if (lower === "application/x-bzip2") return true;
+    if (lower === "application/x-xz") return true;
+    if (lower === "application/zstd") return true;
+    // 安装包/镜像
+    if (lower === "application/x-msdownload") return true;
+    if (lower === "application/x-msi") return true;
+    if (lower === "application/x-apple-diskimage") return true;
+    if (lower === "application/vnd.debian.binary-package") return true;
+    if (lower === "application/vnd.android.package-archive") return true;
+    if (lower === "application/x-iso9660-image") return true;
+    // 种子
+    if (lower === "application/x-bittorrent") return true;
+    return false;
   }
 
   function classifyStreamUrl(url: string): string {
     const lower = url.toLowerCase();
-    if (lower.includes('.m3u8')) return 'hls-manifest';
-    if (lower.includes('.mpd')) return 'dash-manifest';
-    return 'stream-unknown';
+    if (lower.includes(".m3u8")) return "hls-manifest";
+    if (lower.includes(".mpd")) return "dash-manifest";
+    return "stream-unknown";
   }
 
   /**
    * 通知 Content Script（Isolated World）
    */
-  function notify(type: string, url: string, contentType?: string, size?: number): void {
+  function notify(
+    type: string,
+    url: string,
+    contentType?: string,
+    size?: number,
+  ): void {
     // 去重
     const key = `${type}:${url}`;
     if (notifiedUrls.has(key)) return;
@@ -58,18 +107,20 @@ export default defineUnlistedScript(() => {
       notifiedUrls.clear();
     }
 
-    document.dispatchEvent(new CustomEvent(FLUXDOWN_EVENT, {
-      detail: { type, url, contentType, size },
-    }));
+    document.dispatchEvent(
+      new CustomEvent(FLUXDOWN_EVENT, {
+        detail: { type, url, contentType, size },
+      }),
+    );
   }
 
   // ===== 拦截 Fetch API =====
 
   const originalFetch = window.fetch;
   window.fetch = function (...args: Parameters<typeof fetch>) {
-    let url = '';
+    let url = "";
     try {
-      if (typeof args[0] === 'string') {
+      if (typeof args[0] === "string") {
         url = args[0];
       } else if (args[0] instanceof Request) {
         url = args[0].url;
@@ -82,30 +133,38 @@ export default defineUnlistedScript(() => {
 
     // 请求阶段：检测流媒体 URL
     if (url && isStreamingUrl(url)) {
-      notify('fetch-detected', url, classifyStreamUrl(url));
+      notify("fetch-detected", url, classifyStreamUrl(url));
     }
 
     // 调用原始 fetch，检查响应
     return originalFetch.apply(this, args).then((response) => {
       try {
-        const ct = response.headers.get('content-type') || '';
-        const cl = response.headers.get('content-length');
+        const ct = response.headers.get("content-type") || "";
+        const cl = response.headers.get("content-length");
         const finalUrl = response.url || url;
 
-        if (ct && isMediaContentType(ct)) {
-          notify('fetch-detected', finalUrl, ct, cl ? parseInt(cl, 10) : undefined);
+        if (ct && isDownloadableContentType(ct)) {
+          notify(
+            "fetch-detected",
+            finalUrl,
+            ct,
+            cl ? parseInt(cl, 10) : undefined,
+          );
         }
         // 检查响应 URL 是否是流媒体（可能是重定向后的 URL）
         if (finalUrl && finalUrl !== url && isStreamingUrl(finalUrl)) {
-          notify('fetch-detected', finalUrl, ct || classifyStreamUrl(finalUrl));
+          notify("fetch-detected", finalUrl, ct || classifyStreamUrl(finalUrl));
         }
 
         // 拦截一次性 CDN 下载 URL（如蓝奏云 /ajaxm.php）
         if (url && isOneTimeDownloadApi(url)) {
           const cloned = response.clone();
-          cloned.json().then((json) => {
-            notifyPreemptDownload(json, url);
-          }).catch(() => {});
+          cloned
+            .json()
+            .then((json) => {
+              notifyPreemptDownload(json, url);
+            })
+            .catch(() => {});
         }
       } catch {
         // 不干扰原始响应
@@ -119,32 +178,45 @@ export default defineUnlistedScript(() => {
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
 
-  XMLHttpRequest.prototype.open = function (method: string, url: string | URL, ...rest: any[]) {
-    const urlStr = typeof url === 'string' ? url : url.href;
+  XMLHttpRequest.prototype.open = function (
+    method: string,
+    url: string | URL,
+    ...rest: any[]
+  ) {
+    const urlStr = typeof url === "string" ? url : url.href;
     (this as any).__fluxdown_url = urlStr;
 
     if (isStreamingUrl(urlStr)) {
-      notify('xhr-detected', urlStr, classifyStreamUrl(urlStr));
+      notify("xhr-detected", urlStr, classifyStreamUrl(urlStr));
     }
 
     return originalOpen.apply(this, [method, url, ...rest] as any);
   };
 
   XMLHttpRequest.prototype.send = function (...args: any[]) {
-    this.addEventListener('load', function () {
+    this.addEventListener("load", function () {
       try {
         const url = (this as any).__fluxdown_url as string | undefined;
         if (!url) return;
 
-        const ct = this.getResponseHeader('content-type') || '';
-        const cl = this.getResponseHeader('content-length');
+        const ct = this.getResponseHeader("content-type") || "";
+        const cl = this.getResponseHeader("content-length");
         const responseUrl = this.responseURL || url;
 
-        if (ct && isMediaContentType(ct)) {
-          notify('xhr-detected', responseUrl, ct, cl ? parseInt(cl, 10) : undefined);
+        if (ct && isDownloadableContentType(ct)) {
+          notify(
+            "xhr-detected",
+            responseUrl,
+            ct,
+            cl ? parseInt(cl, 10) : undefined,
+          );
         }
         if (responseUrl !== url && isStreamingUrl(responseUrl)) {
-          notify('xhr-detected', responseUrl, ct || classifyStreamUrl(responseUrl));
+          notify(
+            "xhr-detected",
+            responseUrl,
+            ct || classifyStreamUrl(responseUrl),
+          );
         }
 
         // 拦截一次性 CDN 下载 URL（如蓝奏云 /ajaxm.php）
@@ -152,7 +224,9 @@ export default defineUnlistedScript(() => {
           try {
             const json = JSON.parse(this.responseText);
             notifyPreemptDownload(json, url);
-          } catch { /* JSON 解析失败，忽略 */ }
+          } catch {
+            /* JSON 解析失败，忽略 */
+          }
         }
       } catch {
         // ignore
@@ -173,7 +247,7 @@ export default defineUnlistedScript(() => {
 
   /** 检测 URL 是否为已知的"一次性 CDN 下载 AJAX"端点 */
   function isOneTimeDownloadApi(url: string): boolean {
-    return url.includes('/ajaxm.php');
+    return url.includes("/ajaxm.php");
   }
 
   /**
@@ -182,36 +256,42 @@ export default defineUnlistedScript(() => {
    * @param apiUrl 发出请求的 API URL（用于提取 referrer）
    */
   function notifyPreemptDownload(json: any, apiUrl: string): void {
-    if (!json || typeof json !== 'object') return;
+    if (!json || typeof json !== "object") return;
 
     // 蓝奏云格式：{zt:1, dom:"https://cdn.example.com", url:"?token", inf:"filename.ext"}
     // 页面 JS 实际拼接：dom + '/file/' + url
-    if (json.zt === 1 && typeof json.dom === 'string' && typeof json.url === 'string') {
+    if (
+      json.zt === 1 &&
+      typeof json.dom === "string" &&
+      typeof json.url === "string"
+    ) {
       const urlStr = json.url;
       let cdnUrl: string;
-      if (urlStr.startsWith('http://') || urlStr.startsWith('https://')) {
+      if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
         // 完整 URL，直接使用
         cdnUrl = urlStr;
-      } else if (urlStr.startsWith('/')) {
+      } else if (urlStr.startsWith("/")) {
         // 以路径开头（如 /file/?token）
         cdnUrl = json.dom + urlStr;
       } else {
         // 仅查询字符串（如 ?token）— 蓝奏云标准格式，路径为 /file/
-        cdnUrl = json.dom + '/file/' + urlStr;
+        cdnUrl = json.dom + "/file/" + urlStr;
       }
-      if (!cdnUrl.startsWith('http')) return;
+      if (!cdnUrl.startsWith("http")) return;
 
       const key = `preempt:${cdnUrl}`;
       if (notifiedUrls.has(key)) return;
       notifiedUrls.add(key);
 
-      document.dispatchEvent(new CustomEvent('fluxdown-preempt-download', {
-        detail: {
-          url: cdnUrl,
-          filename: typeof json.inf === 'string' ? json.inf : '',
-          referrer: window.location.href,
-        },
-      }));
+      document.dispatchEvent(
+        new CustomEvent("fluxdown-preempt-download", {
+          detail: {
+            url: cdnUrl,
+            filename: typeof json.inf === "string" ? json.inf : "",
+            referrer: window.location.href,
+          },
+        }),
+      );
     }
   }
 
@@ -224,7 +304,7 @@ export default defineUnlistedScript(() => {
     try {
       if (obj instanceof Blob && obj.size > 100 * 1024) {
         // Blob > 100KB，可能是有意义的媒体资源
-        notify('blob-detected', blobUrl, obj.type || '', obj.size);
+        notify("blob-detected", blobUrl, obj.type || "", obj.size);
       }
     } catch {
       // ignore
@@ -241,14 +321,21 @@ export default defineUnlistedScript(() => {
       const origAddSourceBuffer = OrigMediaSource.prototype.addSourceBuffer;
       OrigMediaSource.prototype.addSourceBuffer = function (mimeType: string) {
         try {
-          if (mimeType && (mimeType.startsWith('video/') || mimeType.startsWith('audio/'))) {
-            notify('mse-detected', window.location.href, mimeType);
+          if (
+            mimeType &&
+            (mimeType.startsWith("video/") || mimeType.startsWith("audio/"))
+          ) {
+            notify("mse-detected", window.location.href, mimeType);
           }
-        } catch { /* */ }
+        } catch {
+          /* */
+        }
         return origAddSourceBuffer.call(this, mimeType);
       };
     }
-  } catch { /* MediaSource 不可用 */ }
+  } catch {
+    /* MediaSource 不可用 */
+  }
 
-  console.log('[FluxDown] Fetch/XHR/Blob/MSE interceptor injected');
+  console.log("[FluxDown] Fetch/XHR/Blob/MSE interceptor injected");
 });
