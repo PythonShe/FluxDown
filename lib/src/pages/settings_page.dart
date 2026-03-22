@@ -115,6 +115,13 @@ List<SettingsSearchItem> get settingsSearchItems {
       icon: LucideIcons.chartLine,
     ),
     SettingsSearchItem(
+      category: SettingsCategory.general,
+      label: s.notifyOnComplete,
+      description: s.notifyOnCompleteDesc,
+      keywords: s.searchKeywordsNotifyOnComplete,
+      icon: LucideIcons.bellRing,
+    ),
+    SettingsSearchItem(
       category: SettingsCategory.appearance,
       label: s.language,
       description: s.languageDesc,
@@ -685,6 +692,15 @@ class _GeneralContent extends StatelessWidget {
               child: ShadSwitch(
                 value: settingsProvider.analyticsEnabled,
                 onChanged: (v) => settingsProvider.setAnalyticsEnabled(v),
+              ),
+            ),
+            const SizedBox(height: 10),
+            _SettingCard(
+              label: LocaleScope.of(context).notifyOnComplete,
+              description: LocaleScope.of(context).notifyOnCompleteDesc,
+              child: ShadSwitch(
+                value: settingsProvider.notifyOnComplete,
+                onChanged: (v) => settingsProvider.setNotifyOnComplete(v),
               ),
             ),
           ],

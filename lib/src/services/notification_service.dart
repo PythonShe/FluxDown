@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../i18n/locale_provider.dart';
 import '../models/download_task.dart';
+import '../models/settings_provider.dart';
 import '../theme/app_colors.dart';
 import 'open_folder.dart';
 import 'log_service.dart';
@@ -109,6 +110,10 @@ class NotificationService {
   /// - 窗口前台：OverlayEntry 精美卡片
   /// - 窗口不可见/最小化（Windows）：Win32 悬浮窗（绕过通知设置，100% 可靠）
   void showDownloadComplete(DownloadTask task) {
+    if (SettingsProvider.globalInstance?.notifyOnComplete == false) {
+      logInfo(_tag, 'showDownloadComplete: skipped (notifyOnComplete=false)');
+      return;
+    }
     _showSystemDownloadComplete(task);
     logInfo(
       _tag,
@@ -140,6 +145,13 @@ class NotificationService {
   /// 多个任务全部完成后的系统通知（汇总）
   void showAllCompletedSummary(int count) {
     if (count < 2) return;
+    if (SettingsProvider.globalInstance?.notifyOnComplete == false) {
+      logInfo(
+        _tag,
+        'showAllCompletedSummary: skipped (notifyOnComplete=false)',
+      );
+      return;
+    }
     _showSystemAllCompleted(count);
   }
 

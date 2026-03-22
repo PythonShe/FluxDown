@@ -871,8 +871,9 @@ class DownloadController extends ChangeNotifier {
     // 乐观 UI 更新
     for (int i = 0; i < _tasks.length; i++) {
       final t = _tasks[i];
-      if (t.status != TaskStatus.paused && t.status != TaskStatus.error)
+      if (t.status != TaskStatus.paused && t.status != TaskStatus.error) {
         continue;
+      }
       _boostAutoPausedIds.remove(t.id);
       if (immediate.contains(t.id)) {
         _optimisticPausedIds.remove(t.id);

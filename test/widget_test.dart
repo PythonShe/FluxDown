@@ -8,7 +8,6 @@
 // 可以在测试环境中运行的纯 Dart 层逻辑。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flux_down/src/i18n/locale_provider.dart';
-import 'package:flux_down/src/i18n/translations.dart';
 import 'package:flux_down/src/theme/theme_provider.dart';
 
 void main() {

@@ -23,6 +23,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _autoStartup = false; // 默认不开机启动
   bool _autoCheckUpdate = true; // 默认启动时自动检查更新
   bool _analyticsEnabled = true; // 默认启用匿名数据分析
+  bool _notifyOnComplete = true; // 默认任务完成时弹出通知
 
   // 文件关联
   bool _torrentAssocPrompted = false; // 是否已弹窗提示过文件关联
@@ -96,6 +97,7 @@ class SettingsProvider extends ChangeNotifier {
   bool get autoStartup => _autoStartup;
   bool get autoCheckUpdate => _autoCheckUpdate;
   bool get analyticsEnabled => _analyticsEnabled;
+  bool get notifyOnComplete => _notifyOnComplete;
 
   // 文件关联 Getters
   bool get torrentAssocPrompted => _torrentAssocPrompted;
@@ -182,6 +184,13 @@ class SettingsProvider extends ChangeNotifier {
     notifyListeners();
     _saveToRust('analytics_enabled', value.toString());
     AnalyticsService.instance.setEnabled(value);
+  }
+
+  void setNotifyOnComplete(bool value) {
+    if (_notifyOnComplete == value) return;
+    _notifyOnComplete = value;
+    notifyListeners();
+    _saveToRust('notify_on_complete', value.toString());
   }
 
   // 代理设置 Setters
@@ -415,6 +424,8 @@ class SettingsProvider extends ChangeNotifier {
           _torrentAssocPrompted = entry.value == 'true';
         case 'analytics_enabled':
           _analyticsEnabled = entry.value != 'false'; // 默认 true
+        case 'notify_on_complete':
+          _notifyOnComplete = entry.value != 'false'; // 默认 true
         case 'proxy_mode':
           _proxyMode = entry.value;
         case 'proxy_type':

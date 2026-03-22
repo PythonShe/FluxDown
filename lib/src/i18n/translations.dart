@@ -368,6 +368,11 @@ class S {
     '发送匿名使用数据以帮助改进应用，不包含任何个人信息',
     'Send anonymous usage data to help improve the app. No personal information is collected',
   );
+  String get notifyOnComplete => _t('完成通知', 'Completion Notifications');
+  String get notifyOnCompleteDesc => _t(
+    '任务完成时弹出系统通知，关闭后所有任务完成将不再通知',
+    'Show a system notification when a task completes. When disabled, no completion notifications will be shown',
+  );
   String get settingFailed => _t('设置失败', 'Setting Failed');
   String get autoStartupFailedDesc => _t(
     '无法修改开机自启动设置，请检查系统权限。',
@@ -717,6 +722,10 @@ class S {
     '数据,分析,统计,匿名,隐私,遥测',
     'analytics,data,statistics,anonymous,privacy,telemetry',
   ).split(',')..addAll(['analytics', 'telemetry', 'privacy']);
+  List<String> get searchKeywordsNotifyOnComplete => _t(
+    '通知,完成,提醒,弹窗,系统通知',
+    'notification,complete,alert,popup,system,toast',
+  ).split(',')..addAll(['notification', 'complete', 'toast']);
   List<String> get searchKeywordsBtSettings => _t(
     'BT,BitTorrent,种子,磁力,Tracker,DHT,UPnP,端口',
     'BT,BitTorrent,torrent,magnet,tracker,DHT,UPnP,port',
