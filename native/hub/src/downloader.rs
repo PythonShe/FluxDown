@@ -35,6 +35,24 @@ pub enum DownloadError {
     Other(String),
 }
 
+/// 检测下载错误是否为服务器主动拒绝（403 Forbidden / 429 Too Many Requests）。
+///
+/// 这类错误通常意味着服务器限制了并发连接数，多段下载的额外连接被拒绝。
+/// 与网络超时、连接重置等瞬时错误不同，重试这类错误毫无意义——应当立即
+/// 通知 coordinator 进行降级处理。
+pub(crate) fn is_server_rejection(e: &DownloadError) -> bool {
+    match e {
+        DownloadError::Request(req_err) => {
+            if let Some(status) = req_err.status() {
+                matches!(status.as_u16(), 403 | 429)
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -2129,5 +2147,55 @@ mod tests {
             "good"
         );
         // 无效 header 被跳过（HeaderName::from_bytes 会拒绝含空格的名称）
+    }
+
+    // -----------------------------------------------------------------------
+    // is_server_rejection
+    // -----------------------------------------------------------------------
+
+    /// 辅助函数：构造指定状态码的 DownloadError::Request。
+    /// 利用 reqwest::Response::from(http_resp) 将 http::Response 转为 reqwest::Response，
+    /// 再调用 error_for_status() 获取带状态码的 reqwest::Error。
+    fn make_status_error(status: u16) -> super::DownloadError {
+        let http_resp = ::reqwest::Response::from(
+            ::http::Response::builder()
+                .status(status)
+                .body("")
+                .unwrap_or_else(|_| {
+                    panic!("failed to build http::Response with status {}", status)
+                }),
+        );
+        let err = http_resp.error_for_status().unwrap_err();
+        super::DownloadError::Request(err)
+    }
+
+    #[test]
+    fn server_rejection_detects_403() {
+        assert!(super::is_server_rejection(&make_status_error(403)));
+    }
+
+    #[test]
+    fn server_rejection_detects_429() {
+        assert!(super::is_server_rejection(&make_status_error(429)));
+    }
+
+    #[test]
+    fn server_rejection_ignores_404() {
+        assert!(!super::is_server_rejection(&make_status_error(404)));
+    }
+
+    #[test]
+    fn server_rejection_ignores_500() {
+        assert!(!super::is_server_rejection(&make_status_error(500)));
+    }
+
+    #[test]
+    fn server_rejection_ignores_non_request_errors() {
+        assert!(!super::is_server_rejection(
+            &super::DownloadError::Cancelled
+        ));
+        assert!(!super::is_server_rejection(&super::DownloadError::Other(
+            "403 forbidden".to_string()
+        )));
     }
 }

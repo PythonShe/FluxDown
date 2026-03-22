@@ -1259,6 +1259,7 @@ dependencies = [
  "dash-mpd",
  "futures-util",
  "hex 0.4.3",
+ "http",
  "librqbit",
  "m3u8-rs",
  "md-5",

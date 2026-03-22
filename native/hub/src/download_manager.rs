@@ -18,6 +18,7 @@ use crate::ftp_downloader;
 use crate::hls_downloader;
 use crate::logger::log_info;
 use crate::proxy_config::ProxyConfig;
+use crate::segment_coordinator::is_single_conn_domain;
 use crate::signals::{
     AllQueues, AllTasks, PriorityTaskChanged, QueueInfo, QueuePosition, QueuePositionsUpdate,
     SegmentDetail, SegmentProgress, TaskInfo, TaskMetaProbed, TaskProgress,
@@ -676,9 +677,7 @@ impl DownloadManager {
         // 大文件下载因网络 stall、连接重置等瞬时错误失败后，自动延迟恢复，
         // 避免用户手动操作。最多重试 MAX_TASK_AUTO_RETRIES 次（5s/10s/15s 递增延迟）。
         // 仅在 generation 匹配（确实是这一轮 spawn 失败）时触发，防止 stale 信号误触发。
-        if generation_matched
-            && let Ok(Some(task)) = self.db.load_task_by_id(task_id).await
-        {
+        if generation_matched && let Ok(Some(task)) = self.db.load_task_by_id(task_id).await {
             if task.status == 4 && is_retriable_error(&task.error_message) {
                 let count = self
                     .auto_retry_counts
@@ -1010,6 +1009,19 @@ impl DownloadManager {
             self.global_default_segments
         } else {
             0 // 0 → segment_advisor will calculate
+        };
+
+        // 第 5 层：域名单连接策略缓存覆盖。
+        // 如果此域名曾因多连接被服务器拒绝（403/429），自动降级为单线程，
+        // 避免重蹈覆辙。缓存带 24h TTL，过期后重新尝试多线程。
+        let segments = if segments != 1 && is_single_conn_domain(&url) {
+            log_info!(
+                "[manager] task {} 域名命中单连接缓存，强制 segments=1",
+                task_id
+            );
+            1
+        } else {
+            segments
         };
 
         self.generation += 1;
@@ -1421,6 +1433,17 @@ impl DownloadManager {
         // Read actual segment count from DB.  0 means "auto" — the downloader
         // will dynamically calculate the optimal count.
         let seg_count: i32 = self.db.get_task_segments(task_id).await.unwrap_or_default();
+
+        // 域名单连接策略缓存覆盖（同 do_start_task）。
+        let seg_count = if seg_count != 1 && is_single_conn_domain(&task.url) {
+            log_info!(
+                "[manager] resume task {} 域名命中单连接缓存，强制 segments=1",
+                task_id
+            );
+            1
+        } else {
+            seg_count
+        };
 
         self.generation += 1;
         let spawn_gen = self.generation;

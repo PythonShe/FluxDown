@@ -28,10 +28,10 @@
 //! written yet results in a gap — the integrity check at the end of download
 //! catches this and the task retries from scratch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -44,10 +44,69 @@ use tokio_util::sync::CancellationToken;
 use rinf::RustSignal;
 
 use crate::db::Db;
-use crate::downloader::{DownloadError, ProgressUpdate, SegmentProgressInfo};
+use crate::downloader::{DownloadError, ProgressUpdate, SegmentProgressInfo, is_server_rejection};
 use crate::logger::log_info;
 use crate::signals::SegmentSplitEvent;
 use crate::speed_limiter::SpeedLimiter;
+
+// ---------------------------------------------------------------------------
+// 域名单连接策略缓存
+// ---------------------------------------------------------------------------
+// 当 coordinator 检测到某域名的服务器拒绝多连接（403/429），将该域名记录
+// 到进程级缓存。后续对同域名的下载任务会自动降级为单线程，避免重蹈覆辙。
+// 缓存带 24h TTL——服务器策略可能变化，过期后重新尝试多线程。
+
+/// TTL: 24 小时后允许重新尝试多线程。
+const SINGLE_CONN_TTL: Duration = Duration::from_secs(24 * 3600);
+
+/// 进程级的域名 → 上次检测时间缓存。
+static SINGLE_CONN_DOMAINS: OnceLock<StdMutex<HashMap<String, Instant>>> = OnceLock::new();
+
+fn single_conn_cache() -> &'static StdMutex<HashMap<String, Instant>> {
+    SINGLE_CONN_DOMAINS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+/// 提取 URL 的 host 部分（含端口），用于域名级缓存的 key。
+fn extract_host(url: &str) -> Option<String> {
+    url::Url::parse(url).ok().and_then(|u| {
+        u.host_str().map(|h| {
+            if let Some(port) = u.port() {
+                format!("{}:{}", h, port)
+            } else {
+                h.to_string()
+            }
+        })
+    })
+}
+
+/// 记录某域名的服务器拒绝多连接。
+pub(crate) fn record_single_conn_domain(url: &str) {
+    if let Some(host) = extract_host(url) {
+        if let Ok(mut cache) = single_conn_cache().lock() {
+            log_info!(
+                "[conn-policy] 记录域名 {} 为单连接限制，24h 内自动使用单线程",
+                host
+            );
+            cache.insert(host, Instant::now());
+        }
+    }
+}
+
+/// 检查某域名是否在单连接缓存中（且未过期）。
+pub(crate) fn is_single_conn_domain(url: &str) -> bool {
+    if let Some(host) = extract_host(url) {
+        if let Ok(mut cache) = single_conn_cache().lock() {
+            if let Some(recorded) = cache.get(&host) {
+                if recorded.elapsed() < SINGLE_CONN_TTL {
+                    return true;
+                }
+                // 过期，移除
+                cache.remove(&host);
+            }
+        }
+    }
+    false
+}
 
 // ---------------------------------------------------------------------------
 // Tuning constants
@@ -393,6 +452,10 @@ pub async fn run_coordinated_download(
     }
 
     // ----- 6. Coordinator event loop ----------------------------------------
+    // serial_mode: 当检测到服务器拒绝多连接（403/429）时置为 true，
+    // 此后 coordinator 同一时刻只分配一个分段给一个 worker，
+    // 避免并发连接触发服务器的反多线程机制。
+    let mut serial_mode = false;
     let mut final_error: Option<DownloadError> = None;
     loop {
         tokio::select! {
@@ -426,11 +489,27 @@ pub async fn run_coordinated_download(
                         sync_downloaded_from_shared(&mut segments, &seg_states);
 
                         // Try to assign new work to this worker.
-                        if let Some(next) = find_next_work(
-                            &mut segments,
-                            &mut next_index,
-                            total_bytes,
-                        ) {
+                        // 串行模式下：同一时刻只允许一个 worker 工作，
+                        // 且不进行分段拆分（避免产生新的并发连接）。
+                        let next_work = if serial_mode {
+                            let other_active = segments.values()
+                                .any(|s| s.state == SegState::Active);
+                            if other_active {
+                                // 还有其他 worker 在下载 → 退休当前 worker，等它完成
+                                None
+                            } else {
+                                // 无其他活跃连接 → 取一个 Pending 分段（不拆分）
+                                find_next_pending_only(&mut segments)
+                            }
+                        } else {
+                            find_next_work(
+                                &mut segments,
+                                &mut next_index,
+                                total_bytes,
+                            )
+                        };
+
+                        if let Some(next) = next_work {
                             let new_seg_idx = next.assignment.seg_index;
 
                             // Persist new/updated segments to DB.
@@ -474,19 +553,68 @@ pub async fn run_coordinated_download(
                         }
                     }
 
-                    Some(WorkerEvent::Failed { worker_id: _, seg_index, error }) => {
-                        // On failure, cancel everything (matches original behaviour).
-                        cancel_token.cancel();
-                        if let Some(seg) = segments.get_mut(&seg_index) {
-                            seg.state = SegState::Pending;
+                    Some(WorkerEvent::Failed { worker_id, seg_index, error }) => {
+                        // 检测服务器是否拒绝多连接（403/429）。
+                        // 判定条件：错误为 403/429 且存在其他正常工作的分段
+                        // （证明 URL 本身有效，只是并发连接被拒绝）。
+                        let other_working = segments.values().any(|s| {
+                            s.index != seg_index
+                                && matches!(s.state, SegState::Active | SegState::Completed)
+                        });
+
+                        if is_server_rejection(&error) && other_working {
+                            // ---- 自动降级为串行模式 ----
+                            if !serial_mode {
+                                log_info!(
+                                    "[coordinator] task {} 检测到服务器拒绝多连接 (seg {}), \
+                                     降级为串行模式",
+                                    task_id,
+                                    seg_index
+                                );
+                                serial_mode = true;
+                                // 记录域名，后续同域名任务自动单线程
+                                record_single_conn_domain(url);
+                            }
+
+                            // 将失败分段标记为 Pending，等待串行下载
+                            if let Some(seg) = segments.get_mut(&seg_index) {
+                                seg.state = SegState::Pending;
+                            }
+
+                            // 退休当前失败的 worker（关闭其分配通道）
+                            if let Some(slot) = worker_assign_txs.get_mut(worker_id) {
+                                *slot = None;
+                            }
+
+                            // 安全检查：如果所有 worker 都已退休且无活跃分段，
+                            // 说明服务器甚至拒绝单连接 → 无法继续。
+                            let any_alive = worker_assign_txs.iter().any(|tx| tx.is_some())
+                                || segments.values().any(|s| s.state == SegState::Active);
+                            if !any_alive && !all_done(&segments) {
+                                final_error = Some(DownloadError::Other(
+                                    "服务器拒绝所有下载连接（包括单连接），无法继续下载"
+                                        .to_string(),
+                                ));
+                                break;
+                            }
+
+                            // 不 break、不 cancel — 让已建立连接的 active workers
+                            // 继续下载。当它们完成后，Done 事件会触发串行分配剩余
+                            // Pending 分段。
+                        } else {
+                            // 非连接限制错误，或 URL 本身无效 → 原有行为：全部取消。
+                            cancel_token.cancel();
+                            if let Some(seg) = segments.get_mut(&seg_index) {
+                                seg.state = SegState::Pending;
+                            }
+                            for tx in &mut worker_assign_txs {
+                                *tx = None;
+                            }
+                            if final_error.is_none() {
+                                final_error = Some(error);
+                            }
+                            break;
                         }
-                        for tx in &mut worker_assign_txs {
-                            *tx = None;
-                        }
-                        if final_error.is_none() {
-                            final_error = Some(error);
-                        }
-                        break;
                     }
 
                     None => {
@@ -677,6 +805,28 @@ fn find_next_work(
 
     // Strategy 2: split the largest active segment.
     try_split_largest(segments, next_index)
+}
+
+/// 串行模式专用：只从 Pending 分段中分配工作，不进行拆分。
+///
+/// 与 [`find_next_work`] 不同，此函数绝不会拆分 Active 分段来创建新工作，
+/// 确保在限制并发连接的服务器上不会发起额外的 HTTP 请求。
+fn find_next_pending_only(segments: &mut BTreeMap<i32, LiveSegment>) -> Option<NextWork> {
+    let seg = segments.values().find(|s| s.state == SegState::Pending)?;
+    let assignment = WorkerAssignment {
+        seg_index: seg.index,
+        seg_start: seg.start_byte,
+        actual_start: seg.start_byte + seg.downloaded_bytes,
+        seg_end: seg.end_byte,
+    };
+    let idx = seg.index;
+    if let Some(s) = segments.get_mut(&idx) {
+        s.state = SegState::Active;
+    }
+    Some(NextWork {
+        assignment,
+        split_parent: None,
+    })
 }
 
 /// IDM-style in-half division: find the active segment with the most remaining
@@ -1180,6 +1330,16 @@ async fn do_segment_with_retry(
             Ok(dl) => return Ok(dl),
             Err(DownloadError::Cancelled) => return Err(DownloadError::Cancelled),
             Err(e) => {
+                // 403/429 是服务器明确拒绝多连接，重试毫无意义——
+                // 立即返回让 coordinator 进行降级处理。
+                if is_server_rejection(&e) {
+                    log_info!(
+                        "[segment-retry] task {} seg {} 收到服务器拒绝，跳过重试直接上报",
+                        task_id,
+                        seg_idx
+                    );
+                    return Err(e);
+                }
                 attempts += 1;
                 if attempts >= MAX_RETRIES {
                     return Err(e);
@@ -1436,9 +1596,11 @@ fn update_seg_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        LiveSegment, MAX_SEGMENTS, SegState, all_done, find_next_work, try_proactive_split,
-        try_split_largest, validate_coverage,
+        LiveSegment, MAX_SEGMENTS, SegState, all_done, extract_host, find_next_pending_only,
+        find_next_work, is_single_conn_domain, record_single_conn_domain, single_conn_cache,
+        try_proactive_split, try_split_largest, validate_coverage,
     };
+    use crate::downloader::{DownloadError, is_server_rejection};
     use std::collections::BTreeMap;
 
     fn make_seg(index: i32, start: i64, end: i64, downloaded: i64, state: SegState) -> LiveSegment {
@@ -1791,5 +1953,159 @@ mod tests {
         let seg = make_seg(0, 0, 99, 100, SegState::Completed);
         assert!(seg.is_complete());
         assert_eq!(seg.remaining(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // find_next_pending_only（串行模式专用）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pending_only_returns_pending_segment() {
+        let mut segs = BTreeMap::new();
+        segs.insert(0, make_seg(0, 0, 99, 100, SegState::Completed));
+        segs.insert(1, make_seg(1, 100, 199, 0, SegState::Pending));
+        segs.insert(2, make_seg(2, 200, 299, 0, SegState::Pending));
+
+        let result = find_next_pending_only(&mut segs);
+        assert!(result.is_some());
+        let next = result.unwrap();
+        assert_eq!(next.assignment.seg_index, 1);
+        assert!(next.split_parent.is_none(), "串行模式不应产生拆分");
+        // 分段应被标记为 Active
+        assert_eq!(segs.get(&1).unwrap().state, SegState::Active);
+    }
+
+    #[test]
+    fn pending_only_returns_none_when_no_pending() {
+        let mut segs = BTreeMap::new();
+        segs.insert(0, make_seg(0, 0, 99, 100, SegState::Completed));
+        segs.insert(1, make_seg(1, 100, 199, 50, SegState::Active));
+
+        let result = find_next_pending_only(&mut segs);
+        assert!(result.is_none(), "没有 Pending 分段时应返回 None");
+    }
+
+    #[test]
+    fn pending_only_never_splits() {
+        // 即使有很大的 Active 分段，串行模式也不应拆分
+        let mut segs = BTreeMap::new();
+        segs.insert(0, make_seg(0, 0, 99_999_999, 1_000_000, SegState::Active));
+
+        let result = find_next_pending_only(&mut segs);
+        assert!(result.is_none(), "串行模式不应拆分 Active 分段");
+        assert_eq!(segs.len(), 1, "分段数量不应增加");
+    }
+
+    #[test]
+    fn pending_only_resumes_partial_progress() {
+        let mut segs = BTreeMap::new();
+        segs.insert(0, make_seg(0, 0, 999, 500, SegState::Pending));
+
+        let result = find_next_pending_only(&mut segs);
+        assert!(result.is_some());
+        let next = result.unwrap();
+        assert_eq!(next.assignment.seg_start, 0);
+        assert_eq!(next.assignment.actual_start, 500, "应从已下载位置续传");
+        assert_eq!(next.assignment.seg_end, 999);
+    }
+
+    // -----------------------------------------------------------------------
+    // is_server_rejection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn server_rejection_ignores_non_request_errors() {
+        // Other、Cancelled、Io 等非 Request 类型的错误不应被判定为服务器拒绝
+        assert!(!is_server_rejection(&DownloadError::Other(
+            "some error".to_string()
+        )));
+        assert!(!is_server_rejection(&DownloadError::Cancelled));
+        assert!(!is_server_rejection(&DownloadError::Other(
+            "403 forbidden".to_string()
+        )));
+    }
+
+    /// 编译时验证 is_server_rejection 可以接受 DownloadError::Request 变体。
+    /// 构造真实的 reqwest::Error(403/429) 需要 `http` crate，此处仅验证类型兼容性。
+    #[test]
+    fn server_rejection_accepts_request_variant() {
+        // 不实际发起 HTTP 请求，仅验证代码路径可编译。
+        if false {
+            let client = reqwest::Client::new();
+            let _ = async {
+                let resp = client.get("http://x").send().await.unwrap();
+                let err = resp.error_for_status().unwrap_err();
+                let dl_err = DownloadError::Request(err);
+                let _ = is_server_rejection(&dl_err);
+            };
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 域名缓存（extract_host / record / is_single_conn）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_host_basic() {
+        assert_eq!(
+            extract_host("https://example.com/file.zip"),
+            Some("example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_host_with_port() {
+        assert_eq!(
+            extract_host("https://example.com:8443/file.zip"),
+            Some("example.com:8443".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_host_invalid_url() {
+        assert_eq!(extract_host("not a url"), None);
+    }
+
+    #[test]
+    fn single_conn_domain_record_and_check() {
+        // 使用一个唯一域名避免测试间干扰
+        let url = "https://test-single-conn-12345.example.org/file.bin";
+        assert!(!is_single_conn_domain(url), "记录前不应命中缓存");
+
+        record_single_conn_domain(url);
+        assert!(is_single_conn_domain(url), "记录后应命中缓存");
+
+        // 同域名不同路径也应命中
+        assert!(
+            is_single_conn_domain("https://test-single-conn-12345.example.org/other.zip"),
+            "同域名不同路径应命中缓存"
+        );
+
+        // 不同域名不应命中
+        assert!(
+            !is_single_conn_domain("https://other-domain.example.org/file.bin"),
+            "不同域名不应命中缓存"
+        );
+
+        // 清理：从缓存中移除测试数据
+        if let Ok(mut cache) = single_conn_cache().lock() {
+            cache.remove("test-single-conn-12345.example.org");
+        }
+    }
+
+    #[test]
+    fn single_conn_domain_different_ports_are_separate() {
+        let url_a = "https://test-port-sep-99999.example.org:443/file.bin";
+        let url_b = "https://test-port-sep-99999.example.org:8080/file.bin";
+
+        record_single_conn_domain(url_a);
+        assert!(is_single_conn_domain(url_a));
+        // 不同端口视为不同"域名"
+        assert!(!is_single_conn_domain(url_b), "不同端口应视为不同服务器");
+
+        // 清理
+        if let Ok(mut cache) = single_conn_cache().lock() {
+            cache.remove("test-port-sep-99999.example.org:443");
+        }
     }
 }

@@ -55,6 +55,9 @@ librqbit = { version = "8", default-features = false, features = ["default-tls"]
 reqwest = { version = "0.12", features = ["stream", "rustls-tls-native-roots", "cookies", "json", "socks"] }
 librqbit = { version = "8", default-features = false, features = ["rust-tls"] }
 
+[dev-dependencies]
+http = "1.4.0"
+
 # Uncomment below to target the web.
 # tokio_with_wasm = { version = "0.8.5", features = ["rt", "macros", "time"] }
 # wasm-bindgen = "0.2.100"
