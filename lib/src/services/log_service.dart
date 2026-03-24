@@ -96,8 +96,10 @@ class LogService {
   /// 将所有日志文件打包为 ZIP 压缩包保存到 [zipPath]。
   ///
   /// 打包前会先刷盘，确保最新日志已写入文件。
+  /// [sanitize] 为 true（默认）时，导出前对日志内容进行脱敏处理，
+  /// 移除 URL 认证凭证、代理密码、用户路径、设备 ID 等敏感信息。
   /// 返回打包的文件数量。
-  Future<int> exportLogs(String zipPath) async {
+  Future<int> exportLogs(String zipPath, {bool sanitize = true}) async {
     // 先刷盘，确保最新日志已写入
     try {
       _raf?.flushSync();
@@ -118,7 +120,7 @@ class LogService {
     // 按文件名排序（即按日期排序）
     logFiles.sort((a, b) => p.basename(a.path).compareTo(p.basename(b.path)));
 
-    final zipBytes = _buildZip(logFiles);
+    final zipBytes = _buildZip(logFiles, sanitize: sanitize);
     await File(zipPath).writeAsBytes(zipBytes);
     return logFiles.length;
   }
@@ -298,7 +300,7 @@ class _ZipCentralEntry {
   });
 }
 
-Uint8List _buildZip(List<File> files) {
+Uint8List _buildZip(List<File> files, {bool sanitize = false}) {
   final out = BytesBuilder(copy: false);
   final centralEntries = <_ZipCentralEntry>[];
 
@@ -306,8 +308,10 @@ Uint8List _buildZip(List<File> files) {
     final name = p.basename(file.path);
     final nameBytes = utf8.encode(name);
     final rawData = file.readAsBytesSync();
-    final crc = _crc32(rawData);
-    final compressed = ZLibEncoder(raw: true, level: 6).convert(rawData);
+    // 脱敏处理：在压缩前对文本内容替换敏感信息
+    final data = sanitize ? _sanitizeLogBytes(rawData) : rawData;
+    final crc = _crc32(data);
+    final compressed = ZLibEncoder(raw: true, level: 6).convert(data);
 
     // DOS 日期时间
     final mod = file.lastModifiedSync();
@@ -325,7 +329,7 @@ Uint8List _buildZip(List<File> files) {
     _writeU16(out, dosDate);
     _writeU32(out, crc);
     _writeU32(out, compressed.length);
-    _writeU32(out, rawData.length);
+    _writeU32(out, data.length); // 使用脱敏后的实际大小
     _writeU16(out, nameBytes.length);
     _writeU16(out, 0); // extra length
     out.add(nameBytes);
@@ -336,7 +340,7 @@ Uint8List _buildZip(List<File> files) {
         nameBytes: nameBytes,
         crc: crc,
         compressedSize: compressed.length,
-        uncompressedSize: rawData.length,
+        uncompressedSize: data.length, // 使用脱敏后的实际大小
         localOffset: localOffset,
         dosTime: dosTime,
         dosDate: dosDate,
@@ -380,4 +384,104 @@ Uint8List _buildZip(List<File> files) {
   _writeU16(out, 0); // comment length
 
   return out.toBytes();
+}
+
+// ══════════════════════════════════════════════════
+//  日志脱敏（导出时保护敏感信息）
+// ══════════════════════════════════════════════════
+
+/// 脱敏规则列表。
+///
+/// 按顺序应用，每条规则包含一个正则和替换函数。
+/// 规则覆盖范围：
+///   1. URL 内嵌认证凭证（user:pass@host）
+///   2. HTTP(S) URL 长 query string（CDN 签名、学术数据库 token 等）
+///   3. Cookie 头值
+///   4. Authorization 头值
+///   5. 代理用户名/密码字段
+///   6. Linux 用户主目录路径
+///   7. Windows 用户目录路径
+///   8. Analytics 设备 ID（UUID）
+final _kSanitizeRules = <({RegExp pattern, String Function(Match m) replace})>[
+  // 1. URL 内嵌认证凭证：scheme://user:pass@host → scheme://***@host
+  //    覆盖：ftp://user:pass@host/path、http://admin:secret@proxy:8080
+  (
+    pattern: RegExp(r'([\w+\-.]+://)[^:/\s@]+:[^@\s]+@', caseSensitive: false),
+    replace: (m) => '${m[1]}***@',
+  ),
+
+  // 2. HTTP(S) URL 长 query string（>50 字符）→ ?[QUERY_REDACTED]
+  //    覆盖：知网/百度网盘签名 URL、CDN 防盗链、私人 BT tracker passkey
+  (
+    pattern: RegExp(
+      r'(https?://[^?\s]{3,})\?([^\s]{50,})',
+      caseSensitive: false,
+    ),
+    replace: (m) => '${m[1]}?[QUERY_REDACTED]',
+  ),
+
+  // 3. Cookie 头值：Cookie: <value> → Cookie: [REDACTED]
+  (
+    pattern: RegExp(r'(cookie\b[^:]*:\s*)\S+', caseSensitive: false),
+    replace: (m) => '${m[1]}[REDACTED]',
+  ),
+
+  // 4. Authorization 头值：Authorization: Bearer <token> → Authorization: Bearer [REDACTED]
+  (
+    pattern: RegExp(r'(authorization\b[^:]*:\s*)\S+', caseSensitive: false),
+    replace: (m) => '${m[1]}[REDACTED]',
+  ),
+
+  // 5. 代理用户名/密码字段（非空值）
+  //    覆盖：Settings 日志 `config: proxy_password=xxx`
+  //          actor 日志 `proxy config changed: proxy_password=xxx`
+  (
+    pattern: RegExp(
+      r'(proxy[_\s]?(?:password|username)\s*[=:]\s*)(\S+)',
+      caseSensitive: false,
+    ),
+    replace: (m) => '${m[1]}[REDACTED]',
+  ),
+
+  // 6. Linux 用户主目录：/home/username/ → /home/***/
+  //    覆盖：save_dir、temp/dest 路径、exe 路径、图标路径
+  (pattern: RegExp(r'/home/[^/\s]+/'), replace: (_) => '/home/***/'),
+
+  // 7. Windows 用户目录：C:\Users\username\ → C:\Users\***\
+  (
+    pattern: RegExp(r'([A-Za-z]:\\[Uu]sers\\)[^\\\s]+\\'),
+    replace: (m) => '${m[1]}***\\',
+  ),
+
+  // 8. Analytics 设备 ID：deviceId=xxxxxxxx-... → deviceId=[REDACTED]
+  //    覆盖：[Analytics] initialized, consent=true, deviceId=35e2c0fd-...
+  (
+    pattern: RegExp(
+      r'(deviceId=)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+      caseSensitive: false,
+    ),
+    replace: (m) => '${m[1]}[REDACTED]',
+  ),
+];
+
+/// 对日志内容应用全部脱敏规则，返回脱敏后的文本。
+String _sanitizeLogContent(String content) {
+  for (final rule in _kSanitizeRules) {
+    content = content.replaceAllMapped(rule.pattern, rule.replace);
+  }
+  return content;
+}
+
+/// 对日志字节内容进行脱敏，返回脱敏后的字节。
+///
+/// 处理流程：UTF-8 解码（allowMalformed）→ 正则替换 → UTF-8 编码
+Uint8List _sanitizeLogBytes(Uint8List rawData) {
+  String content;
+  try {
+    content = utf8.decode(rawData, allowMalformed: true);
+  } catch (_) {
+    // 无法解码时原样返回，不阻断导出流程
+    return rawData;
+  }
+  return Uint8List.fromList(utf8.encode(_sanitizeLogContent(content)));
 }
