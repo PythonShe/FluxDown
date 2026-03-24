@@ -196,7 +196,11 @@ pub fn build_client(
     };
     let mut builder = Client::builder()
         .user_agent(ua)
-        // TLS — native-tls uses Windows Schannel (system cert store + AIA chain building)
+        // TLS — 跳过证书验证（过期、自签名、hostname 不匹配等）。
+        // 下载管理器与浏览器行为保持一致：浏览器允许用户忽略证书错误继续下载，
+        // 且企业内网邮箱等场景常见 hostname mismatch，严格验证会导致下载失败。
+        // 类似 curl -k / aria2 --check-certificate=false。
+        .danger_accept_invalid_certs(true)
         // HTTP version — force HTTP/1.1 for download manager use cases:
         //  1. Range requests are reliable and well-tested on HTTP/1.1.
         //  2. Multi-segment downloads use separate TCP connections; HTTP/2
@@ -885,10 +889,22 @@ pub async fn run_download(params: DownloadParams) {
         }
         Err(e) => {
             let msg = e.to_string();
+            // 追加完整错误链（root cause），方便排查网络/TLS 等底层错误。
+            // msg 已包含 reqwest 顶层描述，这里从 source 的 source 开始
+            // 避免重复打印同一层信息。
+            let chain = if let Some(src) = StdError::source(&e) {
+                format_error_chain(src.source())
+            } else {
+                String::new()
+            };
+            let full_msg = format!("{}{}", msg, chain);
             // checksum 失败时所有字节均已下载完毕（只是校验未通过），需特殊处理进度。
             let is_checksum_fail = matches!(e, DownloadError::ChecksumMismatch(_));
-            log_info!("[download] task {} error: {}", task_id_log, msg);
-            let _ = params.db.update_task_status(&params.task_id, 4, &msg).await;
+            log_info!("[download] task {} error: {}", task_id_log, full_msg);
+            let _ = params
+                .db
+                .update_task_status(&params.task_id, 4, &full_msg)
+                .await;
 
             // Preserve actual progress from DB so the UI doesn't jump back to 0%.
             let (dl, total) = match params.db.load_task_by_id(&params.task_id).await {
@@ -918,7 +934,7 @@ pub async fn run_download(params: DownloadParams) {
                     downloaded_bytes: dl,
                     total_bytes: total,
                     status: 4,
-                    error_message: msg,
+                    error_message: full_msg,
                     file_name: String::new(),
                     segment_details: None,
                 })
