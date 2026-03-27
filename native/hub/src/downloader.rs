@@ -170,10 +170,22 @@ pub(crate) fn apply_extra_headers(
 // HTTP client builder (shared config)
 // ---------------------------------------------------------------------------
 
-/// Default Chrome UA used when no user-agent override is provided.
-const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
-    AppleWebKit/537.36 (KHTML, like Gecko) \
-    Chrome/131.0.0.0 Safari/537.36";
+/// Default User-Agent for HTTP requests.
+///
+/// Uses a neutral download-manager identifier instead of a browser UA.
+///
+/// **Why not Chrome UA?**  Cloudflare's Bot Management compares the TLS
+/// fingerprint (JA3/JA4) against the declared User-Agent.  rustls produces a
+/// JA3 fingerprint that does not match Chrome's.  When a non-browser TLS
+/// fingerprint is paired with a Chrome UA, Cloudflare flags the request as
+/// bot traffic and returns 403/404 — this breaks downloads from any CDN
+/// behind Cloudflare (e.g. JetBrains' `download-cdn.clf.jetbrains.com.cn`).
+///
+/// When the browser extension captures a download it passes the real browser
+/// UA via `extra_headers`.  That UA is applied on the first attempt; if the
+/// server returns 4xx we automatically retry *without* the browser UA so that
+/// Cloudflare-protected CDNs also work (see [`resolve_file_info`]).
+const DEFAULT_UA: &str = "FluxDown/1.0";
 
 /// Build a properly configured HTTP client that mirrors Chrome's capabilities.
 ///
@@ -338,9 +350,15 @@ pub fn build_client(
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Maximum retries for the probe phase (HEAD + GET).
-/// Reduced from 3 to 2: first attempt + one retry covers DNS cold-start
-/// and transient failures without excessive delay.
-const PROBE_MAX_RETRIES: u32 = 2;
+///
+/// 3 attempts total:
+///   1. Original headers (incl. browser UA from extension, if any)
+///   2. Normal retry (same headers, covers DNS/TLS cold-start)
+///   3. **UA-downgrade retry** — strips browser UA from extra_headers so that
+///      the request uses the neutral `DEFAULT_UA`.  This handles Cloudflare
+///      Bot Management which rejects requests where the TLS fingerprint
+///      (rustls ≠ Chrome) contradicts a Chrome User-Agent header.
+const PROBE_MAX_RETRIES: u32 = 3;
 
 /// Base delay for probe retries (used with exponential backoff).
 const PROBE_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
@@ -357,9 +375,41 @@ pub async fn resolve_file_info(
     referrer: &str,
     extra_headers: &std::collections::HashMap<String, String>,
 ) -> Result<FileInfo, DownloadError> {
+    // Prepare a fallback header map that strips browser-like User-Agent.
+    // On the last attempt we use this to avoid Cloudflare JA3-vs-UA mismatch.
+    let headers_without_browser_ua: std::collections::HashMap<String, String> = extra_headers
+        .iter()
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("user-agent"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    let has_browser_ua = extra_headers
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case("user-agent"));
+
     let mut last_err = None;
     for attempt in 0..PROBE_MAX_RETRIES {
-        match resolve_file_info_once(client, url, cookies, referrer, extra_headers).await {
+        // Last attempt: if extra_headers carried a browser UA, drop it so
+        // the request falls back to DEFAULT_UA ("FluxDown/1.0").  This
+        // avoids Cloudflare's TLS-fingerprint-vs-UA bot detection.
+        let use_downgraded_ua = has_browser_ua && attempt + 1 == PROBE_MAX_RETRIES;
+        let hdrs = if use_downgraded_ua {
+            if attempt == 0 {
+                // Should not happen with PROBE_MAX_RETRIES >= 2, but guard anyway.
+                extra_headers
+            } else {
+                log_info!(
+                    "[resolve] retry {}/{}: stripping browser UA to avoid bot detection",
+                    attempt + 1,
+                    PROBE_MAX_RETRIES
+                );
+                &headers_without_browser_ua
+            }
+        } else {
+            extra_headers
+        };
+
+        match resolve_file_info_once(client, url, cookies, referrer, hdrs).await {
             Ok(info) => return Ok(info),
             Err(e) => {
                 log_info!(
@@ -2006,18 +2056,19 @@ mod tests {
 
     #[test]
     fn http_probe_timeout_is_reasonable() {
-        // Fixed: 15s per request, 2 retries with 1s base exponential backoff.
-        // HEAD+GET now run concurrently (max 15s per attempt, not 30s).
+        // 3 attempts: original → normal retry → UA-downgrade retry.
+        // HEAD+GET run concurrently (max 15s per attempt, not 30s).
         assert_eq!(PROBE_TIMEOUT, Duration::from_secs(15));
-        assert_eq!(PROBE_MAX_RETRIES, 2);
+        assert_eq!(PROBE_MAX_RETRIES, 3);
         assert_eq!(PROBE_RETRY_BASE_DELAY, Duration::from_secs(1));
 
-        // Worst case: 2 attempts × 15s (concurrent HEAD+GET) + 1s delay = 31s
+        // Worst case: 3 attempts × 15s + delays (1s + 2s) = 48s
         let worst_per_attempt = PROBE_TIMEOUT; // HEAD+GET concurrent
-        let worst_total = worst_per_attempt * PROBE_MAX_RETRIES + PROBE_RETRY_BASE_DELAY;
+        let delay_sum = PROBE_RETRY_BASE_DELAY + PROBE_RETRY_BASE_DELAY * 2; // 1s + 2s
+        let worst_total = worst_per_attempt * PROBE_MAX_RETRIES + delay_sum;
         assert!(
             worst_total <= Duration::from_secs(60),
-            "worst-case probe time {worst_total:?} should be <= 60s after fix"
+            "worst-case probe time {worst_total:?} should be <= 60s"
         );
     }
 
