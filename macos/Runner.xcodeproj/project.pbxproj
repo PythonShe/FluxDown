@@ -24,6 +24,7 @@
 		331C80D8294CF71000263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C80D7294CF71000263BE5 /* RunnerTests.swift */; };
 		335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */; };
 		FD01000000000001 /* fluxdown_nmh in CopyFiles */ = {isa = PBXBuildFile; fileRef = FD01000000000002 /* fluxdown_nmh */; settings = {ATTRIBUTES = (); }; };
+		FDLAL00000000001 /* LaunchAtLogin in Frameworks */ = {isa = PBXBuildFile; productRef = FDLAL00000000002 /* LaunchAtLogin */; };
 		33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC10F02044A3C60003C045 /* AppDelegate.swift */; };
 		33CC10F32044A3C60003C045 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F22044A3C60003C045 /* Assets.xcassets */; };
 		33CC10F62044A3C60003C045 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F42044A3C60003C045 /* MainMenu.xib */; };
@@ -117,6 +118,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A745AF7170FC8141C255FAD8 /* Pods_Runner.framework in Frameworks */,
+				FDLAL00000000001 /* LaunchAtLogin in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -265,6 +267,7 @@
 				FD01000000000005 /* Build fluxdown_nmh */,
 				FD01000000000003 /* Copy NMH to Bundle */,
 				EE0F816DB1BAF1F9CF6EB570 /* [CP] Embed Pods Frameworks */,
+				FDLAL00000000004 /* Copy Launch at Login Helper */,
 			);
 			buildRules = (
 			);
@@ -272,6 +275,9 @@
 				33CC11202044C79F0003C045 /* PBXTargetDependency */,
 			);
 			name = Runner;
+			packageProductDependencies = (
+				FDLAL00000000002 /* LaunchAtLogin */,
+			);
 			productName = Runner;
 			productReference = 33CC10ED2044A3C60003C045 /* flux_down.app */;
 			productType = "com.apple.product-type.application";
@@ -317,6 +323,9 @@
 			);
 			mainGroup = 33CC10E42044A3C60003C045;
 			productRefGroup = 33CC10EE2044A3C60003C045 /* Products */;
+			packageReferences = (
+				FDLAL00000000003 /* XCRemoteSwiftPackageReference "LaunchAtLogin" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -364,6 +373,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "echo \"$PRODUCT_NAME.app\" > \"$PROJECT_DIR\"/Flutter/ephemeral/.app_filename && \"$FLUTTER_ROOT\"/packages/flutter_tools/bin/macos_assemble.sh embed\n";
+		};
+		FDLAL00000000004 /* Copy Launch at Login Helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy \"Launch at Login Helper\"";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${BUILT_PRODUCTS_DIR}/LaunchAtLogin_LaunchAtLogin.bundle/Contents/Resources/copy-helper-swiftpm.sh\"\n";
+			showEnvVarsInLog = 0;
 		};
 		FD01000000000005 /* Build fluxdown_nmh */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -839,6 +868,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FDLAL00000000003 /* XCRemoteSwiftPackageReference "LaunchAtLogin" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sindresorhus/LaunchAtLogin";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FDLAL00000000002 /* LaunchAtLogin */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FDLAL00000000003 /* XCRemoteSwiftPackageReference "LaunchAtLogin" */;
+			productName = LaunchAtLogin;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 33CC10E52044A3C60003C045 /* Project object */;
 }
