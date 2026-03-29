@@ -10,6 +10,13 @@ export interface Announcement {
 
 export const ANNOUNCEMENTS: Announcement[] = [
   {
+    id: "logo-vote-active",
+    messageKey: "announcement.4",
+    link: "/logo-vote",
+    date: "2026-07-15",
+    active: true,
+  },
+  {
     id: "telegram-group-created",
     messageKey: "announcement.3",
     link: "/telegram-group",

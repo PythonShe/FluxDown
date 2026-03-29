@@ -201,6 +201,22 @@ const icons = {
       <path d="M11.6 16.8a3 3 0 1 1-5.8-1.6" />
     </svg>
   ),
+  logoVote: (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M8 12h8" />
+      <path d="M12 8v8" />
+    </svg>
+  ),
   feedback: (
     <svg
       width="14"
@@ -271,6 +287,11 @@ export function FloatingNavbar({ className }: { className?: string }) {
         name: t("nav.announcements"),
         link: "/announcements",
         icon: icons.announcements,
+      },
+      {
+        name: t("nav.logoVote"),
+        link: "/logo-vote",
+        icon: icons.logoVote,
       },
       { name: t("nav.feedback"), link: "/feedback", icon: icons.feedback },
     ],
