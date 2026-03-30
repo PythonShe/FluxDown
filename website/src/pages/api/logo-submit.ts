@@ -43,7 +43,7 @@ setInterval(() => {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const LOGO_ISSUE_TITLE_PREFIX = "[Logo]";
-const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -227,7 +227,7 @@ export const POST: APIRoute = async ({ request, clientAddress }) => {
   }
   if (file.size > MAX_FILE_SIZE_BYTES) {
     return json(
-      { error: "File too large. Maximum allowed size is 2 MB." },
+      { error: "File too large. Maximum allowed size is 10 MB." },
       413,
     );
   }

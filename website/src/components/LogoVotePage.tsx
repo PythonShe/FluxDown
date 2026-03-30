@@ -15,7 +15,7 @@ interface LogoItem {
 }
 
 const STORAGE_PREFIX = "fluxdown-logo-voted-";
-const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_TYPES = [
   "image/png",
   "image/jpeg",
@@ -513,7 +513,8 @@ export default function LogoVotePage() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
-      if (submitName.trim()) formData.append("submitterName", submitName.trim());
+      if (submitName.trim())
+        formData.append("submitterName", submitName.trim());
       if (submitDesc.trim()) formData.append("description", submitDesc.trim());
 
       const res = await fetch("/api/logo-submit", {
