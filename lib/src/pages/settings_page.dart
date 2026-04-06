@@ -10,6 +10,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../main.dart';
 import '../bindings/bindings.dart';
 import '../i18n/locale_provider.dart';
+import '../models/custom_category.dart';
 import '../models/download_controller.dart';
 import '../models/download_queue.dart';
 import '../models/settings_provider.dart';
@@ -18,6 +19,7 @@ import '../services/update_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/flux_theme_tokens.dart';
 import '../theme/theme_provider.dart';
+import '../widgets/category_edit_dialog.dart';
 import '../widgets/dir_picker_field.dart';
 import '../widgets/thread_selector.dart';
 import '../widgets/title_drag_area.dart';
@@ -127,6 +129,13 @@ List<SettingsSearchItem> get settingsSearchItems {
       description: s.sidebarVisibilityDesc,
       keywords: s.searchKeywordsSidebarVisibility,
       icon: LucideIcons.panelLeft,
+    ),
+    SettingsSearchItem(
+      category: SettingsCategory.general,
+      label: s.customCategories,
+      description: s.customCategoriesDesc,
+      keywords: s.searchKeywordsCustomCategories,
+      icon: LucideIcons.layoutList,
     ),
     SettingsSearchItem(
       category: SettingsCategory.appearance,
@@ -810,9 +819,447 @@ class _GeneralContent extends StatelessWidget {
                 onChanged: (v) => settingsProvider.setShowSidebarCategory(v),
               ),
             ),
+            const SizedBox(height: 20),
+            // 自定义分类管理
+            _CustomCategoryManager(settingsProvider: settingsProvider),
           ],
         );
       },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 分类管理（内置 + 自定义统一列表）
+// ─────────────────────────────────────────────
+
+class _CustomCategoryManager extends StatelessWidget {
+  final SettingsProvider settingsProvider;
+
+  const _CustomCategoryManager({required this.settingsProvider});
+
+  /// 内置分类的 i18n 名称
+  static String _builtinLabel(S s, String? builtinType) => switch (builtinType) {
+    'all' => s.categoryAll,
+    'video' => s.categoryVideo,
+    'audio' => s.categoryAudio,
+    'document' => s.categoryDocument,
+    'image' => s.categoryImage,
+    'archive' => s.categoryArchive,
+    'other' => s.categoryOther,
+    _ => '',
+  };
+
+  /// 获取分类显示名称（内置用 i18n，自定义用用户设置的名称）
+  static String displayName(S s, CustomCategory cat) {
+    if (cat.isBuiltin) return _builtinLabel(s, cat.builtinType);
+    return cat.name;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = LocaleScope.of(context);
+    final c = AppColors.of(context);
+    final categories = settingsProvider.customCategories;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 标题行
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    s.customCategories,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: c.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    s.categoryPriorityNote,
+                    style: TextStyle(fontSize: 11.5, color: c.textMuted),
+                  ),
+                ],
+              ),
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ShadButton.outline(
+                  size: ShadButtonSize.sm,
+                  onPressed: () => _confirmResetAll(context, s, c),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(LucideIcons.rotateCcw, size: 13, color: c.textMuted),
+                      const SizedBox(width: 4),
+                      Text(s.resetBuiltinCategories),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ShadButton.outline(
+                  size: ShadButtonSize.sm,
+                  onPressed: () => _showCategoryDialog(context, s, c),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(LucideIcons.plus, size: 13, color: c.textSecondary),
+                      const SizedBox(width: 4),
+                      Text(s.addCategory),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        // 分类列表（Column 替代 ReorderableListView，避免 MaterialLocalizations 依赖）
+        for (int i = 0; i < categories.length; i++)
+          _CategoryTile(
+            category: categories[i],
+            index: i,
+            total: categories.length,
+            c: c,
+            s: s,
+            onEdit: () => _showCategoryDialog(
+              context, s, c,
+              existing: categories[i],
+            ),
+            onDelete: categories[i].isBuiltin
+                ? null
+                : () => _confirmDelete(context, s, c, categories[i]),
+            onReset: categories[i].isBuiltin
+                ? () => settingsProvider
+                    .resetBuiltinCategory(categories[i].builtinType!)
+                : null,
+            onToggleVisible: () => settingsProvider.updateCustomCategory(
+              categories[i].copyWith(visible: !categories[i].visible),
+            ),
+            onMoveUp: i > 0
+                ? () => settingsProvider.reorderCustomCategories(i, i - 1)
+                : null,
+            onMoveDown: i < categories.length - 1
+                ? () => settingsProvider.reorderCustomCategories(i, i + 2)
+                : null,
+          ),
+      ],
+    );
+  }
+
+  void _showCategoryDialog(
+    BuildContext context,
+    S s,
+    AppColors c, {
+    CustomCategory? existing,
+  }) {
+    showCategoryEditDialog(
+      context,
+      existing: existing,
+      onSave: (category) {
+        if (existing != null) {
+          settingsProvider.updateCustomCategory(category);
+        } else {
+          settingsProvider.addCustomCategory(category);
+        }
+      },
+    );
+  }
+
+  void _confirmDelete(
+      BuildContext context, S s, AppColors c, CustomCategory cat) {
+    showShadDialog(
+      context: context,
+      barrierColor: c.dialogBarrier,
+      animateIn: const [],
+      animateOut: const [],
+      builder: (ctx) => ShadDialog(
+        title: Text(s.deleteCategory),
+        description: Text(s.deleteCategoryConfirm),
+        actions: [
+          ShadButton.outline(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(s.cancel),
+          ),
+          ShadButton.destructive(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              settingsProvider.removeCustomCategory(cat.id);
+            },
+            child: Text(s.deleteCategory),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmResetAll(BuildContext context, S s, AppColors c) {
+    showShadDialog(
+      context: context,
+      barrierColor: c.dialogBarrier,
+      animateIn: const [],
+      animateOut: const [],
+      builder: (ctx) => ShadDialog(
+        title: Text(s.resetBuiltinCategories),
+        description: Text(s.resetAllCategoriesConfirm),
+        actions: [
+          ShadButton.outline(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(s.cancel),
+          ),
+          ShadButton.destructive(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              settingsProvider.resetAllCategories();
+            },
+            child: Text(s.confirm),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// 单个分类条目（内置 + 自定义通用）
+class _CategoryTile extends StatefulWidget {
+  final CustomCategory category;
+  final int index;
+  final int total;
+  final AppColors c;
+  final S s;
+  final VoidCallback onEdit;
+  final VoidCallback? onDelete;
+  final VoidCallback? onReset;
+  final VoidCallback onToggleVisible;
+  final VoidCallback? onMoveUp;
+  final VoidCallback? onMoveDown;
+
+  const _CategoryTile({
+    required this.category,
+    required this.index,
+    required this.total,
+    required this.c,
+    required this.s,
+    required this.onEdit,
+    this.onDelete,
+    this.onReset,
+    required this.onToggleVisible,
+    this.onMoveUp,
+    this.onMoveDown,
+  });
+
+  @override
+  State<_CategoryTile> createState() => _CategoryTileState();
+}
+
+class _CategoryTileState extends State<_CategoryTile> {
+  bool _isHovered = false;
+
+  /// 描述文本：内置特殊分类显示"内置"，其余显示扩展名或正则
+  String _subtitle(CustomCategory cat, S s) {
+    // "全部文件" 和 "其他" 不显示扩展名
+    if (cat.builtinType == 'all' || cat.builtinType == 'other') {
+      return s.builtinCategory;
+    }
+    if (cat.matchMode == MatchMode.extension && cat.extensions.isNotEmpty) {
+      return cat.extensions.map((e) => '.$e').join(', ');
+    }
+    if (cat.matchMode == MatchMode.regex && cat.regexPattern.isNotEmpty) {
+      return cat.regexPattern;
+    }
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cat = widget.category;
+    final c = widget.c;
+    final s = widget.s;
+    final label = _CustomCategoryManager.displayName(s, cat);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: _isHovered ? c.hoverBg : c.surface1,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: c.border),
+        ),
+        child: Row(
+          children: [
+            // 上下移动按钮
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _TileAction(
+                  icon: LucideIcons.chevronUp,
+                  color: widget.onMoveUp != null ? c.textMuted : c.border,
+                  onTap: widget.onMoveUp ?? () {},
+                ),
+                _TileAction(
+                  icon: LucideIcons.chevronDown,
+                  color: widget.onMoveDown != null ? c.textMuted : c.border,
+                  onTap: widget.onMoveDown ?? () {},
+                ),
+              ],
+            ),
+            const SizedBox(width: 6),
+            // 图标
+            Icon(categoryIconData(cat.icon), size: 16, color: c.accent),
+            const SizedBox(width: 8),
+            // 名称 + 匹配规则 + 标签
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w500,
+                            color: cat.visible ? c.textPrimary : c.textMuted,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (cat.isBuiltin) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: c.accent.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            s.builtinCategory,
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: c.accent,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (!cat.visible) ...[
+                        const SizedBox(width: 6),
+                        Icon(LucideIcons.eyeOff, size: 11, color: c.textMuted),
+                      ],
+                    ],
+                  ),
+                  if (_subtitle(cat, s).isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      _subtitle(cat, s),
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: c.textMuted,
+                        fontFamily: cat.matchMode == MatchMode.regex
+                            ? 'monospace'
+                            : null,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            // 操作按钮
+            if (_isHovered) ...[
+              _TileAction(
+                icon: cat.visible ? LucideIcons.eye : LucideIcons.eyeOff,
+                color: c.textMuted,
+                onTap: widget.onToggleVisible,
+              ),
+              const SizedBox(width: 2),
+              // 内置分类: 非 all/other 可编辑; 自定义分类: 总是可编辑
+              if (!cat.isBuiltin ||
+                  (cat.builtinType != 'all' && cat.builtinType != 'other')) ...[
+                _TileAction(
+                  icon: LucideIcons.pencil,
+                  color: c.textSecondary,
+                  onTap: widget.onEdit,
+                ),
+                const SizedBox(width: 2),
+              ],
+              // 内置: 重置按钮; 自定义: 删除按钮
+              if (widget.onReset != null &&
+                  cat.builtinType != 'all' &&
+                  cat.builtinType != 'other')
+                _TileAction(
+                  icon: LucideIcons.rotateCcw,
+                  color: c.textMuted,
+                  onTap: widget.onReset!,
+                ),
+              if (widget.onDelete != null)
+                _TileAction(
+                  icon: LucideIcons.trash2,
+                  color: AppColors.red,
+                  onTap: widget.onDelete!,
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TileAction extends StatefulWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _TileAction({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  State<_TileAction> createState() => _TileActionState();
+}
+
+class _TileActionState extends State<_TileAction> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+            color: _hover
+                ? widget.color.withValues(alpha: 0.1)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Icon(widget.icon, size: 12, color: widget.color),
+        ),
+      ),
     );
   }
 }

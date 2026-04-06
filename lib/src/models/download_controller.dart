@@ -8,8 +8,10 @@ import '../bindings/bindings.dart';
 import '../services/analytics_service.dart';
 import '../services/log_service.dart';
 import '../i18n/locale_provider.dart';
+import 'custom_category.dart';
 import 'download_queue.dart';
 import 'download_task.dart';
+
 
 const _tag = 'DownloadCtrl';
 
@@ -23,6 +25,9 @@ class DownloadController extends ChangeNotifier {
   final List<DownloadTask> _tasks = [];
   String? _selectedTaskId;
   FileCategory _categoryFilter = FileCategory.all;
+  CustomCategory? _customCategoryFilter;
+  /// 当前可见的非特殊分类列表（用于计算 "other" 排除逻辑）
+  List<CustomCategory> _visibleNormalCategories = [];
   StatusTab _statusTab = StatusTab.all;
 
   /// 命名队列列表（来自 Rust AllQueues 信号）
@@ -177,6 +182,7 @@ class DownloadController extends ChangeNotifier {
   List<DownloadTask> get tasks => _tasks;
 
   FileCategory get categoryFilter => _categoryFilter;
+  CustomCategory? get customCategoryFilter => _customCategoryFilter;
   StatusTab get statusTab => _statusTab;
 
   /// 命名队列列表（已按 position 排序）
@@ -191,11 +197,29 @@ class DownloadController extends ChangeNotifier {
     return _tasks.where((t) => t.queueId == _queueFilter).toList();
   }
 
+  /// 队列过滤后的任务列表（公开给侧边栏计数使用）
+  List<DownloadTask> get queueFilteredTasks => _queueFiltered;
+
   /// 按文件类型过滤（在队列过滤基础上叠加）
+  /// 统一使用 CustomCategory 匹配（内置 + 自定义）
   List<DownloadTask> get _categoryFiltered {
     final byQueue = _queueFiltered;
-    if (_categoryFilter == FileCategory.all) return byQueue;
-    return byQueue.where((t) => t.fileCategory == _categoryFilter).toList();
+    final filter = _customCategoryFilter;
+    if (filter == null) {
+      // 无分类筛选 或 "全部"
+      if (_categoryFilter == FileCategory.all) return byQueue;
+      return byQueue.where((t) => t.fileCategory == _categoryFilter).toList();
+    }
+    // "全部" 内置类型
+    if (filter.builtinType == 'all') return byQueue;
+    // "其他" — 不匹配任何可见的正常分类
+    if (filter.builtinType == 'other') {
+      return byQueue
+          .where((t) => !_visibleNormalCategories.any((c) => c.matches(t.fileName)))
+          .toList();
+    }
+    // 正常分类（内置或自定义）
+    return byQueue.where((t) => filter.matches(t.fileName)).toList();
   }
 
   /// 双维度组合过滤后的任务列表（侧边栏文件类型 + 顶部状态 Tab）
@@ -321,6 +345,25 @@ class DownloadController extends ChangeNotifier {
     final base = _queueFiltered;
     if (category == FileCategory.all) return base.length;
     return base.where((t) => t.fileCategory == category).length;
+  }
+
+  /// 自定义分类的任务数量
+  int countForCustomCategory(CustomCategory category) {
+    final base = _queueFiltered;
+    return base.where((t) => category.matches(t.fileName)).length;
+  }
+
+  /// 统一分类的任务数量（支持 all/other/normal）
+  int countForUnifiedCategory(CustomCategory category, List<CustomCategory> allVisible) {
+    final base = _queueFiltered;
+    if (category.builtinType == 'all') return base.length;
+    if (category.builtinType == 'other') {
+      final normals = allVisible
+          .where((c) => c.builtinType != 'all' && c.builtinType != 'other')
+          .toList();
+      return base.where((t) => !normals.any((c) => c.matches(t.fileName))).length;
+    }
+    return base.where((t) => category.matches(t.fileName)).length;
   }
 
   /// 各状态的任务数量（用于侧边栏状态区块计数）。
@@ -727,8 +770,26 @@ class DownloadController extends ChangeNotifier {
   }
 
   void setCategoryFilter(FileCategory category) {
-    if (_categoryFilter == category) return;
+    final changed =
+        _categoryFilter != category || _customCategoryFilter != null;
     _categoryFilter = category;
+    _customCategoryFilter = null;
+    if (!changed) return;
+    _safeNotifyListeners();
+  }
+
+  /// 设置统一分类筛选（内置或自定义均走此方法）。
+  /// [allVisible] 当前可见的全部分类列表，用于计算 "other" 排除逻辑。
+  void setCustomCategoryFilter(CustomCategory? category, {List<CustomCategory> allVisible = const []}) {
+    if (category == null && _customCategoryFilter == null) return;
+    if (category != null && _customCategoryFilter?.id == category.id) return;
+    _customCategoryFilter = category;
+    _visibleNormalCategories = allVisible
+        .where((c) => c.builtinType != 'all' && c.builtinType != 'other')
+        .toList();
+    if (category != null) {
+      _categoryFilter = FileCategory.all;
+    }
     _safeNotifyListeners();
   }
 

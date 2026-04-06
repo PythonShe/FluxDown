@@ -3,13 +3,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 import 'package:window_manager/window_manager.dart';
+import '../models/custom_category.dart';
 import '../models/download_controller.dart';
 import '../models/download_queue.dart';
-import '../models/download_task.dart';
+
 import '../services/update_service.dart';
 import '../i18n/locale_provider.dart';
 import '../models/settings_provider.dart';
 import '../theme/app_colors.dart';
+import 'category_edit_dialog.dart';
 import 'context_menu.dart';
 
 class Sidebar extends StatefulWidget {
@@ -23,11 +25,7 @@ class Sidebar extends StatefulWidget {
 }
 
 class _SidebarState extends State<Sidebar> {
-  /// 队列区块是否展开（默认展开）
-  bool _queuesExpanded = true;
 
-  /// 分类区块是否展开（默认折叠，降低视觉噪音）
-  bool _categoryExpanded = false;
 
   // ─────────────────────────────────────────────
   // 图标映射
@@ -39,16 +37,6 @@ class _SidebarState extends State<Sidebar> {
     StatusTab.completed => LucideIcons.circleCheck,
     StatusTab.paused => LucideIcons.circlePause,
     StatusTab.error => LucideIcons.circleAlert,
-  };
-
-  static IconData _categoryIcon(FileCategory cat) => switch (cat) {
-    FileCategory.all => LucideIcons.folders,
-    FileCategory.video => LucideIcons.film,
-    FileCategory.audio => LucideIcons.music,
-    FileCategory.document => LucideIcons.fileText,
-    FileCategory.image => LucideIcons.image,
-    FileCategory.archive => LucideIcons.archive,
-    FileCategory.other => LucideIcons.file,
   };
 
   static String _statusLabel(S s, StatusTab tab) => switch (tab) {
@@ -217,16 +205,16 @@ class _SidebarState extends State<Sidebar> {
           ),
           child: _CollapsibleSectionHeader(
             title: s.sidebarQueues,
-            expanded: _queuesExpanded,
+            expanded: widget.settingsProvider.sidebarQueuesExpanded,
             c: c,
-            onToggle: () => setState(() => _queuesExpanded = !_queuesExpanded),
+            onToggle: () => widget.settingsProvider.setSidebarQueuesExpanded(!widget.settingsProvider.sidebarQueuesExpanded),
             trailing: _QueueAddButton(
               c: c,
               onTap: () => _showCreateQueueDialog(context, ctrl, s, c),
             ),
           ),
         ),
-        if (_queuesExpanded) ...[
+        if (widget.settingsProvider.sidebarQueuesExpanded) ...[
           const SizedBox(height: 4),
           // 默认队列
           _NavItem(
@@ -377,8 +365,23 @@ class _SidebarState extends State<Sidebar> {
   // 分类区块（可折叠）
   // ─────────────────────────────────────────────
 
+  /// 内置分类的 i18n 名称映射
+  static String _builtinCategoryLabel(S s, String? builtinType) =>
+      switch (builtinType) {
+        'all' => s.categoryAll,
+        'video' => s.categoryVideo,
+        'audio' => s.categoryAudio,
+        'document' => s.categoryDocument,
+        'image' => s.categoryImage,
+        'archive' => s.categoryArchive,
+        'other' => s.categoryOther,
+        _ => '',
+      };
+
   Widget _buildCategorySection(DownloadController ctrl, S s, AppColors c) {
-    final selectedCategory = ctrl.categoryFilter;
+    final customFilter = ctrl.customCategoryFilter;
+    final visibleCategories = widget.settingsProvider.visibleCategories;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -389,21 +392,31 @@ class _SidebarState extends State<Sidebar> {
           ),
           child: _CollapsibleSectionHeader(
             title: s.sidebarCategory,
-            expanded: _categoryExpanded,
+            expanded: widget.settingsProvider.sidebarCategoryExpanded,
             c: c,
             onToggle: () =>
-                setState(() => _categoryExpanded = !_categoryExpanded),
+                widget.settingsProvider.setSidebarCategoryExpanded(!widget.settingsProvider.sidebarCategoryExpanded),
           ),
         ),
-        if (_categoryExpanded) ...[
+        if (widget.settingsProvider.sidebarCategoryExpanded) ...[
           const SizedBox(height: 4),
-          for (final cat in FileCategory.values)
-            _NavItem(
-              icon: _categoryIcon(cat),
-              label: cat.label,
-              count: ctrl.countForCategory(cat),
-              isSelected: selectedCategory == cat,
-              onTap: () => ctrl.setCategoryFilter(cat),
+          for (final cat in visibleCategories)
+            GestureDetector(
+              onSecondaryTapUp: (d) => _showCategoryItemContextMenu(
+                context, d.globalPosition, s, c, cat,
+              ),
+              child: _NavItem(
+                icon: categoryIconData(cat.icon),
+                label: cat.isBuiltin
+                    ? _builtinCategoryLabel(s, cat.builtinType)
+                    : cat.name,
+                count: ctrl.countForUnifiedCategory(cat, visibleCategories),
+                isSelected: customFilter?.id == cat.id,
+                onTap: () => ctrl.setCustomCategoryFilter(
+                  cat,
+                  allVisible: visibleCategories,
+                ),
+              ),
             ),
         ],
       ],
@@ -428,6 +441,61 @@ class _SidebarState extends State<Sidebar> {
           action: onHide,
         ),
       ],
+    );
+  }
+
+  void _showCategoryItemContextMenu(
+    BuildContext context,
+    Offset position,
+    S s,
+    AppColors c,
+    CustomCategory cat,
+  ) {
+    // "全部文件" 和 "其他" 只能隐藏
+    final isSpecial = cat.builtinType == 'all' || cat.builtinType == 'other';
+
+    showContextMenu(
+      context,
+      position,
+      items: [
+        // 编辑（非 all/other 可编辑）
+        if (!isSpecial)
+          ContextMenuItem(
+            icon: LucideIcons.pencil,
+            label: s.editCategory,
+            color: c.textSecondary,
+            action: () => showCategoryEditDialog(
+              context,
+              existing: cat,
+              onSave: (updated) => widget.settingsProvider.updateCustomCategory(updated),
+            ),
+          ),
+        // 隐藏
+        ContextMenuItem(
+          icon: LucideIcons.eyeOff,
+          label: s.hideSection,
+          color: c.textSecondary,
+          action: () => widget.settingsProvider.updateCustomCategory(
+            cat.copyWith(visible: false),
+          ),
+        ),
+        // 内置分类: 重置; 自定义分类: 删除
+        if (cat.isBuiltin && !isSpecial)
+          ContextMenuItem(
+            icon: LucideIcons.rotateCcw,
+            label: s.resetBuiltinCategories,
+            color: c.textMuted,
+            action: () => widget.settingsProvider.resetBuiltinCategory(cat.builtinType!),
+          ),
+        if (!cat.isBuiltin)
+          ContextMenuItem(
+            icon: LucideIcons.trash2,
+            label: s.deleteCategory,
+            color: AppColors.red,
+            action: () => widget.settingsProvider.removeCustomCategory(cat.id),
+          ),
+      ],
+      dividerAfterIndices: {isSpecial ? 0 : 1},
     );
   }
 }

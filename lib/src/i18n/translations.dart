@@ -416,6 +416,48 @@ class S {
       _t('在侧边栏显示分类区块', 'Show category section in sidebar');
   String get hideSection => _t('隐藏此区块', 'Hide this section');
 
+  // ─────────────────────────────────────────────
+  // 自定义分类
+  // ─────────────────────────────────────────────
+
+  String get customCategories => _t('自定义分类', 'Custom Categories');
+  String get customCategoriesDesc => _t(
+    '创建自定义文件分类，按扩展名或正则表达式匹配',
+    'Create custom file categories, match by extension or regex',
+  );
+  String get addCategory => _t('添加分类', 'Add Category');
+  String get editCategory => _t('编辑分类', 'Edit Category');
+  String get deleteCategory => _t('删除分类', 'Delete Category');
+  String get deleteCategoryConfirm => _t(
+    '确定要删除此自定义分类吗？已下载的文件不受影响。',
+    'Are you sure you want to delete this custom category? Downloaded files are not affected.',
+  );
+  String get categoryName => _t('分类名称', 'Category Name');
+  String get categoryNameHint => _t('例如：电子书', 'e.g. eBooks');
+  String get categoryIcon => _t('图标', 'Icon');
+  String get matchMode => _t('匹配方式', 'Match Mode');
+  String get matchByExtension => _t('按扩展名', 'By Extension');
+  String get matchByRegex => _t('按正则表达式', 'By Regex');
+  String get extensionsLabel => _t('扩展名', 'Extensions');
+  String get extensionsHint => _t('逗号分隔，如：epub, mobi, azw3', 'Comma separated, e.g. epub, mobi, azw3');
+  String get regexLabel => _t('正则表达式', 'Regex Pattern');
+  String get regexHint => _t(r'匹配文件名，如：.*\.(epub|mobi)$', r'Match filename, e.g. .*\.(epub|mobi)$');
+  String get regexInvalid => _t('正则表达式无效', 'Invalid regex pattern');
+  String get categoryNameRequired => _t('请输入分类名称', 'Category name is required');
+  String get extensionsRequired => _t('请输入至少一个扩展名', 'Enter at least one extension');
+  String get nCustomCategories => _t('个自定义分类', ' custom categories');
+  String get resetBuiltinCategories => _t('恢复默认', 'Reset Defaults');
+  String get resetAllCategoriesConfirm => _t(
+    '确定要恢复所有分类为默认状态吗？自定义分类将被删除，内置分类将恢复初始配置。',
+    'Reset all categories to defaults? Custom categories will be removed and built-in categories will be restored to their initial configuration.',
+  );
+  String get builtinCategory => _t('内置', 'Built-in');
+  String get customCategory => _t('自定义', 'Custom');
+  String get categoryPriorityNote => _t(
+    '自定义分类优先于内置分类匹配，上下箭头可调整顺序',
+    'Custom categories take priority over built-in ones. Use arrows to reorder.',
+  );
+
   String get settingFailed => _t('设置失败', 'Setting Failed');
   String get autoStartupFailedDesc => _t(
     '无法修改开机自启动设置，请检查系统权限。',
@@ -784,6 +826,10 @@ class S {
   List<String> get searchKeywordsSidebarVisibility => _t(
     '侧边栏,显示,隐藏,区块,状态,队列,分类',
     'sidebar,show,hide,section,status,queue,category',
+  ).split(',');
+  List<String> get searchKeywordsCustomCategories => _t(
+    '自定义,分类,扩展名,正则,文件类型,筛选',
+    'custom,category,extension,regex,file type,filter',
   ).split(',');
 
   // ─────────────────────────────────────────────

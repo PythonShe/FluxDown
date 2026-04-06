@@ -8,6 +8,7 @@ import 'package:rinf/rinf.dart';
 import '../bindings/bindings.dart';
 import '../services/analytics_service.dart';
 import '../services/log_service.dart';
+import 'custom_category.dart';
 
 /// 下载引擎相关配置（持久化在 Rust SQLite 中）
 class SettingsProvider extends ChangeNotifier {
@@ -29,6 +30,13 @@ class SettingsProvider extends ChangeNotifier {
   bool _showSidebarStatus = true;    // 显示状态区块
   bool _showSidebarQueues = true;    // 显示队列区块
   bool _showSidebarCategory = true;  // 显示分类区块
+
+  // 侧边栏折叠状态（持久化）
+  bool _sidebarQueuesExpanded = true;    // 队列区块展开
+  bool _sidebarCategoryExpanded = false; // 分类区块展开（默认折叠）
+
+  // 自定义分类
+  List<CustomCategory> _customCategories = [];
 
   // 文件关联
   bool _torrentAssocPrompted = false; // 是否已弹窗提示过文件关联
@@ -113,6 +121,17 @@ class SettingsProvider extends ChangeNotifier {
   bool get showSidebarStatus => _showSidebarStatus;
   bool get showSidebarQueues => _showSidebarQueues;
   bool get showSidebarCategory => _showSidebarCategory;
+
+  bool get sidebarQueuesExpanded => _sidebarQueuesExpanded;
+  bool get sidebarCategoryExpanded => _sidebarCategoryExpanded;
+
+  // 自定义分类 Getter
+  List<CustomCategory> get customCategories => List.unmodifiable(_customCategories);
+
+  /// 可见的分类（排序后），供侧边栏使用
+  List<CustomCategory> get visibleCategories =>
+      _customCategories.where((c) => c.visible).toList()
+        ..sort((a, b) => a.position.compareTo(b.position));
 
   // 文件关联 Getters
   bool get torrentAssocPrompted => _torrentAssocPrompted;
@@ -229,6 +248,80 @@ class SettingsProvider extends ChangeNotifier {
     _showSidebarCategory = value;
     notifyListeners();
     _saveToRust('show_sidebar_category', value.toString());
+  }
+
+  void setSidebarQueuesExpanded(bool value) {
+    if (_sidebarQueuesExpanded == value) return;
+    _sidebarQueuesExpanded = value;
+    notifyListeners();
+    _saveToRust('sidebar_queues_expanded', value.toString());
+  }
+
+  void setSidebarCategoryExpanded(bool value) {
+    if (_sidebarCategoryExpanded == value) return;
+    _sidebarCategoryExpanded = value;
+    notifyListeners();
+    _saveToRust('sidebar_category_expanded', value.toString());
+  }
+
+  // 自定义分类 Setters
+
+  void setCustomCategories(List<CustomCategory> categories) {
+    _customCategories = List.of(categories);
+    notifyListeners();
+    _saveToRust('custom_categories', CustomCategory.encodeList(_customCategories));
+  }
+
+  void addCustomCategory(CustomCategory category) {
+    _customCategories.add(category);
+    notifyListeners();
+    _saveToRust('custom_categories', CustomCategory.encodeList(_customCategories));
+  }
+
+  void updateCustomCategory(CustomCategory updated) {
+    final idx = _customCategories.indexWhere((c) => c.id == updated.id);
+    if (idx < 0) return;
+    _customCategories[idx] = updated;
+    notifyListeners();
+    _saveToRust('custom_categories', CustomCategory.encodeList(_customCategories));
+  }
+
+  void removeCustomCategory(String id) {
+    _customCategories.removeWhere((c) => c.id == id);
+    notifyListeners();
+    _saveToRust('custom_categories', CustomCategory.encodeList(_customCategories));
+  }
+
+  void reorderCustomCategories(int oldIndex, int newIndex) {
+    if (oldIndex < newIndex) newIndex -= 1;
+    final item = _customCategories.removeAt(oldIndex);
+    _customCategories.insert(newIndex, item);
+    // 更新 position 字段
+    for (int i = 0; i < _customCategories.length; i++) {
+      _customCategories[i] = _customCategories[i].copyWith(position: i);
+    }
+    notifyListeners();
+    _saveToRust('custom_categories', CustomCategory.encodeList(_customCategories));
+  }
+
+  /// 重置某个内置分类到默认状态
+  void resetBuiltinCategory(String builtinType) {
+    final defaults = CustomCategory.defaultCategories();
+    final defaultCat = defaults.where((c) => c.builtinType == builtinType).firstOrNull;
+    if (defaultCat == null) return;
+    final idx = _customCategories.indexWhere((c) => c.builtinType == builtinType);
+    if (idx >= 0) {
+      _customCategories[idx] = defaultCat.copyWith(position: _customCategories[idx].position);
+    }
+    notifyListeners();
+    _saveToRust('custom_categories', CustomCategory.encodeList(_customCategories));
+  }
+
+  /// 重置所有分类为默认状态（删除自定义分类，恢复内置分类）
+  void resetAllCategories() {
+    _customCategories = CustomCategory.defaultCategories();
+    notifyListeners();
+    _saveToRust('custom_categories', CustomCategory.encodeList(_customCategories));
   }
 
   // 代理设置 Setters
@@ -488,10 +581,20 @@ class SettingsProvider extends ChangeNotifier {
           _showSidebarQueues = entry.value != 'false';
         case 'show_sidebar_category':
           _showSidebarCategory = entry.value != 'false';
+        case 'sidebar_queues_expanded':
+          _sidebarQueuesExpanded = entry.value != 'false';
+        case 'sidebar_category_expanded':
+          _sidebarCategoryExpanded = entry.value == 'true';
+        case 'custom_categories':
+          _customCategories = CustomCategory.decodeList(entry.value);
       }
     }
     _loaded = true;
     notifyListeners();
+    // 首次启动：若无自定义分类配置，使用内置默认分类
+    if (_customCategories.isEmpty) {
+      _customCategories = CustomCategory.defaultCategories();
+    }
     // 配置加载后，立即查询文件关联的实际状态（仅启用了文件关联功能的实例）
     if (_enableFileAssoc) {
       checkFileAssociation();

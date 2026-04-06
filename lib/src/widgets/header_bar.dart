@@ -657,7 +657,6 @@ class WindowControls extends StatelessWidget {
   }
 
   Widget _buildToolButtons(BuildContext context) {
-    final c = AppColors.of(context);
     final themeProvider = FluxDownApp.of(context);
     return SizedBox(
       height: 48,
