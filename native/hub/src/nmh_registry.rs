@@ -352,12 +352,12 @@ mod inner {
 
     const NMH_NAME: &str = "com.fluxdown.nmh";
     const NMH_DESCRIPTION: &str = "FluxDown Native Messaging Host";
-    /// On Linux the binary has no .exe extension.
     const NMH_EXE_NAME: &str = "fluxdown_nmh";
-    /// On Linux, Chromium manifest is in a Chromium-specific directory.
+    /// Shell wrapper script registered in the NMH manifest.
+    /// Provides a stable path even for AppImage builds where the real binary
+    /// lives at a random FUSE mount point that changes on every launch.
+    const NMH_WRAPPER_NAME: &str = "fluxdown_nmh.sh";
     const MANIFEST_FILENAME_CHROMIUM: &str = "com.fluxdown.nmh.json";
-    /// On Linux, Firefox looks for the manifest by file name (must equal the host name).
-    /// Windows uses a registry path so can have a different filename; Linux cannot.
     const MANIFEST_FILENAME_FIREFOX: &str = "com.fluxdown.nmh.json";
     const CHROME_EXTENSION_ID: &str = "chrome-extension://meleenglfggcmcajknpeeeiobnpfmahc/";
     const FIREFOX_EXTENSION_ID: &str = "fluxdown@fluxdown.app";
@@ -386,26 +386,73 @@ mod inner {
         std::env::var("HOME").ok().map(PathBuf::from)
     }
 
-    /// Chromium-family browser NMH manifest directories (Chrome, Chromium, Edge).
+    /// All Chromium-family NMH manifest directories on Linux.
+    ///
+    /// Covers standard deb/rpm/tar.gz installs as well as Flatpak and Snap
+    /// variants, which use isolated profile directories under ~/.var/app/ and
+    /// ~/snap/ respectively.
     fn chromium_nmh_dirs() -> Vec<PathBuf> {
         let Some(home) = home_dir() else {
             return vec![];
         };
         let config = home.join(".config");
+        let var_app = home.join(".var").join("app");
+        let snap = home.join("snap");
         vec![
+            // Standard deb/rpm/tar.gz installs
             config.join("google-chrome").join("NativeMessagingHosts"),
             config.join("chromium").join("NativeMessagingHosts"),
             config.join("microsoft-edge").join("NativeMessagingHosts"),
+            // Flatpak Chrome
+            var_app
+                .join("com.google.Chrome")
+                .join("config")
+                .join("google-chrome")
+                .join("NativeMessagingHosts"),
+            // Flatpak Chromium
+            var_app
+                .join("org.chromium.Chromium")
+                .join("config")
+                .join("chromium")
+                .join("NativeMessagingHosts"),
+            // Flatpak Edge
+            var_app
+                .join("com.microsoft.Edge")
+                .join("config")
+                .join("microsoft-edge")
+                .join("NativeMessagingHosts"),
+            // Snap Chromium
+            snap.join("chromium")
+                .join("common")
+                .join(".config")
+                .join("chromium")
+                .join("NativeMessagingHosts"),
         ]
     }
 
-    /// Firefox NMH manifest directory.
-    fn firefox_nmh_dir() -> Option<PathBuf> {
-        home_dir().map(|h| h.join(".mozilla").join("native-messaging-hosts"))
+    /// All Firefox NMH manifest directories on Linux.
+    ///
+    /// Returns multiple paths: the standard location and the Flatpak sandboxed
+    /// location.  Registration writes to all paths; needs_update checks that
+    /// the standard path is up-to-date (Flatpak path is optional).
+    fn firefox_nmh_dirs() -> Vec<PathBuf> {
+        let Some(home) = home_dir() else {
+            return vec![];
+        };
+        vec![
+            // Standard
+            home.join(".mozilla").join("native-messaging-hosts"),
+            // Flatpak Firefox
+            home.join(".var")
+                .join("app")
+                .join("org.mozilla.firefox")
+                .join(".mozilla")
+                .join("native-messaging-hosts"),
+        ]
     }
 
     fn find_nmh_exe() -> Result<PathBuf, io::Error> {
-        // 1. Next to current exe (production deployment)
+        // 1. Next to current exe (production deployment, including AppImage mount)
         if let Ok(exe) = std::env::current_exe() {
             let canonical = std::fs::canonicalize(&exe).unwrap_or(exe);
             if let Some(dir) = canonical.parent() {
@@ -446,12 +493,50 @@ mod inner {
         ))
     }
 
-    fn write_chromium_manifest(nmh_exe: &Path, dir: &Path) -> Result<PathBuf, io::Error> {
+    /// Stable wrapper script path: ~/.local/share/fluxdown/fluxdown_nmh.sh
+    ///
+    /// NMH manifests always point to this wrapper rather than the real binary.
+    /// This decouples the manifest from AppImage mount points (which change on
+    /// every launch) and from Cargo target directories (which are dev-only).
+    fn wrapper_path() -> Option<PathBuf> {
+        home_dir().map(|h| {
+            h.join(".local")
+                .join("share")
+                .join("fluxdown")
+                .join(NMH_WRAPPER_NAME)
+        })
+    }
+
+    /// Write the shell wrapper script that exec's the real NMH binary.
+    ///
+    /// By registering a wrapper script instead of the binary directly, we
+    /// provide a stable path even when the binary lives in a temporary AppImage
+    /// mount point.  On every app launch the wrapper is rewritten to point at
+    /// the current binary path, so it stays correct after updates.
+    fn write_wrapper_script(nmh_exe: &Path) -> Result<PathBuf, io::Error> {
+        let Some(wp) = wrapper_path() else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "cannot determine home directory for wrapper script",
+            ));
+        };
+        if let Some(parent) = wp.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let exe_str = nmh_exe.to_string_lossy();
+        let script = format!("#!/bin/sh\nexec '{}' \"$@\"\n", exe_str);
+        std::fs::write(&wp, script)?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wp, std::fs::Permissions::from_mode(0o755))?;
+        Ok(wp)
+    }
+
+    fn write_chromium_manifest(wrapper: &Path, dir: &Path) -> Result<PathBuf, io::Error> {
         std::fs::create_dir_all(dir)?;
         let manifest = NmhManifestChromium {
             name: NMH_NAME.to_string(),
             description: NMH_DESCRIPTION.to_string(),
-            path: nmh_exe.to_string_lossy().into_owned(),
+            path: wrapper.to_string_lossy().into_owned(),
             host_type: "stdio".to_string(),
             allowed_origins: vec![CHROME_EXTENSION_ID.to_string()],
         };
@@ -462,12 +547,12 @@ mod inner {
         Ok(path)
     }
 
-    fn write_firefox_manifest(nmh_exe: &Path, dir: &Path) -> Result<PathBuf, io::Error> {
+    fn write_firefox_manifest(wrapper: &Path, dir: &Path) -> Result<PathBuf, io::Error> {
         std::fs::create_dir_all(dir)?;
         let manifest = NmhManifestFirefox {
             name: NMH_NAME.to_string(),
             description: NMH_DESCRIPTION.to_string(),
-            path: nmh_exe.to_string_lossy().into_owned(),
+            path: wrapper.to_string_lossy().into_owned(),
             host_type: "stdio".to_string(),
             allowed_extensions: vec![FIREFOX_EXTENSION_ID.to_string()],
         };
@@ -482,67 +567,43 @@ mod inner {
         let Ok(nmh_exe) = find_nmh_exe() else {
             return true;
         };
-        let expected = nmh_exe.to_string_lossy().into_owned();
+        let expected_exe = nmh_exe.to_string_lossy().into_owned();
 
-        // --- 版本切换检测 ---
-        // 获取当前运行 exe 的目录，与已注册清单里记录的 NMH 所在目录对比。
-        // 若不一致，说明用户切换了版本（dev → portable、dev → installed 等），
-        // 必须强制重新注册，否则 find_nmh_exe() fallback 到 Cargo target 后
-        // needs_update() 会误判为"已是最新"。
-        let current_exe_dir = std::env::current_exe()
-            .ok()
-            .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe))
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-
-        if let Some(exe_dir) = &current_exe_dir {
-            // 从第一个能读到的 Chromium 清单中解析已注册的 NMH path
-            for dir in chromium_nmh_dirs() {
-                let manifest_path = dir.join(MANIFEST_FILENAME_CHROMIUM);
-                let Ok(content) = std::fs::read_to_string(&manifest_path) else {
-                    continue;
-                };
-                let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
-                    continue;
-                };
-                if let Some(registered_str) = json["path"].as_str() {
-                    let registered_dir = Path::new(registered_str).parent();
-                    if registered_dir
-                        .map(|d| d != exe_dir.as_path())
-                        .unwrap_or(true)
-                    {
-                        log_info!(
-                            "[nmh_registry] exe dir changed: registered NMH dir={:?}, current exe dir={:?} → needs update",
-                            registered_dir,
-                            exe_dir
-                        );
-                        return true;
-                    }
-                }
-                break; // 找到一个有效清单即可，无需检查其余目录
-            }
+        // Check that the wrapper script exists and points at the current binary.
+        let Some(wp) = wrapper_path() else {
+            return true;
+        };
+        if !wp.exists() {
+            return true;
         }
-        // ---------------------
+        let wrapper_ok = std::fs::read_to_string(&wp)
+            .map(|c| c.contains(&expected_exe))
+            .unwrap_or(false);
+        if !wrapper_ok {
+            log_info!("[nmh_registry] wrapper script outdated → needs update");
+            return true;
+        }
 
-        // At least one Chromium dir must have a valid manifest.
+        let wrapper_str = wp.to_string_lossy().into_owned();
+
+        // At least one Chromium dir must have a manifest pointing to the wrapper.
         let chromium_ok = chromium_nmh_dirs().iter().any(|dir| {
             let path = dir.join(MANIFEST_FILENAME_CHROMIUM);
             std::fs::read_to_string(path)
-                .map(|c| c.contains(&expected))
+                .map(|c| c.contains(&wrapper_str))
                 .unwrap_or(false)
         });
 
-        // Firefox 是可选浏览器：清单存在时才验证路径；未安装 / 未注册则忽略。
-        let firefox_ok = firefox_nmh_dir()
-            .map(|dir| {
-                let path = dir.join(MANIFEST_FILENAME_FIREFOX);
-                if !path.exists() {
-                    return true; // Firefox 未安装或尚未注册，跳过
-                }
-                std::fs::read_to_string(path)
-                    .map(|c| c.contains(&expected))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(true); // 获取不到目录时同样视为 OK
+        // Firefox is optional: if its manifest exists it must match; absence is OK.
+        let firefox_ok = firefox_nmh_dirs().iter().all(|dir| {
+            let path = dir.join(MANIFEST_FILENAME_FIREFOX);
+            if !path.exists() {
+                return true;
+            }
+            std::fs::read_to_string(path)
+                .map(|c| c.contains(&wrapper_str))
+                .unwrap_or(false)
+        });
 
         !(chromium_ok && firefox_ok)
     }
@@ -550,8 +611,12 @@ mod inner {
     pub fn register() -> Result<(), io::Error> {
         let nmh_exe = find_nmh_exe()?;
 
+        // Write wrapper script first; manifests point to it.
+        let wrapper = write_wrapper_script(&nmh_exe)?;
+        log_info!("[nmh_registry] NMH wrapper script: {}", wrapper.display());
+
         for dir in chromium_nmh_dirs() {
-            match write_chromium_manifest(&nmh_exe, &dir) {
+            match write_chromium_manifest(&wrapper, &dir) {
                 Ok(path) => {
                     log_info!("[nmh_registry] Chromium manifest: {}", path.display());
                 }
@@ -565,28 +630,39 @@ mod inner {
             }
         }
 
-        if let Some(dir) = firefox_nmh_dir() {
-            match write_firefox_manifest(&nmh_exe, &dir) {
+        for dir in firefox_nmh_dirs() {
+            match write_firefox_manifest(&wrapper, &dir) {
                 Ok(path) => {
                     log_info!("[nmh_registry] Firefox manifest: {}", path.display());
                 }
                 Err(e) => {
-                    log_info!("[nmh_registry] Firefox manifest error: {}", e);
+                    log_info!(
+                        "[nmh_registry] Firefox manifest error ({}): {}",
+                        dir.display(),
+                        e
+                    );
                 }
             }
         }
 
-        log_info!("[nmh_registry] NMH registered: exe={}", nmh_exe.display());
+        log_info!(
+            "[nmh_registry] NMH registered: exe={}, wrapper={}",
+            nmh_exe.display(),
+            wrapper.display()
+        );
         Ok(())
     }
 
-    #[allow(dead_code)] // reserved public API for future uninstall/disable flow
+    #[allow(dead_code)]
     pub fn unregister() -> Result<(), io::Error> {
         for dir in chromium_nmh_dirs() {
             let _ = std::fs::remove_file(dir.join(MANIFEST_FILENAME_CHROMIUM));
         }
-        if let Some(dir) = firefox_nmh_dir() {
+        for dir in firefox_nmh_dirs() {
             let _ = std::fs::remove_file(dir.join(MANIFEST_FILENAME_FIREFOX));
+        }
+        if let Some(wp) = wrapper_path() {
+            let _ = std::fs::remove_file(wp);
         }
         log_info!("[nmh_registry] NMH registration removed");
         Ok(())

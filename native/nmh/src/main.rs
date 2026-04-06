@@ -90,12 +90,16 @@ fn log_path() -> Option<std::path::PathBuf> {
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
-        // Prefer XDG_RUNTIME_DIR (user-private); fall back to /tmp.
-        if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
-            Some(Path::new(&dir).join("fluxdown_nmh.log"))
-        } else {
-            Some(Path::new("/tmp").join("fluxdown_nmh.log"))
+        // Linux: use ~/.local/share/fluxdown/fluxdown_nmh.log
+        // Consistent with socket_path() — avoids $XDG_RUNTIME_DIR which gets
+        // remapped inside Flatpak/Snap sandboxes and may differ between the app
+        // process (host) and the NMH process (launched by sandboxed browser).
+        if let Some(home) = home_dir() {
+            let dir = home.join(".local").join("share").join("fluxdown");
+            let _ = std::fs::create_dir_all(&dir);
+            return Some(dir.join("fluxdown_nmh.log"));
         }
+        Some(Path::new("/tmp").join("fluxdown_nmh.log"))
     }
 }
 
@@ -193,6 +197,22 @@ fn home_dir() -> Option<PathBuf> {
         }
     }
 
+    None
+}
+
+/// Returns the current user's home directory on Linux.
+///
+/// On Linux, Chrome launches the NMH process directly (not via a session
+/// manager that strips environment variables), so $HOME is reliably set.
+/// This mirrors the macOS version's signature so pipe::socket_path() can
+/// call super::home_dir() uniformly on both platforms.
+#[cfg(target_os = "linux")]
+fn home_dir() -> Option<PathBuf> {
+    if let Ok(h) = std::env::var("HOME") {
+        if !h.is_empty() {
+            return Some(PathBuf::from(h));
+        }
+    }
     None
 }
 
@@ -309,7 +329,21 @@ mod pipe {
                 return dir.join("fluxdown.sock");
             }
         }
-        // Linux (and any other Unix-like fallback)
+        // Linux: use ~/.local/share/fluxdown/fluxdown.sock
+        // This path is accessible from both the host (app process) and Flatpak/Snap
+        // sandboxes (which bind-mount ~/.local/share/ into the sandbox), unlike
+        // $XDG_RUNTIME_DIR which gets remapped to a sandbox-private path inside
+        // Flatpak, causing the app and NMH to see different socket paths.
+        // Use super::home_dir() which has a getpwuid fallback in case $HOME is unset.
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(home) = super::home_dir() {
+                let dir = home.join(".local").join("share").join("fluxdown");
+                let _ = std::fs::create_dir_all(&dir);
+                return dir.join("fluxdown.sock");
+            }
+        }
+        // Fallback for any other Unix-like OS
         if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
             std::path::Path::new(&dir).join("fluxdown.sock")
         } else {
