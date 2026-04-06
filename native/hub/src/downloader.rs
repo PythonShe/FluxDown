@@ -230,14 +230,19 @@ pub enum ContentEncoding {
 pub fn detect_content_encoding(headers: &reqwest::header::HeaderMap) -> Option<ContentEncoding> {
     let ce = headers.get(reqwest::header::CONTENT_ENCODING)?;
     let value = ce.to_str().unwrap_or("");
-    let lower = value.trim().to_ascii_lowercase();
-    match lower.as_str() {
-        "gzip" => Some(ContentEncoding::Gzip),
-        "br" | "brotli" => Some(ContentEncoding::Brotli),
-        "deflate" | "compress" => Some(ContentEncoding::Deflate),
-        "zstd" => Some(ContentEncoding::Zstd),
-        _ => None, // "" | "identity" | unknown
+    // HTTP allows comma-separated encodings (e.g. "gzip, identity").
+    // Take the first non-identity encoding as the dominant one.
+    for part in value.split(',') {
+        let lower = part.trim().to_ascii_lowercase();
+        match lower.as_str() {
+            "gzip" | "x-gzip" => return Some(ContentEncoding::Gzip),
+            "br" | "brotli" => return Some(ContentEncoding::Brotli),
+            "deflate" => return Some(ContentEncoding::Deflate),
+            "zstd" => return Some(ContentEncoding::Zstd),
+            _ => continue, // "identity", "", "compress", unknown
+        }
     }
+    None
 }
 
 /// Wrap a response byte stream with transparent decompression if the server
@@ -2743,6 +2748,32 @@ mod tests {
             reqwest::header::HeaderValue::from_static(""),
         );
         assert!(super::detect_content_encoding(&headers).is_none());
+    }
+
+    #[test]
+    fn detect_content_encoding_comma_separated() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_ENCODING,
+            reqwest::header::HeaderValue::from_static("gzip, identity"),
+        );
+        assert_eq!(
+            super::detect_content_encoding(&headers),
+            Some(super::ContentEncoding::Gzip)
+        );
+    }
+
+    #[test]
+    fn detect_content_encoding_x_gzip() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_ENCODING,
+            reqwest::header::HeaderValue::from_static("x-gzip"),
+        );
+        assert_eq!(
+            super::detect_content_encoding(&headers),
+            Some(super::ContentEncoding::Gzip)
+        );
     }
 
     // -----------------------------------------------------------------------

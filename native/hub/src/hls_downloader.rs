@@ -691,30 +691,59 @@ async fn run_hls_download_inner(
     // If so, skip already-downloaded segments and open the temp file in append mode.
     let resume_seg_key = format!("hls_resume_{}", p.task_id);
     let (mut file, skip_segments, mut downloaded_bytes) = if p.is_resume {
-        let saved_idx: usize =
+        // Parse checkpoint: new format is "idx:byte_offset", old format is just "idx".
+        // Old markers without ':' get saved_bytes = 0 (no truncation — same as before).
+        let (saved_idx, saved_bytes): (usize, i64) =
             p.db.get_config(&resume_seg_key)
                 .await
                 .ok()
                 .flatten()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+                .and_then(|s| {
+                    let mut parts = s.splitn(2, ':');
+                    let idx = parts.next()?.parse().ok()?;
+                    let bytes = parts.next().and_then(|b| b.parse().ok()).unwrap_or(0i64);
+                    Some((idx, bytes))
+                })
+                .unwrap_or((0, 0));
         let file_size = tokio::fs::metadata(&temp_path)
             .await
             .map(|m| m.len() as i64)
             .unwrap_or(0);
         if saved_idx > 0 && file_size > 0 {
+            // Truncate to the exact byte offset of the last fully-completed segment.
+            // This removes any partially-written data from a crashed segment.
+            let safe_size = if saved_bytes > 0 {
+                saved_bytes.min(file_size)
+            } else {
+                file_size
+            };
+            if safe_size < file_size {
+                log_info!(
+                    "[hls] task {} truncating temp file {} -> {} bytes (removing partial segment data)",
+                    p.task_id,
+                    file_size,
+                    safe_size
+                );
+                let truncate_file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&temp_path)
+                    .await?;
+                truncate_file.set_len(safe_size as u64).await?;
+                drop(truncate_file);
+            }
             log_info!(
-                "[hls] task {} resuming from segment {} (file size: {} bytes)",
+                "[hls] task {} resuming from segment {} (file size: {} bytes, safe: {} bytes)",
                 p.task_id,
                 saved_idx,
-                file_size
+                file_size,
+                safe_size
             );
             let f = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&temp_path)
                 .await?;
-            (f, saved_idx, file_size)
+            (f, saved_idx, safe_size)
         } else {
             (File::create(&temp_path).await?, 0, 0i64)
         }
@@ -799,10 +828,15 @@ async fn run_hls_download_inner(
 
         downloaded_bytes += chunk_len as i64;
 
-        // Save resume checkpoint (segment index) for HLS resume support
+        // Save resume checkpoint (segment index + byte offset) for HLS resume support.
+        // Format: "next_seg_idx:total_bytes_written" — on resume we truncate to
+        // this byte offset to discard any partially-written segment data.
         let _ =
-            p.db.set_config(&resume_seg_key, &(seg_idx + 1).to_string())
-                .await;
+            p.db.set_config(
+                &resume_seg_key,
+                &format!("{}:{}", seg_idx + 1, downloaded_bytes),
+            )
+            .await;
 
         // Progress reporting (every 200ms)
         if last_report.elapsed().as_millis() >= 200 {

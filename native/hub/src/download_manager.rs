@@ -92,6 +92,8 @@ fn is_retriable_error(msg: &str) -> bool {
         || lower.contains("incomplete download")
         // reqwest Kind::Decode：TCP 连接在 body 传输中途被服务端/中间节点切断，大文件尤其常见
         || lower.contains("error decoding response body")
+        // Content-Encoding on Range response — retry will use single-stream mode
+        || lower.contains("content-encoding")
 }
 
 /// Determine if a URL uses the FTP protocol (case-insensitive).

@@ -1810,10 +1810,13 @@ async fn do_segment(
     // download (e.g. CDN edge node rotation).  This is extremely rare but we
     // must guard against it to prevent silent file corruption.
     if let Some(enc) = crate::downloader::detect_content_encoding(resp.headers()) {
+        // Record the domain so that the retry (or any future task for this
+        // host) automatically uses single-stream mode.
+        record_single_conn_domain(url);
         return Err(DownloadError::Other(format!(
             "segment {}: server returned Content-Encoding ({:?}) on a Range response. \
              Compressed byte ranges cannot be assembled into a valid file. \
-             The download will be retried automatically in single-stream mode.",
+             Please retry — the download will use single-stream mode.",
             seg_idx, enc
         )));
     }

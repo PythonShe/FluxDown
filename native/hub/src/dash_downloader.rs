@@ -167,6 +167,10 @@ async fn mux_audio_video(
             &video_str,
             "-i",
             &audio_str,
+            "-map",
+            "0:v:0", // select first video stream from first input
+            "-map",
+            "1:a:0", // select first audio stream from second input
             "-c",
             "copy", // stream copy, no re-encoding
             "-movflags",
@@ -180,7 +184,9 @@ async fn mux_audio_video(
 
     let output: std::process::Output = tokio::select! {
         _ = cancel_token.cancelled() => {
-            // The future is dropped here; kill_on_drop ensures the child is killed
+            // The future is dropped here; kill_on_drop ensures the child is killed.
+            // Clean up the partial muxed temp file.
+            let _ = tokio::fs::remove_file(&muxed_tmp).await;
             return Err(DownloadError::Cancelled);
         }
         o = output_fut => o.map_err(|e| DownloadError::Other(format!("failed to run ffmpeg: {}", e)))?,
