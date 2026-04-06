@@ -7,6 +7,7 @@ import 'package:rinf/rinf.dart';
 import '../bindings/bindings.dart';
 import '../services/analytics_service.dart';
 import '../services/log_service.dart';
+import '../i18n/locale_provider.dart';
 import 'download_queue.dart';
 import 'download_task.dart';
 
@@ -29,6 +30,10 @@ class DownloadController extends ChangeNotifier {
 
   /// 当前队列筛选 ID：null = 不过滤（显示全部），'' = 默认队列，非空 = 指定命名队列
   String? _queueFilter;
+
+  // 缓存 — 避免 filteredTasks / groupedTasks 每次访问重新计算
+  List<DownloadTask>? _cachedFilteredTasks;
+  List<TaskGroup>? _cachedGroupedTasks;
 
   // 管理模式（多选）
   bool _isManageMode = false;
@@ -122,6 +127,8 @@ class DownloadController extends ChangeNotifier {
   /// 安全的 notifyListeners — dispose 后不再通知，避免
   /// "A DownloadController was used after being disposed" 异常
   void _safeNotifyListeners() {
+    _cachedFilteredTasks = null;
+    _cachedGroupedTasks = null;
     if (!_disposed) notifyListeners();
   }
 
@@ -193,8 +200,9 @@ class DownloadController extends ChangeNotifier {
 
   /// 双维度组合过滤后的任务列表（侧边栏文件类型 + 顶部状态 Tab）
   List<DownloadTask> get filteredTasks {
+    if (_cachedFilteredTasks != null) return _cachedFilteredTasks!;
     final byCategory = _categoryFiltered;
-    return switch (_statusTab) {
+    final result = switch (_statusTab) {
       StatusTab.all => byCategory,
       StatusTab.downloading =>
         byCategory
@@ -213,25 +221,32 @@ class DownloadController extends ChangeNotifier {
       StatusTab.error =>
         byCategory.where((t) => t.status == TaskStatus.error).toList(),
     };
+    _cachedFilteredTasks = result;
+    return result;
   }
 
   /// 将 filteredTasks 分组：活跃+排队任务置顶，历史任务按时间分组
   List<TaskGroup> get groupedTasks {
+    if (_cachedGroupedTasks != null) return _cachedGroupedTasks!;
     final tasks = filteredTasks;
 
     // "全部" 和 "下载中" Tab：活跃+排队任务组置顶，历史任务按时间分组
+    late final List<TaskGroup> result;
     if (_statusTab == StatusTab.all || _statusTab == StatusTab.downloading) {
       final activeTasks = tasks.where((t) => t.status.isActiveOrQueued).toList()
         ..sort(_compareActiveTasks);
       final historicalTasks = tasks
           .where((t) => !t.status.isActiveOrQueued)
           .toList();
-      return [
+      result = [
         if (activeTasks.isNotEmpty) TaskGroup(group: null, tasks: activeTasks),
         ..._buildTimeGroups(historicalTasks),
       ];
+    } else {
+      result = _buildTimeGroups(tasks);
     }
-    return _buildTimeGroups(tasks);
+    _cachedGroupedTasks = result;
+    return result;
   }
 
   List<TaskGroup> _buildTimeGroups(List<DownloadTask> tasks) {
@@ -1072,7 +1087,7 @@ class DownloadController extends ChangeNotifier {
       final task = DownloadTask(
         id: p.taskId,
         url: p.url,
-        fileName: p.fileName.isEmpty ? '未知文件' : p.fileName,
+        fileName: p.fileName.isEmpty ? currentS.unknownFile : p.fileName,
         saveDir: p.saveDir,
         status: newStatus,
         downloadedBytes: p.downloadedBytes,

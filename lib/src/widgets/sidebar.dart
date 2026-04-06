@@ -64,29 +64,36 @@ class _SidebarState extends State<Sidebar> {
   @override
   Widget build(BuildContext context) {
     final c = AppColors.of(context);
-    return ListenableBuilder(
-      listenable: widget.controller,
-      builder: (context, _) {
-        final ctrl = widget.controller;
-        final s = LocaleScope.of(context);
-        return Container(
-          color: c.surface1,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildLogo(c),
-              const SizedBox(height: 10),
-              _buildStatusSection(ctrl, s, c),
-              const SizedBox(height: 6),
-              _buildQueuesSection(ctrl, s, c),
-              const SizedBox(height: 6),
-              _buildCategorySection(ctrl, s, c),
-              const Spacer(),
-              const _UpdateFooter(),
-            ],
+    return Container(
+      color: c.surface1,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildLogo(c),
+          const SizedBox(height: 10),
+          // Only the data-driven sections rebuild on controller changes.
+          Expanded(
+            child: ListenableBuilder(
+              listenable: widget.controller,
+              builder: (context, _) {
+                final ctrl = widget.controller;
+                final s = LocaleScope.of(context);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildStatusSection(ctrl, s, c),
+                    const SizedBox(height: 6),
+                    _buildQueuesSection(ctrl, s, c),
+                    const SizedBox(height: 6),
+                    _buildCategorySection(ctrl, s, c),
+                  ],
+                );
+              },
+            ),
           ),
-        );
-      },
+          const _UpdateFooter(),
+        ],
+      ),
     );
   }
 

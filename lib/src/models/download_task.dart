@@ -483,10 +483,10 @@ enum TimeGroup {
     final weekAgo = today.subtract(const Duration(days: 7));
     final monthAgo = today.subtract(const Duration(days: 30));
 
-    if (createdAt.isAfter(today)) return TimeGroup.today;
-    if (createdAt.isAfter(yesterday)) return TimeGroup.yesterday;
-    if (createdAt.isAfter(weekAgo)) return TimeGroup.thisWeek;
-    if (createdAt.isAfter(monthAgo)) return TimeGroup.thisMonth;
+    if (!createdAt.isBefore(today)) return TimeGroup.today;
+    if (!createdAt.isBefore(yesterday)) return TimeGroup.yesterday;
+    if (!createdAt.isBefore(weekAgo)) return TimeGroup.thisWeek;
+    if (!createdAt.isBefore(monthAgo)) return TimeGroup.thisMonth;
     return TimeGroup.older;
   }
 }

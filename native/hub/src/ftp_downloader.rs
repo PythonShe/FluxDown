@@ -1024,7 +1024,7 @@ async fn ftp_download_multi_segment(
             existing_segments = db.load_segments(task_id).await?;
         }
 
-        if !existing_segments.is_empty() {
+        if !existing_segments.is_empty() && total_bytes > 0 {
             let last_seg = existing_segments.iter().max_by_key(|s| s.index);
             if let Some(last) = last_seg
                 && last.end_byte != total_bytes - 1

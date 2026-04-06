@@ -170,6 +170,10 @@ class _HomePageState extends State<HomePage> {
   bool _onGlobalKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
 
+    // 设置页或任何对话框打开时，不处理全局快捷键
+    if (_showSettings) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+
     final isCtrl = HardwareKeyboard.instance.isControlPressed;
 
     // Ctrl+F → 聚焦搜索框

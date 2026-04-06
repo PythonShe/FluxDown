@@ -146,11 +146,18 @@ fn urlencoding_decode(input: &str) -> String {
                 i += 1;
             }
             b'%' if i + 2 < len => {
-                // Full %XX sequence — decode as a byte.
+                // Full %XX sequence — decode as a byte only if both are
+                // valid hex digits; otherwise treat `%` as a literal.
                 let hi = bytes[i + 1];
                 let lo = bytes[i + 2];
-                bytes_buf.push(hex_val(hi) << 4 | hex_val(lo));
-                i += 3;
+                if let (Some(h), Some(l)) = (hex_val(hi), hex_val(lo)) {
+                    bytes_buf.push(h << 4 | l);
+                    i += 3;
+                } else {
+                    flush(&mut bytes_buf, &mut out);
+                    out.push('%');
+                    i += 1;
+                }
             }
             b'%' => {
                 // Incomplete `%` at end of string — emit as literal.
@@ -174,12 +181,12 @@ fn urlencoding_decode(input: &str) -> String {
     out
 }
 
-fn hex_val(b: u8) -> u8 {
+fn hex_val(b: u8) -> Option<u8> {
     match b {
-        b'0'..=b'9' => b - b'0',
-        b'a'..=b'f' => b - b'a' + 10,
-        b'A'..=b'F' => b - b'A' + 10,
-        _ => 0,
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -702,6 +709,11 @@ pub struct BtDownloadParams {
     /// Set to true when resuming a task whose confirmed selection is persisted
     /// in the DB as "all files" — no update_only_files needed either.
     pub skip_file_selection: bool,
+    /// User-specified rename target for the final file/directory on disk.
+    /// Empty string means "use the torrent's internal name" (default).
+    /// Stored in a separate DB column (`bt_custom_name`) so that Phase 1/3
+    /// engine callbacks never overwrite it.
+    pub custom_name: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -783,6 +795,7 @@ pub async fn run_bt_download(params: BtDownloadParams) -> Result<(), DownloadErr
         existing_handle,
         pre_selected_indices: params.pre_selected_indices,
         skip_file_selection: params.skip_file_selection,
+        custom_name: params.custom_name,
     };
     let result = bt_runtime
         .spawn(async move { bt_download_inner(inner_params).await })
@@ -836,6 +849,8 @@ struct BtInnerParams {
     /// When true, skip Phase 3.5 entirely (user already confirmed all files
     /// on a previous run — resume without re-showing the dialog).
     skip_file_selection: bool,
+    /// User-specified rename target, forwarded from BtDownloadParams.
+    custom_name: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,6 +1200,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
         existing_handle,
         pre_selected_indices,
         skip_file_selection,
+        custom_name,
     } = p;
 
     // Record whether this is a resume of an existing handle *before*
@@ -1797,7 +1813,12 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
             // when the staged item is present; otherwise fall back to
             // resolved_name (e.g. resumed download that was already moved).
             let completed_name = if stage_item.exists() {
-                let final_name = dedup_name_in_dir(&save_path, &staging_item_name);
+                let desired_name = if custom_name.is_empty() {
+                    &staging_item_name
+                } else {
+                    &custom_name
+                };
+                let final_name = dedup_name_in_dir(&save_path, desired_name);
                 let final_path = save_path.join(&final_name);
 
                 log_info!(
@@ -1872,6 +1893,15 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
                     }
                 }
                 let _ = std::fs::remove_dir_all(&stage_dir);
+                // If the user specified a custom name, rename the moved item.
+                if !custom_name.is_empty() && first_child_name != custom_name {
+                    let src = save_path.join(&first_child_name);
+                    let target = dedup_name_in_dir(&save_path, &custom_name);
+                    let dst = save_path.join(&target);
+                    if move_path(&src, &dst).is_ok() {
+                        first_child_name = target;
+                    }
+                }
                 let _ = db
                     .update_task_file_info(&task_id, &first_child_name, final_total)
                     .await;

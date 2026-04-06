@@ -625,36 +625,44 @@ impl DownloadManager {
     /// skipped so that tasks from other queues (or the default queue) can
     /// proceed, rather than blocking the entire pending queue.
     async fn drain_queue(&mut self) {
-        let mut i = 0;
-        while i < self.pending_queue.len() {
-            // Global concurrency ceiling reached — stop entirely.
+        // Drain into a Vec up-front so every removal is O(1) via iteration
+        // instead of O(n) per `VecDeque::remove(i)`.  Total cost: O(n).
+        let pending: Vec<_> = self.pending_queue.drain(..).collect();
+        let mut kept = VecDeque::with_capacity(pending.len());
+        let mut global_full = false;
+
+        for queued in pending {
+            // Once global capacity is exhausted, keep all remaining items
+            // without further checks (matches the original early-break).
+            if global_full {
+                kept.push_back(queued);
+                continue;
+            }
+            // Global concurrency ceiling reached — keep this and the rest.
             if !self.has_capacity() {
-                break;
-            }
-            // Edge case: task was resumed/cancelled while queued.
-            if self
-                .active_tasks
-                .contains_key(&self.pending_queue[i].task_id)
-            {
-                self.pending_queue.remove(i);
+                kept.push_back(queued);
+                global_full = true;
                 continue;
             }
-            // Queue-level concurrency check: skip (don't remove) if the
-            // target queue is full; try the next pending task instead.
-            if !self.has_queue_capacity(&self.pending_queue[i].queue_id.clone()) {
-                i += 1;
+            // Edge case: task was resumed/cancelled while queued — drop it.
+            if self.active_tasks.contains_key(&queued.task_id) {
                 continue;
             }
-            let Some(queued) = self.pending_queue.remove(i) else {
-                break;
-            };
+            // Queue-level concurrency check: keep (don't start) if the
+            // target queue is full; it may be drained on a future call.
+            if !self.has_queue_capacity(&queued.queue_id) {
+                kept.push_back(queued);
+                continue;
+            }
+            // Start the task.
             if queued.is_resume {
                 self.do_resume_task(&queued.task_id).await;
             } else {
                 self.do_start_task(queued).await;
             }
-            // Don't increment i — an element was removed.
         }
+
+        self.pending_queue = kept;
         // 队列变化后广播最新位置
         self.broadcast_queue_positions();
     }
@@ -1130,6 +1138,16 @@ impl DownloadManager {
                 TorrentSource::Magnet(url)
             };
 
+            // Validate and persist user-specified custom name for BT rename.
+            let custom_name = if is_safe_file_name(&file_name) {
+                file_name.clone()
+            } else {
+                String::new()
+            };
+            if !custom_name.is_empty() {
+                let _ = self.db.save_bt_custom_name(&task_id, &custom_name).await;
+            }
+
             let bt_params = BtDownloadParams {
                 task_id: task_id.clone(),
                 torrent_source,
@@ -1143,6 +1161,7 @@ impl DownloadManager {
                 existing_handle: None,
                 pre_selected_indices: selected_file_indices,
                 skip_file_selection: false,
+                custom_name,
             };
 
             tokio::spawn(async move {
@@ -1657,6 +1676,13 @@ impl DownloadManager {
                 (Vec::new(), false)
             };
 
+            // Load user-specified custom name from DB for BT rename on completion.
+            let custom_name = self
+                .db
+                .load_bt_custom_name(task_id)
+                .await
+                .unwrap_or_default();
+
             let bt_params = BtDownloadParams {
                 task_id: tid.clone(),
                 torrent_source,
@@ -1670,6 +1696,7 @@ impl DownloadManager {
                 existing_handle: existing,
                 pre_selected_indices,
                 skip_file_selection,
+                custom_name,
             };
 
             tokio::spawn(async move {

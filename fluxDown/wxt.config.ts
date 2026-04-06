@@ -78,4 +78,19 @@ export default defineConfig({
       },
     },
   }),
+  // WXT bug: addDevModeCsp() 只给 script-src 加了 localhost，未加 style-src，
+  // 导致 Firefox 严格执行默认 style-src 'self' 拦截 dev server 的 CSS 加载。
+  // 此 hook 在 addDevModeCsp() 之后、convertCspToMv2() 之前执行，
+  // 在对象格式的 CSP 上补充 style-src 白名单。
+  hooks: {
+    "build:manifestGenerated"(wxt, manifest) {
+      if (wxt.config.command !== "serve") return;
+      const csp = manifest.content_security_policy;
+      if (typeof csp === "object" && csp.extension_pages) {
+        const origin = wxt.server?.origin ?? "http://localhost:3000";
+        // 追加 style-src 允许从 dev server 加载 CSS
+        csp.extension_pages += `; style-src 'self' ${origin} 'unsafe-inline'`;
+      }
+    },
+  },
 });

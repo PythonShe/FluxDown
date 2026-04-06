@@ -66,6 +66,7 @@ class HeaderBar extends StatefulWidget {
 class HeaderBarState extends State<HeaderBar> {
   final _searchController = TextEditingController();
   final _focusNode = FocusNode();
+  late final _keyboardFocusNode = FocusNode();
   final _searchBoxKey = GlobalKey();
   final _overlayController = OverlayPortalController();
 
@@ -86,6 +87,7 @@ class HeaderBarState extends State<HeaderBar> {
     _searchController.dispose();
     _focusNode.removeListener(_onFocusChanged);
     _focusNode.dispose();
+    _keyboardFocusNode.dispose();
     super.dispose();
   }
 
@@ -278,7 +280,7 @@ class HeaderBarState extends State<HeaderBar> {
                   controller: _overlayController,
                   overlayChildBuilder: (_) => _buildSearchDropdown(c),
                   child: KeyboardListener(
-                    focusNode: FocusNode(), // dummy node for key events
+                    focusNode: _keyboardFocusNode,
                     onKeyEvent: _handleKeyEvent,
                     child: Container(
                       decoration: BoxDecoration(

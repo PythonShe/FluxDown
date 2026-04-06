@@ -72,10 +72,24 @@ class ExternalDownloadService {
       'received request: url=${req.url}, filename=${req.filename}, size=${req.fileSize}',
     );
 
-    // 防止重复弹窗
+    // 防止重复弹窗 — 检查标志并验证 Navigator 上是否仍有弹窗路由
     if (_dialogOpen) {
-      logInfo(_tag, 'dialog already open, ignoring request');
-      return;
+      bool stillOpen = false;
+      final nav = navigatorKey.currentState;
+      if (nav != null) {
+        try {
+          nav.popUntil((route) {
+            stillOpen = route is PopupRoute;
+            return true; // 不实际 pop，仅检测最顶层路由类型
+          });
+        } catch (_) {}
+      }
+      if (stillOpen) {
+        logInfo(_tag, 'dialog still open, ignoring request');
+        return;
+      }
+      // 弹窗已关闭但标志未重置，清除后继续处理新请求
+      _dialogOpen = false;
     }
 
     final context = navigatorKey.currentContext;
@@ -117,11 +131,7 @@ class ExternalDownloadService {
       logInfo(_tag, 'dialog shown');
     } catch (e, stack) {
       logError(_tag, 'failed to show dialog', e, stack);
-    } finally {
-      // showShadDialog 是非阻塞调用，用 microtask 延迟重置标志
-      Future.microtask(() {
-        _dialogOpen = false;
-      });
+      _dialogOpen = false;
     }
   }
 

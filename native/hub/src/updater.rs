@@ -316,6 +316,62 @@ pub async fn download(url: &str, version: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Security: filename & script interpolation sanitizers
+// ---------------------------------------------------------------------------
+
+/// Sanitize a filename extracted from a URL to prevent path-traversal attacks.
+/// Strips directory components, `..` sequences, and NUL bytes; falls back to a
+/// safe default if the result is empty.
+fn sanitize_filename(raw: &str) -> String {
+    let name = raw
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .replace("..", "")
+        .replace('\0', "");
+    let name = name.trim();
+    if name.is_empty() || name == "." {
+        "FluxDown-update".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Sanitize a path string for safe interpolation into a Windows batch script.
+/// Strips characters that could break `set "VAR=value"` quoting or enable
+/// command injection.
+#[cfg(target_os = "windows")]
+fn sanitize_for_batch(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            !matches!(
+                c,
+                '"' | '%' | '!' | '^' | '&' | '|' | '<' | '>' | '\n' | '\r' | '\0'
+            )
+        })
+        .collect()
+}
+
+/// Sanitize a path string for safe interpolation into a POSIX shell script
+/// inside double-quoted strings.  Escapes shell-special characters with a
+/// backslash and strips NUL/newline bytes.
+#[cfg(target_os = "linux")]
+fn sanitize_for_shell(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 16);
+    for c in s.chars() {
+        match c {
+            '\0' | '\n' | '\r' => {}
+            '"' | '$' | '`' | '\\' | '!' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 async fn download_inner(url: &str, version: &str) -> Result<(), UpdateError> {
     let client = Client::new();
 
@@ -333,13 +389,14 @@ async fn download_inner(url: &str, version: &str) -> Result<(), UpdateError> {
     }
 
     let total_bytes = resp.content_length().unwrap_or(0) as i64;
-    let file_name = url
+    let raw_name = url
         .rsplit('/')
         .next()
         .filter(|n| !n.is_empty())
         .unwrap_or("FluxDown-update");
+    let file_name = sanitize_filename(raw_name);
     let temp_dir = std::env::temp_dir();
-    let file_path = temp_dir.join(file_name);
+    let file_path = temp_dir.join(&file_name);
 
     let mut file = tokio::fs::File::create(&file_path).await?;
     let mut stream = resp.bytes_stream();
@@ -499,9 +556,9 @@ del "%ZIP%" 2>nul
 start "" "%DIR%\%EXE%"
 (goto) 2>nul & del "%~f0"
 "#,
-        zip = zip_path,
-        dir = app_dir.to_string_lossy(),
-        exe = exe_name,
+        zip = sanitize_for_batch(zip_path),
+        dir = sanitize_for_batch(&app_dir.to_string_lossy()),
+        exe = sanitize_for_batch(&exe_name),
     );
 
     let script_path = std::env::temp_dir().join("fluxdown_update.bat");
@@ -553,8 +610,8 @@ nohup "$OLD" >/dev/null 2>&1 &
 # Self-delete this script.
 rm -- "$0"
 "#,
-        new = new_appimage_path,
-        old = current_appimage,
+        new = sanitize_for_shell(new_appimage_path),
+        old = sanitize_for_shell(&current_appimage),
         pid = pid,
     );
 
@@ -658,9 +715,9 @@ nohup "$DIR/$EXE" >/dev/null 2>&1 &
 # Self-delete this script.
 rm -- "$0"
 "#,
-        tar = tarball_path,
-        dir = app_dir.to_string_lossy(),
-        exe = exe_name,
+        tar = sanitize_for_shell(tarball_path),
+        dir = sanitize_for_shell(&app_dir.to_string_lossy()),
+        exe = sanitize_for_shell(&exe_name),
         pid = pid,
     );
 

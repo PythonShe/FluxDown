@@ -354,7 +354,7 @@ async fn run_dash_download_inner(
                 0
             } else {
                 let audio_path = build_audio_path(&dest_path);
-                download_track(
+                match download_track(
                     p,
                     &p.url,
                     &audio_init,
@@ -362,7 +362,15 @@ async fn run_dash_download_inner(
                     &audio_path,
                     &mut progress_state,
                 )
-                .await?
+                .await
+                {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        // Clean up partially-downloaded audio file on error
+                        let _ = tokio::fs::remove_file(&audio_path).await;
+                        return Err(e);
+                    }
+                }
             }
         }
     } else {

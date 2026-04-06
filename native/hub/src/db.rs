@@ -107,6 +107,11 @@ impl Db {
             "ALTER TABLE tasks ADD COLUMN bt_selected_files TEXT NOT NULL DEFAULT '';",
         );
 
+        // Phase 8: BT custom name — user-specified rename target, stored
+        // separately so Phase 1/3 engine callbacks never overwrite it.
+        let _ = conn
+            .execute_batch("ALTER TABLE tasks ADD COLUMN bt_custom_name TEXT NOT NULL DEFAULT '';");
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -458,10 +463,12 @@ impl Db {
         let conn = self.conn.clone();
         let id = id.to_owned();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
-            conn.execute("DELETE FROM task_segments WHERE task_id = ?1", params![id])?;
-            conn.execute("DELETE FROM torrent_files WHERE task_id = ?1", params![id])?;
-            conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+            let mut conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
+            let tx = conn.transaction()?;
+            tx.execute("DELETE FROM task_segments WHERE task_id = ?1", params![id])?;
+            tx.execute("DELETE FROM torrent_files WHERE task_id = ?1", params![id])?;
+            tx.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+            tx.commit()?;
             Ok(())
         })
         .await?
@@ -601,6 +608,43 @@ impl Db {
                 .filter_map(|s| s.trim().parse::<i32>().ok())
                 .collect();
             Ok(Some(indices))
+        })
+        .await?
+    }
+
+    /// Persist the user-specified BT custom name (rename target).
+    /// This column is independent of `file_name` and is never overwritten
+    /// by the download engine's Phase 1 (dn=) or Phase 3 (metadata) updates.
+    pub async fn save_bt_custom_name(&self, id: &str, name: &str) -> Result<(), DbError> {
+        let conn = self.conn.clone();
+        let id = id.to_owned();
+        let name = name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
+            conn.execute(
+                "UPDATE tasks SET bt_custom_name = ?1 WHERE id = ?2",
+                params![name, id],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Load the user-specified BT custom name.  Returns empty string when
+    /// the user did not specify a custom name.
+    pub async fn load_bt_custom_name(&self, id: &str) -> Result<String, DbError> {
+        let conn = self.conn.clone();
+        let id = id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
+            let name: String = conn
+                .query_row(
+                    "SELECT bt_custom_name FROM tasks WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
+            Ok(name)
         })
         .await?
     }
@@ -798,32 +842,36 @@ impl Db {
         let default_save_dir = default_save_dir.to_owned();
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
-            conn.execute_batch(&format!(
-                "INSERT OR IGNORE INTO config (key, value) VALUES
-                    ('default_save_dir', '{}'),
-                    ('default_segments', '0'),
-                    ('max_concurrent_tasks', '5'),
-                    ('speed_limit_bytes', '0'),
-                    ('auto_resume_on_start', 'false'),
-                    ('close_to_tray', 'true'),
-                    ('auto_startup', 'false'),
-                    ('auto_check_update', 'true'),
-                    ('bt_enable_dht', 'true'),
-                    ('bt_enable_upnp', 'true'),
-                    ('bt_port_start', '6881'),
-                    ('bt_port_end', '6891'),
-                    ('bt_custom_trackers', ''),
-                    ('torrent_assoc_prompted', 'false'),
-                    ('proxy_mode', 'none'),
-                    ('proxy_type', 'http'),
-                    ('proxy_host', ''),
-                    ('proxy_port', ''),
-                    ('proxy_username', ''),
-                    ('proxy_password', ''),
-                    ('proxy_no_list', ''),
-                    ('global_user_agent', '');",
-                default_save_dir.replace('\'', "''")
-            ))?;
+            let defaults: &[(&str, &str)] = &[
+                ("default_save_dir", &default_save_dir),
+                ("default_segments", "0"),
+                ("max_concurrent_tasks", "5"),
+                ("speed_limit_bytes", "0"),
+                ("auto_resume_on_start", "false"),
+                ("close_to_tray", "true"),
+                ("auto_startup", "false"),
+                ("auto_check_update", "true"),
+                ("bt_enable_dht", "true"),
+                ("bt_enable_upnp", "true"),
+                ("bt_port_start", "6881"),
+                ("bt_port_end", "6891"),
+                ("bt_custom_trackers", ""),
+                ("torrent_assoc_prompted", "false"),
+                ("proxy_mode", "none"),
+                ("proxy_type", "http"),
+                ("proxy_host", ""),
+                ("proxy_port", ""),
+                ("proxy_username", ""),
+                ("proxy_password", ""),
+                ("proxy_no_list", ""),
+                ("global_user_agent", ""),
+            ];
+            for (key, value) in defaults {
+                conn.execute(
+                    "INSERT OR IGNORE INTO config (key, value) VALUES (?1, ?2)",
+                    params![key, value],
+                )?;
+            }
             Ok(())
         })
         .await?
@@ -834,16 +882,18 @@ impl Db {
         let conn = self.conn.clone();
         let task_id = task_id.to_owned();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
-            conn.execute(
+            let mut conn = conn.lock().map_err(|_| DbError::LockPoisoned)?;
+            let tx = conn.transaction()?;
+            tx.execute(
                 "DELETE FROM task_segments WHERE task_id = ?1",
                 params![task_id],
             )?;
             // Also reset downloaded_bytes in the tasks table
-            conn.execute(
+            tx.execute(
                 "UPDATE tasks SET downloaded_bytes = 0 WHERE id = ?1",
                 params![task_id],
             )?;
+            tx.commit()?;
             Ok(())
         })
         .await?

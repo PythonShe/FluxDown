@@ -139,9 +139,10 @@ export default defineBackground(() => {
       _settingsCacheTs = 0;
       _settingsInflight = null;
       _settingsVersion++; // 使任何进行中的 inflight 结果失效
-      // 设置变更时同步更新下载 UI 隐藏状态
+      // 设置变更时同步更新图标和下载 UI 隐藏状态
       getCachedSettings()
         .then((s) => {
+          updateIcon(s.enabled);
           syncDownloadShelfState(s.enabled);
         })
         .catch(() => {});

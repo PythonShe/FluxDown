@@ -125,6 +125,7 @@ class TaskList extends StatelessWidget {
               delegate: SliverChildBuilderDelegate((context, index) {
                 final task = group.tasks[index];
                 return RepaintBoundary(
+                  key: ValueKey(task.id),
                   child: TaskListItem(
                     task: task,
                     isSelected: task.id == controller.selectedTaskId,

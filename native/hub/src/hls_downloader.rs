@@ -1113,6 +1113,10 @@ async fn download_segment_once(
     let raw_stream = resp.bytes_stream();
     let mut stream = crate::downloader::maybe_decompress_stream(raw_stream, encoding);
 
+    /// Maximum allowed size for a single HLS segment (256 MB).
+    /// Prevents OOM if a malicious or misconfigured server sends an oversized segment.
+    const MAX_SEGMENT_BYTES: usize = 256 * 1024 * 1024;
+
     let mut buf = Vec::new();
     loop {
         let chunk = tokio::select! {
@@ -1123,6 +1127,12 @@ async fn download_segment_once(
             break;
         };
         let chunk_data = chunk_result.map_err(DownloadError::Io)?;
+        if buf.len() + chunk_data.len() > MAX_SEGMENT_BYTES {
+            return Err(DownloadError::Other(format!(
+                "HLS segment too large: exceeds {} MB limit",
+                MAX_SEGMENT_BYTES / (1024 * 1024)
+            )));
+        }
         buf.extend_from_slice(&chunk_data);
     }
     Ok(buf)

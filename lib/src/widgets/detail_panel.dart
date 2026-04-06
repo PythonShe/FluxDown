@@ -675,7 +675,11 @@ class _SegmentBarPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_SegmentBarPainter old) => true;
+  bool shouldRepaint(_SegmentBarPainter old) =>
+      !identical(segments, old.segments) ||
+      totalBytes != old.totalBytes ||
+      emptyColor != old.emptyColor ||
+      accent != old.accent;
 }
 
 // =============================================================================
@@ -764,7 +768,16 @@ class _SegmentGridPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_SegmentGridPainter old) => true;
+  bool shouldRepaint(_SegmentGridPainter old) =>
+      !identical(segments, old.segments) ||
+      totalBytes != old.totalBytes ||
+      totalCells != old.totalCells ||
+      cols != old.cols ||
+      cellSize != old.cellSize ||
+      cellGap != old.cellGap ||
+      emptyColor != old.emptyColor ||
+      isDark != old.isDark ||
+      accent != old.accent;
 }
 
 // =============================================================================

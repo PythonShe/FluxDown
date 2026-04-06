@@ -84,6 +84,9 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
   /// 是否展开高级选项（含任务代理）
   bool _showAdvanced = false;
 
+  /// 防止双击重复提交
+  bool _isSubmitting = false;
+
   /// 解析出的有效 URL 数量（实时计算）
   int _urlCount = 0;
 
@@ -318,6 +321,7 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
   Future<void> _pasteUrlFromClipboard() async {
     try {
       final data = await Clipboard.getData(Clipboard.kTextPlain);
+      if (!mounted) return;
       if (data == null || data.text == null) return;
       final text = data.text!.trim();
 
@@ -701,6 +705,17 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
       });
 
   Future<void> _startDownload() async {
+    if (_isSubmitting) return;
+    setState(() => _isSubmitting = true);
+
+    try {
+      await _startDownloadInner();
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  Future<void> _startDownloadInner() async {
     final saveDir = _saveDirController.text.trim();
     if (saveDir.isEmpty) return;
 
@@ -752,10 +767,12 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
       final entry = entries.first;
       // 先注册回调，再发 CreateTask 信号，保证信号到达时回调已就位（无竞态）
       BtFileSelectionService.registerPendingHandler(_onBtFilesInfoReceived);
+      final rename = _renameController.text.trim();
+      final fileName = rename.isNotEmpty ? rename : entry.fileName;
       widget.controller.createTask(
         url: entry.url,
         saveDir: saveDir,
-        fileName: entry.fileName,
+        fileName: fileName,
         segments: segments,
         proxyUrl: proxyUrl,
         userAgent: userAgent,
@@ -879,7 +896,8 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
               ),
               ShadButton(
                 onPressed:
-                    (_isProbing ||
+                    (_isSubmitting ||
+                            _isProbing ||
                             (_hasTorrentFiles &&
                                 !_hasAnyTorrentSelection &&
                                 _allTorrentsProbed))
@@ -1132,7 +1150,7 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
             ),
 
             // 重命名 — 仅单条 URL 时显示（torrent 文件自动识别名称）
-            if (!_isBatch && !_hasTorrentFiles) ...[
+            if (!_isBatch) ...[
               const SizedBox(height: 14),
               _SectionLabel(text: s.renameOptional, c: c),
               const SizedBox(height: 6),

@@ -14,7 +14,7 @@
 
 import { initI18n, applyI18nToDOM, t, getLocale, saveLocale } from '@/utils/i18n';
 import { checkFluxDownAvailable } from '@/utils/native-messaging';
-import { loadSettings } from '@/utils/settings';
+import { loadSettings, saveSettings } from '@/utils/settings';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
@@ -132,14 +132,10 @@ function renderExtTags(extensions: string[]) {
 }
 
 async function removeExtension(ext: string) {
-  const result = await browser.storage.sync.get('settings') ?? {};
-  const settings = result.settings || {};
-  const exts: string[] = settings.interceptExtensions || [];
-  const idx = exts.indexOf(ext);
-  if (idx !== -1) {
-    exts.splice(idx, 1);
-    settings.interceptExtensions = exts;
-    await browser.storage.sync.set({ settings });
+  const current = await loadSettings();
+  const exts = current.interceptExtensions.filter((e) => e !== ext);
+  if (exts.length !== current.interceptExtensions.length) {
+    await saveSettings({ interceptExtensions: exts });
     renderExtTags(exts);
     showToast(t('fileType.removed', { ext }));
   }
@@ -156,9 +152,8 @@ async function addExtension(ext: string) {
     return;
   }
 
-  const result = await browser.storage.sync.get('settings') ?? {};
-  const settings = result.settings || {};
-  const exts: string[] = settings.interceptExtensions || [];
+  const current = await loadSettings();
+  const exts = [...current.interceptExtensions];
 
   if (exts.includes(ext)) {
     showToast(t('fileType.exists', { ext }), 'error');
@@ -166,8 +161,7 @@ async function addExtension(ext: string) {
   }
 
   exts.push(ext);
-  settings.interceptExtensions = exts;
-  await browser.storage.sync.set({ settings });
+  await saveSettings({ interceptExtensions: exts });
   renderExtTags(exts);
   showToast(t('fileType.added', { ext }));
 }
@@ -204,14 +198,10 @@ function renderDomainList(domains: string[]) {
 }
 
 async function removeDomain(domain: string) {
-  const result = await browser.storage.sync.get('settings') ?? {};
-  const settings = result.settings || {};
-  const domains: string[] = settings.excludeDomains || [];
-  const idx = domains.indexOf(domain);
-  if (idx !== -1) {
-    domains.splice(idx, 1);
-    settings.excludeDomains = domains;
-    await browser.storage.sync.set({ settings });
+  const current = await loadSettings();
+  const domains = current.excludeDomains.filter((d) => d !== domain);
+  if (domains.length !== current.excludeDomains.length) {
+    await saveSettings({ excludeDomains: domains });
     renderDomainList(domains);
     showToast(t('domain.removed', { domain }));
   }
@@ -221,9 +211,8 @@ async function addDomain(domain: string) {
   domain = domain.trim().toLowerCase();
   if (!domain) return;
 
-  const result = await browser.storage.sync.get('settings') ?? {};
-  const settings = result.settings || {};
-  const domains: string[] = settings.excludeDomains || [];
+  const current = await loadSettings();
+  const domains = [...current.excludeDomains];
 
   if (domains.includes(domain)) {
     showToast(t('domain.exists', { domain }), 'error');
@@ -231,8 +220,7 @@ async function addDomain(domain: string) {
   }
 
   domains.push(domain);
-  settings.excludeDomains = domains;
-  await browser.storage.sync.set({ settings });
+  await saveSettings({ excludeDomains: domains });
   renderDomainList(domains);
   showToast(t('domain.excluded', { domain }));
 }
@@ -355,28 +343,21 @@ dotVisibleToggle.addEventListener('change', async () => {
 
 // 启用/禁用开关
 enableToggle.addEventListener('change', async () => {
-  // R8-1 修复：sendMessage 可能因 background 未响应而返回 undefined，加守卫防止 TypeError
-  try {
-    const res = await browser.runtime.sendMessage({ action: 'toggleEnabled' });
-    if (res?.enabled !== undefined) updateEnableHint(res.enabled);
-  } catch {
-    // background 未响应时不改变 hint 显示
-  }
+  const enabled = enableToggle.checked;
+  updateEnableHint(enabled);
+  await saveSettings({ enabled });
 });
 
 // 拦截模式
 interceptModeSelect.addEventListener('change', async () => {
   const mode = interceptModeSelect.value;
   updateModeHint(mode);
-  await browser.runtime.sendMessage({ action: 'updateSettings', settings: { interceptMode: mode } });
+  await saveSettings({ interceptMode: mode as any });
 });
 
 // 最小文件大小
 minSizeSelect.addEventListener('change', async () => {
-  const result = await browser.storage.sync.get('settings') ?? {};
-  const settings = result.settings || {};
-  settings.minFileSize = parseInt(minSizeSelect.value, 10);
-  await browser.storage.sync.set({ settings });
+  await saveSettings({ minFileSize: parseInt(minSizeSelect.value, 10) });
 });
 
 // 扩展名 - 显示输入框

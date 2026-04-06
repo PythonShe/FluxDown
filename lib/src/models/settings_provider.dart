@@ -491,7 +491,11 @@ class SettingsProvider extends ChangeNotifier {
 
   /// 启动时同步开机启动状态（从系统注册表读取实际状态）
   Future<void> _syncAutoStartupState() async {
-    _autoStartup = await launchAtStartup.isEnabled();
+    final actual = await launchAtStartup.isEnabled();
+    if (_autoStartup != actual) {
+      _autoStartup = actual;
+      notifyListeners();
+    }
   }
 
   /// 平台默认下载目录

@@ -259,6 +259,8 @@ mod server {
 // Non-Windows: Unix Domain Socket server.
 #[cfg(not(windows))]
 mod server {
+    use std::os::unix::fs::PermissionsExt;
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixListener;
     use tokio::sync::mpsc;
@@ -495,6 +497,13 @@ mod server {
                     return;
                 }
             };
+
+            // Restrict socket to owner-only so other local users cannot connect.
+            if let Err(e) =
+                std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o600))
+            {
+                log_info!("[nmh-uds] failed to set socket permissions: {}", e);
+            }
 
             loop {
                 match listener.accept().await {

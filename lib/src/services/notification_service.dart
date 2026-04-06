@@ -114,7 +114,10 @@ class NotificationService {
       logInfo(_tag, 'showDownloadComplete: skipped (notifyOnComplete=false)');
       return;
     }
-    _showSystemDownloadComplete(task);
+    // System notification is dispatched conditionally inside _flushQueueWindows
+    // and _flushQueueDesktop (only when the window is hidden/minimized).
+    // Previously called _showSystemDownloadComplete unconditionally here,
+    // which caused double notifications when the window was in the foreground.
     logInfo(
       _tag,
       'showDownloadComplete: file=${task.fileName}, shuttingDown=$_shuttingDown',
