@@ -64,7 +64,7 @@ nul
 *.db-wal
 
 # fluxDown plugin
-fluxDown/node_modules/
+node_modules
 fluxDown/.output/
 fluxDown/.wxt/
 fluxDown/dist/
