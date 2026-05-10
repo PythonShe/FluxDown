@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # 允许在 release job 末尾删除旧 artifact（避免 500MB 配额耗尽）
 
 jobs:
   # ── 手动触发时：仅同步指定版本文件到 R2，跳过构建 ──
@@ -976,3 +977,46 @@ jobs:
           done
 
           echo "✅ Cleanup complete. Kept latest ${KEEP_VERSIONS} versions."
+
+      # ── 清理 GitHub Actions Artifact，仅保留当前 tag 这一组 ──
+      # 原因：Free 账号 artifact 配额仅 500MB，每次 release 会上传 ~400MB
+      # Release 资产已独立存储在 GitHub Release + R2，artifact 只是 CI 中间产物可安全清理
+      # 此 step 在 release 创建成功后执行，失败不阻断流程（continue-on-error）
+      - name: Cleanup GitHub Actions artifacts (keep current tag only)
+        if: always() && success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT_TAG="${GITHUB_REF#refs/tags/}"
+          echo "🧹 Artifact cleanup: keeping only artifacts from tag ${CURRENT_TAG}"
+
+          # 列出所有 artifact，过滤掉当前 tag 的，删除其余所有
+          # workflow_run.head_branch 在 tag 推送时等于 tag 名（v0.1.43 这样）
+          DELETE_IDS=$(gh api --paginate \
+            repos/${{ github.repository }}/actions/artifacts \
+            -q ".artifacts[] | select(.workflow_run.head_branch != \"${CURRENT_TAG}\") | .id")
+
+          if [ -z "$DELETE_IDS" ]; then
+            echo "✅ No old artifacts to delete"
+            exit 0
+          fi
+
+          DELETE_COUNT=$(echo "$DELETE_IDS" | wc -l)
+          echo "Will delete ${DELETE_COUNT} old artifact(s)"
+
+          # 串行删除避免触发 GitHub TLS 限流（之前并发 8 大量 timeout）
+          FAIL=0
+          for id in $DELETE_IDS; do
+            if gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/${id} 2>/dev/null; then
+              echo "  🗑️  Deleted artifact ${id}"
+            else
+              echo "  ⚠️  Failed to delete artifact ${id}"
+              FAIL=$((FAIL+1))
+            fi
+          done
+
+          echo "✅ Artifact cleanup complete. Deleted $((DELETE_COUNT-FAIL))/${DELETE_COUNT}"
+          if [ "$FAIL" -gt 0 ]; then
+            echo "⚠️  ${FAIL} deletion(s) failed (will be retried next release)"
+          fi
