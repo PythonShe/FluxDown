@@ -32,6 +32,7 @@ import {
   sendDownloadRequest,
   sendBatchDownloadRequest,
   checkFluxDownAvailable,
+  checkFluxDownAvailableWithRetry,
 } from "@/utils/native-messaging";
 import type {
   DownloadRequest,
@@ -811,6 +812,109 @@ export default defineBackground(() => {
     }
   }, 60_000); // 每 60 秒清理一次
 
+  /**
+   * 绕过令牌检查（基于时间，不消费）。
+   *
+   * 关键修复（#308 #346 弹窗风暴根因）：bypassTokens 必须按"过期时间"语义工作，
+   * 读取时**不删除**。原实现"读取即删除"导致回退重发起的下载被第二层
+   * (onDeterminingFilename) 放行并消费令牌后，第三层 (onCreated 兜底) 再次查不到
+   * 令牌 → 重新拦截 → 再次发送失败 → 再次回退 → 无限弹窗循环。
+   * 改为时间令牌后，同一次回退产生的下载在所有拦截层都被一致放行。
+   */
+  function hasActiveBypass(url: string): boolean {
+    const expiry = bypassTokens.get(url);
+    return expiry !== undefined && expiry > Date.now();
+  }
+
+  // ── App 可用性熔断器（#308 #346 弹窗风暴修复）────────────────────────
+  // 当发送失败且**重连重试 ping 仍确认 App 不可达**时，进入冷却期：冷却期内**跳过拦截**，
+  // 让浏览器原生下载，避免"拦截→发送失败→回退→再拦截"的反复弹窗。
+  // 恢复路径（缩短"App 已恢复却仍被旁路"的死区，review 发现 #1/#4/#6）：
+  //   1) 冷却期到期后下一次下载尝试发送，成功即解除（兜底）；
+  //   2) popup 打开时 ping 成功立即解除（用户启动 App 后常见操作）；
+  //   3) 待发队列 flush 成功时解除。
+  // 冷却期取 30s（短于 60s 以缩小误熔断/陈旧冷却的影响半径，review 发现 #3/#5）。
+  const APP_DOWN_COOLDOWN_MS = 30_000;
+  // storage.session 持久化键：让熔断状态在 MV3 Service Worker 重启后仍生效，
+  // 否则每次 SW 冷启动都会重新拦截一次造成跨生命周期的弹窗。
+  const APP_DOWN_STATE_KEY = "fluxdownAppDownUntil";
+  let _appDownUntil = 0;
+  // 熔断期内"未检测到 App"提示只弹一次，解除熔断时复位。
+  let _appDownNotified = false;
+  // 标记熔断状态是否已被一次实时的 markAppDown/markAppUp 改写过。
+  // 用于防止 SW 冷启动时异步恢复的旧持久值，覆盖掉启动期间刚到达的实时恢复信号
+  // （Chrome MV3：appConfirmedUp 消息可能正是唤醒 SW 的那条，markAppUp 先跑、
+  //  随后 storage.session.get 才 resolve 并把旧 until 写回，造成已恢复却又被熔断）。
+  // review round2 发现 #1。
+  let _breakerStateTouched = false;
+
+  function isAppKnownDown(): boolean {
+    return Date.now() < _appDownUntil;
+  }
+
+  function persistAppDownState(until: number): void {
+    // storage.session 在部分旧版浏览器不可用；best-effort，失败不影响内存态熔断。
+    try {
+      (browser.storage as any).session
+        ?.set({ [APP_DOWN_STATE_KEY]: until })
+        ?.catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function markAppDown(): void {
+    // 无条件置位：即使本次是 no-op，也代表"有过实时熔断/恢复判定"，
+    // 启动恢复必须让位（见 _breakerStateTouched 说明）。
+    _breakerStateTouched = true;
+    _appDownUntil = Date.now() + APP_DOWN_COOLDOWN_MS;
+    persistAppDownState(_appDownUntil);
+  }
+
+  function markAppUp(): void {
+    // 无条件置位：即便内存态已是"up"（guard 跳过），一条实时的"App 可达"信号
+    // 也应阻止后续异步恢复把旧的 down 状态写回（review round2 发现 #1）。
+    _breakerStateTouched = true;
+    if (_appDownUntil !== 0 || _appDownNotified) {
+      _appDownUntil = 0;
+      _appDownNotified = false;
+      persistAppDownState(0);
+    }
+  }
+
+  // 熔断确认探测的单航班守卫：并发下载在 cooldown 到期同时失败时，
+  // 共享同一次重连重试 ping，避免各自独立 ping 造成的连接抖动（review round2 发现 #4）。
+  let _appProbe: Promise<boolean> | null = null;
+  function probeAppReachable(): Promise<boolean> {
+    if (!_appProbe) {
+      _appProbe = checkFluxDownAvailableWithRetry()
+        .catch(() => false)
+        .finally(() => {
+          _appProbe = null;
+        });
+    }
+    return _appProbe;
+  }
+
+  // SW 启动时从 storage.session 恢复熔断状态（best-effort）。
+  (async () => {
+    try {
+      const s = await (browser.storage as any).session?.get(APP_DOWN_STATE_KEY);
+      const until = s?.[APP_DOWN_STATE_KEY];
+      // 仅当启动期间没有任何实时熔断/恢复发生时才采用持久值，避免覆盖刚到达的
+      // markAppUp/markAppDown（review round2 发现 #1）。
+      if (
+        !_breakerStateTouched &&
+        typeof until === "number" &&
+        until > Date.now()
+      ) {
+        _appDownUntil = until;
+      }
+    } catch {
+      /* ignore */
+    }
+  })();
+
   // Firefox 不支持 onDeterminingFilename，兜底层是唯一拦截路径，
   // 需要更长等待让浏览器填充 downloadItem 元数据
   const hasDeterminingFilename = !!browser.downloads.onDeterminingFilename;
@@ -1019,9 +1123,11 @@ export default defineBackground(() => {
     if (!settings.enabled) return;
     if (handledDownloads.has(downloadId)) return;
 
-    const bypass = bypassTokens.get(url);
-    if (bypass && bypass > Date.now()) {
-      bypassTokens.delete(url);
+    if (hasActiveBypass(url)) return;
+
+    // App 熔断期内跳过拦截，让浏览器原生下载，避免反复"发送失败→回退"弹窗。
+    if (isAppKnownDown()) {
+      responseDownloadCache.delete(url);
       return;
     }
 
@@ -1099,11 +1205,10 @@ export default defineBackground(() => {
       filename,
     };
 
-    const bypass = bypassTokens.get(url);
-    if (bypass && bypass > Date.now()) {
-      bypassTokens.delete(url);
-      return;
-    }
+    if (hasActiveBypass(url)) return;
+
+    // App 熔断期内跳过拦截，让浏览器原生下载，避免反复"发送失败→回退"弹窗。
+    if (isAppKnownDown()) return;
 
     const intercept = shouldIntercept(itemInfo, settings);
     console.log("[FluxDown] Path B shouldIntercept:", intercept, itemInfo);
@@ -1261,9 +1366,7 @@ export default defineBackground(() => {
         // 注：同步调用 suggest 后无需 return true，Chrome 不会再等待异步 suggest。
         const _syncSettings = _settingsCache;
         if (_syncSettings !== null) {
-          const _syncBypass = bypassTokens.get(url);
-          if (_syncBypass && _syncBypass > Date.now()) {
-            bypassTokens.delete(url);
+          if (hasActiveBypass(url)) {
             handledDownloads.delete(downloadItem.id);
             suggest(
               downloadItem.filename
@@ -1274,6 +1377,17 @@ export default defineBackground(() => {
             return;
           }
           if (!_syncSettings.enabled) {
+            handledDownloads.delete(downloadItem.id);
+            suggest(
+              downloadItem.filename
+                ? { filename: downloadItem.filename }
+                : (undefined as any),
+            );
+            downloadItemCache.delete(downloadItem.id);
+            return;
+          }
+          // App 熔断期内：直接放行给浏览器原生下载，跳过拦截，避免弹窗风暴。
+          if (isAppKnownDown()) {
             handledDownloads.delete(downloadItem.id);
             suggest(
               downloadItem.filename
@@ -1405,10 +1519,8 @@ export default defineBackground(() => {
               // 加载设置（这会同时预热缓存，后续下载走同步快速路径）
               const settings = await getCachedSettings();
 
-              // 检查 bypass 令牌
-              const bypass = bypassTokens.get(url);
-              if (bypass && bypass > Date.now()) {
-                bypassTokens.delete(url);
+              // 检查 bypass 令牌（基于时间，不消费）
+              if (hasActiveBypass(url)) {
                 handledDownloads.delete(downloadItem.id);
                 await fallbackToBrowserDownload(
                   downloadUrl,
@@ -1420,6 +1532,17 @@ export default defineBackground(() => {
 
               // 拦截未启用 → 回退让浏览器重新下载
               if (!settings.enabled) {
+                handledDownloads.delete(downloadItem.id);
+                await fallbackToBrowserDownload(
+                  downloadUrl,
+                  undefined,
+                  true,
+                ).catch(() => {});
+                return;
+              }
+
+              // App 熔断期内 → 静默回退浏览器下载，不再尝试发送，避免弹窗风暴。
+              if (isAppKnownDown()) {
                 handledDownloads.delete(downloadItem.id);
                 await fallbackToBrowserDownload(
                   downloadUrl,
@@ -1554,11 +1677,20 @@ export default defineBackground(() => {
               return;
             }
 
-            // 检查 Alt+Click 绕过令牌
-            const bypass = bypassTokens.get(url);
-            if (bypass && bypass > Date.now()) {
-              bypassTokens.delete(url);
+            // 检查 Alt+Click 绕过令牌（基于时间，不消费）
+            if (hasActiveBypass(url)) {
               // Bug R2-1 修复：删除预标记，让浏览器正常下载
+              handledDownloads.delete(downloadItem.id);
+              callSuggest(
+                downloadItem.filename
+                  ? { filename: downloadItem.filename }
+                  : undefined,
+              );
+              return;
+            }
+
+            // App 熔断期内：删除预标记，放行给浏览器原生下载，跳过拦截。
+            if (isAppKnownDown()) {
               handledDownloads.delete(downloadItem.id);
               callSuggest(
                 downloadItem.filename
@@ -1769,6 +1901,8 @@ export default defineBackground(() => {
         const item = toRetry[i];
         if (result.status === "fulfilled" && result.value.success) {
           console.log("[FluxDown] Pending request flushed:", item.request.url);
+          // 队列重试成功 → App 已恢复，解除熔断（review 发现 #6）。
+          markAppUp();
           incrementStat("sent").catch(() => {});
           // 成功则不再放回 remaining
         } else {
@@ -1918,6 +2052,8 @@ export default defineBackground(() => {
     const response = await sendDownloadRequest(request);
 
     if (response.success) {
+      // 发送成功 → App 在线，立即解除可用性熔断。
+      markAppUp();
       await incrementStat("sent");
       return true;
     } else {
@@ -1983,8 +2119,13 @@ export default defineBackground(() => {
     silent = false,
   ): Promise<void> {
     try {
-      const appAlive = await checkFluxDownAvailable();
+      // 用带重连重试的探测确认 App 状态：给 App 冷启动/瞬时繁忙第二次机会，
+      // 避免单次瞬态 ping 失败把已安装的 App 误判为不可用而误熔断（review 发现 #3）。
+      // 经单航班守卫复用并发探测（review round2 发现 #4）。
+      const appAlive = await probeAppReachable();
       if (appAlive) {
+        // App 在线（消息大概率已送达）→ 解除熔断，跳过回退避免双下载。
+        markAppUp();
         console.log(
           "[FluxDown] App is alive after send failure — skipping browser fallback (message likely delivered):",
           url,
@@ -1994,7 +2135,17 @@ export default defineBackground(() => {
     } catch {
       // ping 本身异常，视为 App 不可达，继续回退
     }
-    await fallbackToBrowserDownload(url, filename, silent);
+
+    // App 二次确认仍不可达 → 启动熔断：冷却期内后续下载直接放行给浏览器，
+    // 不再反复"拦截→失败→回退"。同时"未检测到 App"提示每轮熔断只弹一次，
+    // 替代过去逐次回退都弹"已回退到浏览器下载"造成的弹窗风暴（#308 #346）。
+    markAppDown();
+    if (!silent && !_appDownNotified) {
+      _appDownNotified = true;
+      notify(t("notify.appUnavailable"), t("notify.appUnavailableDetail"));
+    }
+    // 内层回退强制 silent：通知已由上面的一次性提示统一接管。
+    await fallbackToBrowserDownload(url, filename, true);
   }
 
   // ===== 统一消息处理（Popup + Content Script） =====
@@ -2006,6 +2157,9 @@ export default defineBackground(() => {
       // --- Popup 消息 ---
       case "getStatus": {
         const available = await checkFluxDownAvailable();
+        // ping 成功证明 App 已恢复 → 立即解除熔断，避免 popup 显示"已连接"
+        // 但下载仍被静默旁路到浏览器的自相矛盾（review 发现 #1/#4/#6）。
+        if (available) markAppUp();
         const settings = await loadSettings();
         return { connected: available, settings };
       }
@@ -2029,7 +2183,18 @@ export default defineBackground(() => {
 
       case "checkConnection": {
         const isAvailable = await checkFluxDownAvailable();
+        // ping 成功 → 解除熔断，让接管与连接状态保持一致（review 发现 #6）。
+        if (isAvailable) markAppUp();
         return { connected: isAvailable };
+      }
+
+      // --- Popup 直连 ping 成功后的熔断恢复信号 ---
+      // popup 在自己的上下文直接 ping NMH（不经 background），成功后发来此信号，
+      // 让 background 的可用性熔断器及时解除，使"接管"与 popup 显示的"已连接"
+      // 保持一致（review 发现 #1/#4/#6）。fire-and-forget，无需返回值。
+      case "appConfirmedUp": {
+        markAppUp();
+        return { success: true };
       }
 
       // --- Alt+Click 绕过令牌写入（保留向后兼容） ---
@@ -2406,10 +2571,29 @@ export default defineBackground(() => {
     return true;
   }
 
+  // 通知去重表：title+message → 上次展示时间戳。
+  // 安全网：即便存在残余重入，也能防止同一条通知在短时间内反复弹出（#308 #346）。
+  const _notifyDedup = new Map<string, number>();
+  const NOTIFY_DEDUP_MS = 5000;
+
   function notify(title: string, message: string) {
     // R5-7 修复：Firefox 下 notifications 可能不存在或受权限限制，
     // fire-and-forget 的未捕获 rejection 会产生控制台错误噪音。
     if (!browser.notifications?.create) return;
+
+    // 去重/限流：相同内容的通知在 NOTIFY_DEDUP_MS 内只展示一次。
+    const now = Date.now();
+    const key = `${title} ${message}`;
+    const last = _notifyDedup.get(key);
+    if (last !== undefined && now - last < NOTIFY_DEDUP_MS) return;
+    _notifyDedup.set(key, now);
+    // 机会式清理过期条目，避免长期累积。
+    if (_notifyDedup.size > 50) {
+      for (const [k, ts] of _notifyDedup) {
+        if (now - ts >= NOTIFY_DEDUP_MS) _notifyDedup.delete(k);
+      }
+    }
+
     try {
       browser.notifications.create({
         type: "basic",

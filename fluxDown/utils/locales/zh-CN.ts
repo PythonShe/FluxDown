@@ -70,6 +70,9 @@ const zhCN = {
   "notify.fallbackBrowser": "已回退到浏览器下载",
   "notify.fallbackBrowserDetail":
     "无法发送到 FluxDown，已交由浏览器继续下载: {url}",
+  "notify.appUnavailable": "未检测到 FluxDown 应用",
+  "notify.appUnavailableDetail":
+    "已暂时改用浏览器自带下载。请确认 FluxDown 桌面端已启动，稍后将自动恢复接管。",
 
   // Resource sniffer & panel
   "sniffer.title": "资源嗅探",

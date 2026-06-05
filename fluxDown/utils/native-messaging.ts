@@ -23,6 +23,11 @@ const NMH_NAME = "com.fluxdown.nmh";
 // 每请求超时时间（NMH 启动 App 最多需要 ~7.5s，预留充足余量）
 const REQUEST_TIMEOUT_MS = 12000;
 
+// 熔断确认 ping 的短超时：仅用于探测 App 是否"当下可达"（liveness），
+// 无需等待 App 冷启动——下载发送阶段已用 12s×2 给过 App 充足的拉起窗口。
+// 用短超时避免回退前再额外阻塞 ~24s（review round2 发现 #3/#5 的 ~48s 卡顿）。
+const PING_TIMEOUT_MS = 4000;
+
 // ──────────────────────────────────────────────────────────────
 // 类型定义
 // ──────────────────────────────────────────────────────────────
@@ -163,6 +168,7 @@ function disconnectPort() {
 function sendMessage(
   action: string,
   payload: Record<string, any> = {},
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<ApiResponse> {
   return new Promise<ApiResponse>((resolve) => {
     const port = getPort();
@@ -175,7 +181,7 @@ function sendMessage(
     const timer = setTimeout(() => {
       _pendingRequests.delete(msgId);
       resolve({ success: false, message: "timeout" });
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
 
     _pendingRequests.set(msgId, { resolve, timer });
 
@@ -199,8 +205,9 @@ function sendMessage(
 async function sendWithRetry(
   action: string,
   payload: Record<string, any>,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<ApiResponse> {
-  const result = await sendMessage(action, payload);
+  const result = await sendMessage(action, payload, timeoutMs);
   if (result.success) return result;
 
   // Retry once on transient failures (gets a fresh NMH process that auto-launches App)
@@ -218,7 +225,7 @@ async function sendWithRetry(
   // 此时消息已送达但响应丢失。重连后先 ping：如果 App 在线，说明消息
   // 大概率已送达，直接返回成功，避免重复发送导致 App 创建重复任务。
   if (result.message === "port disconnected" && action !== "ping") {
-    const pingResult = await sendMessage("ping");
+    const pingResult = await sendMessage("ping", {}, timeoutMs);
     if (pingResult.success) {
       console.log(
         "[FluxDown NMH] App alive after port disconnect — message likely delivered, skipping retry",
@@ -232,7 +239,7 @@ async function sendWithRetry(
     disconnectPort();
   }
 
-  return sendMessage(action, payload);
+  return sendMessage(action, payload, timeoutMs);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -301,5 +308,20 @@ export async function sendBatchDownloadRequest(
 
 export async function checkFluxDownAvailable(): Promise<boolean> {
   const result = await sendMessage("ping");
+  return result.success === true;
+}
+
+/**
+ * 带一次重连重试的可用性探测。
+ *
+ * 与 checkFluxDownAvailable 的区别：首次 ping 失败（超时/端口断开/app_not_running）时，
+ * 断开旧端口并以全新 NMH 进程再 ping 一次。用于"是否要熔断"这类需排除瞬态失败的判定：
+ * App 冷启动（NMH 拉起 App 最多 ~7.5s）或瞬时繁忙时，单次 ping 可能误报不可达，
+ * 重连重试给 App 第二次机会，避免把已安装但临时不可达的 App 误判为不可用（review 发现 #3）。
+ */
+export async function checkFluxDownAvailableWithRetry(): Promise<boolean> {
+  // 用短超时（PING_TIMEOUT_MS）做重连重试探测：最坏 ~2×4s，而非 2×12s，
+  // 既保留对瞬时断连/陈旧端口的重连第二次机会，又不显著拖慢回退（review #3/#5）。
+  const result = await sendWithRetry("ping", {}, PING_TIMEOUT_MS);
   return result.success === true;
 }

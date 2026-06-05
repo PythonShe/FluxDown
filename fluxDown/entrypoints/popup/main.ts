@@ -269,6 +269,13 @@ async function init() {
   if (available) {
     statusBadge.className = 'status-badge connected';
     statusText.textContent = t('header.connected');
+    // popup 直连 ping 成功 → 通知 background 解除可用性熔断，让接管状态与
+    // 这里显示的"已连接"保持一致，避免熔断期内 popup 显示已连接但下载仍被
+    // 旁路到浏览器（review 发现 #1/#4/#6）。fire-and-forget：不依赖返回值，
+    // 规避 Firefox MV2 下 sendMessage 收到 undefined 的问题。
+    browser.runtime
+      .sendMessage({ action: 'appConfirmedUp' })
+      .catch(() => {});
   } else {
     statusBadge.className = 'status-badge disconnected';
     statusText.textContent = t('header.disconnected');

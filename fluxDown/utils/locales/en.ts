@@ -75,6 +75,9 @@ const en: Record<MessageKey, string> = {
   "notify.fallbackBrowser": "Fell back to browser download",
   "notify.fallbackBrowserDetail":
     "Could not send to FluxDown, fell back to browser: {url}",
+  "notify.appUnavailable": "FluxDown app not detected",
+  "notify.appUnavailableDetail":
+    "Temporarily using the browser's built-in download. Make sure the FluxDown desktop app is running; interception will resume automatically.",
 
   // Resource sniffer & panel
   "sniffer.title": "Resource Sniffer",
