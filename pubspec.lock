@@ -393,10 +393,10 @@ packages:
     dependency: transitive
     description:
       name: lucide_icons_flutter
-      sha256: "67bc7cc05c3c03eee3405f88a0ca127efca03561db00e2e93cc0a46019c19a7b"
+      sha256: "7c5dc01a32a9905ae34e2d84224e92d6d0c42acf8926df9e01c35a1446bf1b69"
       url: "https://pub.dev"
     source: hosted
-    version: "3.1.9"
+    version: "3.1.14+2"
   matcher:
     dependency: transitive
     description:
@@ -601,10 +601,10 @@ packages:
     dependency: "direct main"
     description:
       name: shadcn_ui
-      sha256: "3a303139ed289f4e7d2bd6fc2bc19952033e4456b55dfbf8365461691cc19f48"
+      sha256: "477eae35e7ce4710b83d7db453f13fb3b51694fbb9af7eed774e01e0c7f29da0"
       url: "https://pub.dev"
     source: hosted
-    version: "0.52.1"
+    version: "0.52.3"
   shared_preferences:
     dependency: "direct main"
     description:
