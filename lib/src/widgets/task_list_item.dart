@@ -16,6 +16,7 @@ class TaskListItem extends StatefulWidget {
   final VoidCallback onPause;
   final VoidCallback onResume;
   final void Function({required bool deleteFiles}) onDelete;
+  final VoidCallback? onDoubleTap;
 
   /// Boost 优先下载相关
   final bool isPriority;
@@ -34,6 +35,7 @@ class TaskListItem extends StatefulWidget {
     required this.onPause,
     required this.onResume,
     required this.onDelete,
+    this.onDoubleTap,
     this.isPriority = false,
     this.onBoost,
     this.isManageMode = false,
@@ -73,6 +75,7 @@ class _TaskListItemState extends State<TaskListItem> {
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: isManage ? widget.onToggleChecked : widget.onTap,
+        onDoubleTap: isManage ? null : widget.onDoubleTap,
         onSecondaryTapDown: isManage ? null : _showContextMenu,
         child: Container(
           height: 64,
