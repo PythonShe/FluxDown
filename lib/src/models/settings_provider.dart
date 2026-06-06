@@ -19,6 +19,8 @@ class SettingsProvider extends ChangeNotifier {
   int _defaultSegments = 0; // 0 = 自动（由 Rust segment_advisor 动态计算）
   int _maxConcurrentTasks = 5;
   int _speedLimitBytes = 0; // 0 = 无限制
+  int _maxAutoRetries = 3; // -1 = 无限, 0 = 关闭, 1..10 = 次数
+  int _autoRetryDelaySecs = 5; // 失败重试间隔（秒）
   bool _autoResumeOnStart = false;
   bool _closeToTray = true; // 默认关闭到托盘
   bool _autoStartup = false; // 默认不开机启动
@@ -120,6 +122,8 @@ class SettingsProvider extends ChangeNotifier {
   int get defaultSegments => _defaultSegments;
   int get maxConcurrentTasks => _maxConcurrentTasks;
   int get speedLimitBytes => _speedLimitBytes;
+  int get maxAutoRetries => _maxAutoRetries;
+  int get autoRetryDelaySecs => _autoRetryDelaySecs;
   bool get autoResumeOnStart => _autoResumeOnStart;
   bool get closeToTray => _closeToTray;
   bool get autoStartup => _autoStartup;
@@ -208,6 +212,20 @@ class SettingsProvider extends ChangeNotifier {
     _speedLimitBytes = value;
     notifyListeners();
     _saveToRust('speed_limit_bytes', value.toString());
+  }
+
+  void setMaxAutoRetries(int value) {
+    if (_maxAutoRetries == value) return;
+    _maxAutoRetries = value;
+    notifyListeners();
+    _saveToRust('max_auto_retries', value.toString());
+  }
+
+  void setAutoRetryDelaySecs(int value) {
+    if (_autoRetryDelaySecs == value) return;
+    _autoRetryDelaySecs = value;
+    notifyListeners();
+    _saveToRust('auto_retry_delay_secs', value.toString());
   }
 
   void setAutoResumeOnStart(bool value) {
@@ -591,6 +609,10 @@ class SettingsProvider extends ChangeNotifier {
           _maxConcurrentTasks = int.tryParse(entry.value) ?? 5;
         case 'speed_limit_bytes':
           _speedLimitBytes = int.tryParse(entry.value) ?? 0;
+        case 'max_auto_retries':
+          _maxAutoRetries = int.tryParse(entry.value) ?? 3;
+        case 'auto_retry_delay_secs':
+          _autoRetryDelaySecs = int.tryParse(entry.value) ?? 5;
         case 'auto_resume_on_start':
           _autoResumeOnStart = entry.value == 'true';
         case 'close_to_tray':

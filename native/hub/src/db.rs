@@ -880,6 +880,9 @@ impl Db {
                 ("default_segments", "0"),
                 ("max_concurrent_tasks", "5"),
                 ("speed_limit_bytes", "0"),
+                // 自动重试：-1=无限，0=关闭，1..10=次数。延迟（秒）固定基值×已重试次数。
+                ("max_auto_retries", "3"),
+                ("auto_retry_delay_secs", "5"),
                 ("auto_resume_on_start", "false"),
                 ("close_to_tray", "true"),
                 ("auto_startup", "false"),

@@ -1483,6 +1483,19 @@ class _DownloadContent extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             _SettingCard(
+              label: s.autoRetryCount,
+              description: s.autoRetryCountDesc,
+              child: _AutoRetryCountSelector(settingsProvider: settingsProvider),
+            ),
+            const SizedBox(height: 10),
+            _SettingCard(
+              label: s.autoRetryDelay,
+              description: s.autoRetryDelayDesc,
+              vertical: true,
+              child: _AutoRetryDelayInput(settingsProvider: settingsProvider),
+            ),
+            const SizedBox(height: 10),
+            _SettingCard(
               label: s.userAgent,
               description: s.userAgentDesc,
               vertical: true,
@@ -1818,6 +1831,109 @@ class _SpeedLimitInputState extends State<_SpeedLimitInput> {
         const SizedBox(width: 8),
         Text(
           currentS.speedLimitUnit,
+          style: TextStyle(fontSize: 12, color: c.textMuted),
+        ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 失败自动重试
+// ─────────────────────────────────────────────
+
+/// 重试次数下拉：关闭(0) / 1 / 2 / 3 / 5 / 10 / 无限(-1)。
+class _AutoRetryCountSelector extends StatelessWidget {
+  final SettingsProvider settingsProvider;
+
+  const _AutoRetryCountSelector({required this.settingsProvider});
+
+  static const _options = [0, 1, 2, 3, 5, 10, -1];
+
+  String _label(BuildContext context, int v) {
+    final s = LocaleScope.of(context);
+    if (v == 0) return s.autoRetryOff;
+    if (v == -1) return s.autoRetryUnlimited;
+    return s.nRetries(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final current = settingsProvider.maxAutoRetries;
+    return ShadSelect<int>(
+      placeholder: Text(_label(context, current)),
+      initialValue: current,
+      options: _options
+          .map((v) => ShadOption(value: v, child: Text(_label(context, v))))
+          .toList(),
+      selectedOptionBuilder: (context, value) => Text(_label(context, value)),
+      onChanged: (v) {
+        if (v != null) settingsProvider.setMaxAutoRetries(v);
+      },
+    );
+  }
+}
+
+/// 重试间隔数字输入（秒，0 = 立即重试）。
+class _AutoRetryDelayInput extends StatefulWidget {
+  final SettingsProvider settingsProvider;
+
+  const _AutoRetryDelayInput({required this.settingsProvider});
+
+  @override
+  State<_AutoRetryDelayInput> createState() => _AutoRetryDelayInputState();
+}
+
+class _AutoRetryDelayInputState extends State<_AutoRetryDelayInput> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: '${widget.settingsProvider.autoRetryDelaySecs}',
+    );
+  }
+
+  @override
+  void didUpdateWidget(_AutoRetryDelayInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final secs = widget.settingsProvider.autoRetryDelaySecs;
+    final current = int.tryParse(_controller.text) ?? 0;
+    if (secs != current) {
+      _controller.text = '$secs';
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onSubmit(String value) {
+    final secs = (int.tryParse(value) ?? 0).clamp(0, 3600);
+    widget.settingsProvider.setAutoRetryDelaySecs(secs);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    final s = LocaleScope.of(context);
+    return Row(
+      children: [
+        SizedBox(
+          width: 120,
+          child: ShadInput(
+            controller: _controller,
+            placeholder: const Text('0'),
+            onSubmitted: _onSubmit,
+            onChanged: _onSubmit,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          s.autoRetryDelayUnit,
           style: TextStyle(fontSize: 12, color: c.textMuted),
         ),
       ],

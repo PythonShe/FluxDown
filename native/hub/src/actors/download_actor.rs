@@ -170,6 +170,18 @@ pub async fn run(db_dir: PathBuf) {
 
     manager.set_default_segments(default_segments);
 
+    // Apply persisted auto-retry config (key-value `config` table). Absent or
+    // unparsable values fall back to the manager's built-in defaults.
+    {
+        let cfg = db.get_all_config().await.unwrap_or_default();
+        if let Some(v) = cfg.get("max_auto_retries").and_then(|s| s.parse::<i32>().ok()) {
+            manager.set_max_auto_retries(v);
+        }
+        if let Some(v) = cfg.get("auto_retry_delay_secs").and_then(|s| s.parse::<u64>().ok()) {
+            manager.set_auto_retry_delay_secs(v);
+        }
+    }
+
     if let Some(rx) = manager.take_progress_rx() {
         tokio::spawn(download_manager::progress_reporter(rx, db.clone()));
     }
@@ -412,6 +424,18 @@ pub async fn run(db_dir: PathBuf) {
                         if let Ok(v) = msg.value.parse::<i32>() {
                             log_info!("[actor] updating default_segments to {}", v);
                             manager.set_default_segments(v);
+                        }
+                    }
+                    "max_auto_retries" => {
+                        if let Ok(v) = msg.value.parse::<i32>() {
+                            log_info!("[actor] updating max_auto_retries to {}", v);
+                            manager.set_max_auto_retries(v);
+                        }
+                    }
+                    "auto_retry_delay_secs" => {
+                        if let Ok(v) = msg.value.parse::<u64>() {
+                            log_info!("[actor] updating auto_retry_delay_secs to {}", v);
+                            manager.set_auto_retry_delay_secs(v);
                         }
                     }
                     // 本地 HTTP 接管服务的启停/端口/token 在启动时绑定，

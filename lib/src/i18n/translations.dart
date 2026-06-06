@@ -545,6 +545,22 @@ class S {
   String nThreads(int n) => _t('$n 线程', '$n threads');
   String nTasks(int n) => _t('$n 个任务', '$n tasks');
 
+  // 失败自动重试
+  String get autoRetryCount => _t('失败重试次数', 'Auto-retry Attempts');
+  String get autoRetryCountDesc => _t(
+    '网络中断等瞬时错误失败后自动重试的次数',
+    'Number of automatic retries after transient errors (e.g. network drops)',
+  );
+  String get autoRetryOff => _t('关闭', 'Off');
+  String get autoRetryUnlimited => _t('无限', 'Unlimited');
+  String nRetries(int n) => _t('$n 次', '$n times');
+  String get autoRetryDelay => _t('重试间隔', 'Retry Interval');
+  String get autoRetryDelayDesc => _t(
+    '每次自动重试前的等待秒数（按重试次数递增）',
+    'Seconds to wait before each auto-retry (increases per attempt)',
+  );
+  String get autoRetryDelayUnit => _t('秒（0 = 立即）', 'sec (0 = immediate)');
+
   // ─────────────────────────────────────────────
   // Settings — 代理
   // ─────────────────────────────────────────────

@@ -75,12 +75,27 @@ async fn handle_task_panic(
 /// 故提取为具名常量。
 const CANCELLED_ERROR_MESSAGE: &str = "cancelled";
 
-/// 任务级自动重试最大次数。网络 stall、连接重置等瞬时错误触发后，
+/// 任务级自动重试最大次数的默认值。网络 stall、连接重置等瞬时错误触发后，
 /// 自动延迟恢复下载，避免大文件下载中途停止需要用户手动操作。
-const MAX_TASK_AUTO_RETRIES: u32 = 3;
+///
+/// 运行时值由用户在设置中配置（config 表 `max_auto_retries`，经
+/// [`DownloadManager::set_max_auto_retries`] 注入）：
+/// `-1` = 无限重试，`0` = 关闭自动重试，`1..=10` = 重试次数上限。
+const DEFAULT_MAX_TASK_AUTO_RETRIES: i32 = 3;
 
-/// 自动重试基础延迟（秒）。实际延迟 = base × attempt，即 5s / 10s / 15s。
-const AUTO_RETRY_BASE_DELAY_SECS: u64 = 5;
+/// 自动重试基础延迟（秒）的默认值。实际延迟 = base × attempt，即 5s / 10s / 15s 递增。
+///
+/// 运行时值由用户在设置中配置（config 表 `auto_retry_delay_secs`，经
+/// [`DownloadManager::set_auto_retry_delay_secs`] 注入）。`0` 表示无延迟立即重试。
+const DEFAULT_AUTO_RETRY_BASE_DELAY_SECS: u64 = 5;
+
+/// 单次自动重试延迟的上限（秒）。
+///
+/// 实际延迟按 `base × attempt` 线性递增，在无限重试模式（`max == -1`）下
+/// `attempt` 会一直累加，若不封顶会让退避无界增长（例如 base=5 时第 1000 次
+/// 重试要等 5000s），与用户对"无限重试=持续尝试"的预期相悖。钳到 5 分钟，
+/// 既保留递增退避避免对故障源猛冲，又保证无限模式下仍会稳定地持续尝试。
+const MAX_AUTO_RETRY_DELAY_SECS: u64 = 300;
 
 /// `invalidate_bt_session` 在关停前等待 inflight `add_torrent` 任务归零的
 /// 总上限。BT 监听端口由这些 detached 任务持有的 `Arc<Session>` 绑定，
@@ -453,8 +468,14 @@ pub struct DownloadManager {
     auto_paused_ids: HashSet<String>,
     /// 任务级自动重试：网络 stall / 瞬时错误导致任务失败后，延迟自动恢复。
     /// key = task_id，value = 已自动重试次数。
-    /// 超过 MAX_TASK_AUTO_RETRIES 后不再重试，保持 error 状态等用户手动恢复。
+    /// 超过 `max_auto_retries` 后不再重试，保持 error 状态等用户手动恢复。
     auto_retry_counts: HashMap<String, u32>,
+    /// 用户可配的最大自动重试次数（config `max_auto_retries`）。
+    /// `-1` = 无限重试，`0` = 关闭，`1..=10` = 次数上限。
+    max_auto_retries: i32,
+    /// 用户可配的自动重试基础延迟（秒，config `auto_retry_delay_secs`）。
+    /// 实际延迟 = base × attempt（递增）。`0` 表示无延迟立即重试。
+    auto_retry_delay_secs: u64,
     /// 延迟重试通道发送端。on_task_done 检测到可重试错误后，spawn 一个
     /// 延迟任务将 task_id 发送到此通道，actor loop 收到后调用 resume_task。
     retry_tx: mpsc::Sender<String>,
@@ -530,6 +551,8 @@ impl DownloadManager {
             priority_task_id: None,
             auto_paused_ids: HashSet::new(),
             auto_retry_counts: HashMap::new(),
+            max_auto_retries: DEFAULT_MAX_TASK_AUTO_RETRIES,
+            auto_retry_delay_secs: DEFAULT_AUTO_RETRY_BASE_DELAY_SECS,
             retry_tx,
             retry_rx: Some(retry_rx),
             reserved_temp_paths: HashSet::new(),
@@ -579,6 +602,17 @@ impl DownloadManager {
         self.max_concurrent = max;
         // Try to start queued tasks if we now have capacity.
         self.drain_queue().await;
+    }
+
+    /// 更新最大自动重试次数。`-1` = 无限，`0` = 关闭，`1..=10` = 次数上限。
+    /// 仅影响后续失败任务的重试判定，不回溯已耗尽计数的任务。
+    pub fn set_max_auto_retries(&mut self, v: i32) {
+        self.max_auto_retries = v;
+    }
+
+    /// 更新自动重试基础延迟（秒）。实际延迟 = base × attempt（递增）。
+    pub fn set_auto_retry_delay_secs(&mut self, v: u64) {
+        self.auto_retry_delay_secs = v;
     }
 
     /// Update the default save directory.  This is used when initialising a
@@ -967,22 +1001,37 @@ impl DownloadManager {
 
         // ----- Auto-retry for retriable network errors ----------------------
         // 大文件下载因网络 stall、连接重置等瞬时错误失败后，自动延迟恢复，
-        // 避免用户手动操作。最多重试 MAX_TASK_AUTO_RETRIES 次（5s/10s/15s 递增延迟）。
+        // 避免用户手动操作。重试上限由用户配置 `max_auto_retries` 决定：
+        //   -1   = 无限重试（按 `auto_retry_delay_secs` 递增 sleep，封顶 MAX_AUTO_RETRY_DELAY_SECS）
+        //    0   = 关闭自动重试，任务直接保持 error 状态
+        //  1..n = 最多重试 n 次
         // 仅在 generation 匹配（确实是这一轮 spawn 失败）时触发，防止 stale 信号误触发。
+        let max_retries = self.max_auto_retries;
         if generation_matched && let Ok(Some(task)) = self.db.load_task_by_id(task_id).await {
-            if task.status == 4 && is_retriable_error(&task.error_message) {
+            // max == 0：用户关闭了自动重试，直接跳过（不分配计数）。
+            if max_retries != 0 && task.status == 4 && is_retriable_error(&task.error_message) {
                 let count = self
                     .auto_retry_counts
                     .entry(task_id.to_string())
                     .or_insert(0);
-                if *count < MAX_TASK_AUTO_RETRIES {
+                // 无限（-1）时不设上限；否则按 *count < max 判定。
+                if max_retries == -1 || (*count as i32) < max_retries {
                     *count += 1;
                     let attempt = *count;
-                    let delay_secs = AUTO_RETRY_BASE_DELAY_SECS * attempt as u64;
+                    // 延迟 = 基础值 × 已重试次数（递增），但封顶到 MAX_AUTO_RETRY_DELAY_SECS，
+                    // 避免无限模式下退避无界增长。base 为 0 时即立即重试。
+                    let delay_secs = self
+                        .auto_retry_delay_secs
+                        .saturating_mul(attempt as u64)
+                        .min(MAX_AUTO_RETRY_DELAY_SECS);
                     log_info!(
                         "[manager] auto-retry {}/{} for task {} in {}s (error: {})",
                         attempt,
-                        MAX_TASK_AUTO_RETRIES,
+                        if max_retries == -1 {
+                            "∞".to_string()
+                        } else {
+                            max_retries.to_string()
+                        },
                         task_id,
                         delay_secs,
                         task.error_message
@@ -997,7 +1046,7 @@ impl DownloadManager {
                     log_info!(
                         "[manager] auto-retry exhausted for task {} ({} attempts), staying in error",
                         task_id,
-                        MAX_TASK_AUTO_RETRIES
+                        max_retries
                     );
                 }
             } else if task.status == 3 {
