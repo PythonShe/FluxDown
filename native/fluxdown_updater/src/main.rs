@@ -268,6 +268,17 @@ fn do_portable_zip(zip: &Path, dir: &Path, exe: &str) -> Result<(), UpdaterError
     #[cfg(target_os = "windows")]
     let old_self = rename_self_aside();
 
+    // The NMH relay (fluxdown_nmh.exe) lives in the same directory but is
+    // spawned and owned by the browser, NOT by the main app — so it may still
+    // be running after the app exits and will hold a lock on its own .exe,
+    // causing the copy step below to fail with ERROR_SHARING_VIOLATION.
+    // Terminate any residual NMH processes and give the OS a moment to release
+    // the file handle before we attempt the overwrite.
+    #[cfg(target_os = "windows")]
+    {
+        terminate_residual_processes(dir);
+    }
+
     // Extract ZIP to a private temp directory.
     let tmp = std::env::temp_dir().join(format!("fluxdown_upd_{}", process::id()));
     extract_zip(zip, &tmp)?;
@@ -278,7 +289,34 @@ fn do_portable_zip(zip: &Path, dir: &Path, exe: &str) -> Result<(), UpdaterError
     log_msg(&format!("copy source: {}", src.display())).ok();
 
     // Copy with exponential-backoff retry (handles transient antivirus locks).
-    copy_dir_retry(&src, dir)?;
+    // On failure, the main process has already exited and cannot surface the
+    // error in the UI — so we drop a failure marker that the app reads on its
+    // next launch, and open the install directory so the user can replace the
+    // files manually from the (still present) extracted ZIP.
+    if let Err(e) = copy_dir_retry(&src, dir) {
+        log_msg(&format!("copy failed: {e}")).ok();
+        write_failure_marker(
+            dir,
+            &format!(
+                "Automatic update could not replace the program files \
+                 (the folder may be read-only, in a protected location such as \
+                 \"Program Files\", or a file was locked by another program).\n\n\
+                 The new version has been extracted to:\n{}\n\n\
+                 Please copy its contents over your FluxDown folder manually, \
+                 or download the latest version from https://fluxdown.app",
+                src.display()
+            ),
+        );
+        // Keep the extracted files so the user can copy them by hand.
+        #[cfg(target_os = "windows")]
+        open_in_explorer(&src);
+        // Do NOT delete tmp/zip here — the user needs them for manual recovery.
+        // Restart the (old) app so the user is not left with nothing running;
+        // the app will then show the failure marker on startup.
+        let exe_path = dir.join(exe);
+        let _ = process::Command::new(&exe_path).spawn();
+        return Err(e);
+    }
     log_msg("files copied").ok();
 
     // Delete the stale self we renamed aside earlier.
@@ -379,7 +417,25 @@ fn do_tarball(tarball: &Path, dir: &Path, exe: &str) -> Result<(), UpdaterError>
         log_msg(&format!("extracted to {}", tmp.display())).ok();
 
         let src = single_dir_or_root(&tmp)?;
-        copy_dir_retry(&src, dir)?;
+        if let Err(e) = copy_dir_retry(&src, dir) {
+            log_msg(&format!("copy failed: {e}")).ok();
+            write_failure_marker(
+                dir,
+                &format!(
+                    "Automatic update could not replace the program files \
+                     (the folder may be read-only or in a protected location).\n\n\
+                     The new version has been extracted to:\n{}\n\n\
+                     Please copy its contents over your FluxDown folder manually, \
+                     or download the latest version from https://fluxdown.app",
+                    src.display()
+                ),
+            );
+            // Keep tmp/tarball for manual recovery; restart the old app so the
+            // failure marker can be shown on startup.
+            let exe_path = dir.join(exe);
+            let _ = process::Command::new(&exe_path).spawn();
+            return Err(e);
+        }
         log_msg("files copied").ok();
 
         let _ = fs::remove_dir_all(&tmp);
@@ -523,6 +579,138 @@ fn remove_zone_identifier(path: &Path) {
     let ads = format!("{}:Zone.Identifier", path.display());
     // Ignore failure – the stream simply may not exist.
     let _ = fs::remove_file(ads);
+}
+
+/// Terminate residual sidecar processes that live in the install directory and
+/// would otherwise lock their own `.exe`, blocking the file overwrite.
+///
+/// `fluxdown_nmh.exe` is the Native Messaging relay: it is spawned and owned by
+/// the **browser**, not by the FluxDown app, so it can still be running after
+/// the app exits. We forcibly terminate any instances whose image path is
+/// inside `install_dir`, then wait briefly for the OS to release the handles.
+///
+/// This is best-effort: failure to terminate is non-fatal because
+/// `copy_file_retry` still retries, and a genuine lock will surface as a clear
+/// failure marker rather than a silent hang.
+#[cfg(target_os = "windows")]
+fn terminate_residual_processes(install_dir: &Path) {
+    const SIDECARS: &[&str] = &["fluxdown_nmh.exe"];
+
+    let dir_lower = install_dir.to_string_lossy().to_lowercase();
+    let mut killed_any = false;
+
+    for name in SIDECARS {
+        for pid in pids_for_image(name, &dir_lower) {
+            if terminate_pid(pid) {
+                log_msg(&format!("terminated residual {name} pid={pid}")).ok();
+                killed_any = true;
+            }
+        }
+    }
+
+    if killed_any {
+        // Give the OS time to fully release the file handles held by the
+        // terminated processes before we try to overwrite their .exe.
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// Enumerate PIDs of running processes whose executable is `image_name` AND
+/// whose full image path is located under `dir_lower` (a lowercased directory
+/// path). Uses the Toolhelp snapshot + per-process image path query so we never
+/// kill an unrelated FluxDown install elsewhere on the machine.
+#[cfg(target_os = "windows")]
+fn pids_for_image(image_name: &str, dir_lower: &str) -> Vec<u32> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, MAX_PATH};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
+
+    let mut out: Vec<u32> = Vec::new();
+    let image_lower = image_name.to_lowercase();
+    let self_pid = process::id();
+
+    // SAFETY: standard Toolhelp snapshot enumeration with checked return values.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        // CreateToolhelp32Snapshot returns INVALID_HANDLE_VALUE (-1), not NULL,
+        // on failure — check both to be safe.
+        if snapshot.is_null() || snapshot == INVALID_HANDLE_VALUE {
+            return out;
+        }
+
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        if Process32FirstW(snapshot, &mut entry) != 0 {
+            loop {
+                let exe_name = wide_to_string(&entry.szExeFile);
+                if exe_name.to_lowercase() == image_lower && entry.th32ProcessID != self_pid {
+                    let pid = entry.th32ProcessID;
+                    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                    if !handle.is_null() {
+                        let mut buf = [0u16; MAX_PATH as usize];
+                        let mut size = buf.len() as u32;
+                        let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size);
+                        CloseHandle(handle);
+                        if ok != 0 {
+                            let full = String::from_utf16_lossy(&buf[..size as usize]);
+                            if full.to_lowercase().starts_with(dir_lower) {
+                                out.push(pid);
+                            }
+                        }
+                    }
+                }
+                if Process32NextW(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snapshot);
+    }
+
+    out
+}
+
+/// Forcibly terminate a process by PID. Returns true on success.
+#[cfg(target_os = "windows")]
+fn terminate_pid(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+
+    // SAFETY: OpenProcess/TerminateProcess with a validated PID; NULL handle is
+    // checked before use.
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let ok = TerminateProcess(handle, 1) != 0;
+        CloseHandle(handle);
+        ok
+    }
+}
+
+/// Convert a NUL-terminated UTF-16 buffer (Win32 wide string) to a Rust String.
+#[cfg(target_os = "windows")]
+fn wide_to_string(buf: &[u16]) -> String {
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf16_lossy(&buf[..len])
+}
+
+/// Open a folder in Windows Explorer so the user can recover manually.
+#[cfg(target_os = "windows")]
+fn open_in_explorer(path: &Path) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = process::Command::new("explorer.exe")
+        .arg(path)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
 }
 
 // ─── Linux platform helpers ───────────────────────────────────────────────────
@@ -751,6 +939,38 @@ fn copy_file_retry(src: &Path, dst: &Path) -> Result<(), UpdaterError> {
     // Logically unreachable: every iteration either returns early above or is
     // guarded by `attempt == MAX_RETRIES` which returns on the last iteration.
     Err(UpdaterError::Other("copy failed after retries".to_string()))
+}
+
+// ─── Failure marker ───────────────────────────────────────────────────────────
+
+/// Write a failure marker file that the main app reads on its next launch to
+/// inform the user that the automatic update failed.
+///
+/// The marker is written to the install directory (so the app can find it
+/// relative to its own executable). If the install directory itself is not
+/// writable (the very condition that often causes the update to fail), we fall
+/// back to the OS temp directory, which the app also checks on startup.
+///
+/// Format: first line is a short machine-readable reason tag, the rest is a
+/// human-readable message shown verbatim in the UI.
+fn write_failure_marker(install_dir: &Path, message: &str) {
+    const MARKER_NAME: &str = "update_failed.marker";
+    let body = format!("portable-copy-failed\n{message}");
+
+    // Primary: install directory (preferred — app looks here first).
+    let primary = install_dir.join(MARKER_NAME);
+    if fs::write(&primary, &body).is_ok() {
+        log_msg(&format!("wrote failure marker: {}", primary.display())).ok();
+        return;
+    }
+
+    // Fallback: temp directory (always writable).
+    let fallback = std::env::temp_dir().join(MARKER_NAME);
+    if fs::write(&fallback, &body).is_ok() {
+        log_msg(&format!("wrote failure marker (temp): {}", fallback.display())).ok();
+    } else {
+        log_msg("failed to write failure marker anywhere").ok();
+    }
 }
 
 // ─── Logging ─────────────────────────────────────────────────────────────────

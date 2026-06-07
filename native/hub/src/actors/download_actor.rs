@@ -17,9 +17,10 @@ use crate::signals::{
     ConfigEntry, ConfigLoaded, ConfirmExternalDownload, ControlTask, CreateQueue, CreateTask,
     DeleteQueue, DetectSystemProxy, DownloadUpdate, ExternalDownloadRequest, FileAssociationStatus,
     InstallUpdate, MoveTaskToQueue, ProbeTorrentMeta, ProxyTestResult, RequestAllQueues,
-    RequestAllTasks, RequestConfig, RevealFile, SaveConfig, SelectBtFiles, SelectHlsQuality,
-    SetFileAssociation, SetPriorityTask, SetUrlProtocol, SystemProxyInfo, TestProxyConnection,
-    UpdateCheckResult, UpdateQueue, UrlProtocolStatus,
+    RequestAllTasks, RequestConfig, RequestUpdateFailureMarker, RevealFile, SaveConfig,
+    SelectBtFiles, SelectHlsQuality, SetFileAssociation, SetPriorityTask, SetUrlProtocol,
+    SystemProxyInfo, TestProxyConnection, UpdateCheckResult, UpdateFailureMarker, UpdateQueue,
+    UrlProtocolStatus,
 };
 use crate::updater;
 
@@ -225,6 +226,7 @@ pub async fn run(db_dir: PathBuf) {
     let check_update_recv = CheckForUpdate::get_dart_signal_receiver();
     let download_update_recv = DownloadUpdate::get_dart_signal_receiver();
     let install_update_recv = InstallUpdate::get_dart_signal_receiver();
+    let req_update_marker_recv = RequestUpdateFailureMarker::get_dart_signal_receiver();
     let set_file_assoc_recv = SetFileAssociation::get_dart_signal_receiver();
     let check_file_assoc_recv = CheckFileAssociation::get_dart_signal_receiver();
     let test_proxy_recv = TestProxyConnection::get_dart_signal_receiver();
@@ -614,6 +616,20 @@ pub async fn run(db_dir: PathBuf) {
                         .send_signal_to_dart();
                     }
                 });
+            }
+            Some(_signal) = req_update_marker_recv.recv() => {
+                // Dart asks (once on startup) whether a previous portable update
+                // failed. Reading the marker is quick file I/O; do it on a
+                // blocking thread to keep the current-thread runtime responsive.
+                let message = tokio::task::spawn_blocking(updater::check_failure_marker)
+                    .await
+                    .unwrap_or(None);
+                if let Some(msg) = message {
+                    log_info!("[updater] reporting pending failure marker to UI");
+                    UpdateFailureMarker { message: msg }.send_signal_to_dart();
+                } else {
+                    UpdateFailureMarker { message: String::new() }.send_signal_to_dart();
+                }
             }
             // --- File association signals ---
             Some(signal) = set_file_assoc_recv.recv() => {

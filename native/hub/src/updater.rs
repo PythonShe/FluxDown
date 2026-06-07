@@ -787,6 +787,83 @@ async fn download_segment(
     Ok(())
 }
 
+/// Name of the marker file the updater helper writes when an automatic
+/// portable update fails to overwrite the program files (e.g. the install
+/// directory is read-only or a file was locked). Kept in sync with the
+/// constant of the same purpose in `fluxdown_updater`.
+const FAILURE_MARKER_NAME: &str = "update_failed.marker";
+
+/// Check for a leftover "update failed" marker written by the helper binary on
+/// a previous (failed) update attempt, returning the human-readable message if
+/// present. The marker is consumed (deleted) so the warning is shown only once.
+///
+/// The helper writes the marker to the install directory when possible, falling
+/// back to the OS temp directory when the install dir is not writable — so we
+/// look in both places, preferring the install directory.
+pub fn check_failure_marker() -> Option<String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join(FAILURE_MARKER_NAME));
+    }
+    candidates.push(std::env::temp_dir().join(FAILURE_MARKER_NAME));
+
+    for path in candidates {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            // Best-effort delete so the warning is shown only once.
+            let _ = std::fs::remove_file(&path);
+            // First line is a machine reason tag; the rest is the message body.
+            let message = content
+                .split_once('\n')
+                .map(|(_, rest)| rest)
+                .unwrap_or(content.as_str())
+                .trim()
+                .to_string();
+            if message.is_empty() {
+                return Some("The previous automatic update failed.".to_string());
+            }
+            return Some(message);
+        }
+    }
+    None
+}
+
+/// Verify that the application's install directory is writable before starting
+/// an update. Returns an error describing the problem otherwise.
+///
+/// This catches the common portable-build failure mode up-front (folder placed
+/// under "Program Files", a read-only volume, etc.) so the UI can warn the user
+/// *before* the app exits — instead of the helper failing silently after exit.
+///
+/// Only meaningful for portable installs that overwrite files in place
+/// (Windows ZIP, Linux tar.gz). For installer-based updates the OS installer
+/// handles permissions/elevation, so the check is skipped.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn ensure_install_dir_writable() -> Result<(), UpdateError> {
+    let exe = std::env::current_exe().map_err(UpdateError::Io)?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| UpdateError::Other("cannot determine app directory".to_string()))?;
+
+    let probe = dir.join(format!(".fluxdown_write_test_{}", std::process::id()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(e) => Err(UpdateError::Other(format!(
+            "The install folder is not writable, so the update cannot replace \
+             the program files automatically.\n\nFolder: {}\n\nThis usually \
+             happens when FluxDown is in a protected location such as \
+             \"Program Files\" or on a read-only drive. Move FluxDown to a \
+             normal folder (e.g. your user directory) and try again, or download \
+             the latest version from https://fluxdown.app\n\n({e})",
+            dir.display()
+        ))),
+    }
+}
+
 /// Install a downloaded update package and restart the application.
 ///
 /// On success the function does not return — it exits the process.
@@ -800,6 +877,9 @@ pub fn install(installer_path: &str) -> Result<(), UpdateError> {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"));
 
         if is_zip {
+            // Portable: we overwrite files in place — verify writability first
+            // so we can surface a clear error in the UI before the app exits.
+            ensure_install_dir_writable()?;
             install_portable(installer_path)
         } else {
             install_setup(installer_path)
@@ -816,7 +896,8 @@ pub fn install(installer_path: &str) -> Result<(), UpdateError> {
         } else if installer_path.ends_with(".pkg.tar.zst") {
             install_arch(installer_path)
         } else {
-            // .tar.gz portable fallback
+            // .tar.gz portable fallback — overwrites files in place.
+            ensure_install_dir_writable()?;
             install_portable_tarball(installer_path)
         }
     }

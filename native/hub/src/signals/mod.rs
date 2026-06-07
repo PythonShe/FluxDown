@@ -321,6 +321,20 @@ pub struct InstallUpdate {
     pub installer_path: String,
 }
 
+/// Request any pending "update failed" marker left by the updater helper
+/// after a failed portable update (Dart → Rust). Sent once on startup after
+/// the Dart side has subscribed to the response signal (avoids a startup race).
+#[derive(Deserialize, DartSignal)]
+pub struct RequestUpdateFailureMarker {}
+
+/// Pending "update failed" marker payload (Rust → Dart). `message` is empty
+/// when there is no pending failure to report.
+#[derive(Serialize, RustSignal)]
+pub struct UpdateFailureMarker {
+    /// Human-readable failure message; empty when there is nothing to report.
+    pub message: String,
+}
+
 // ========== Proxy test signals ==========
 
 /// Test proxy connectivity (Dart → Rust)

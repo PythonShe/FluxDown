@@ -97,6 +97,20 @@ class UpdateService extends ChangeNotifier {
   String _errorMessage = '';
   String get errorMessage => _errorMessage;
 
+  /// Pending "previous update failed" message reported by the Rust updater on
+  /// startup (empty when there is nothing to report). Set once after the app
+  /// requests the marker; the UI should show it once and then call
+  /// [acknowledgeFailureMarker].
+  String _pendingFailureMessage = '';
+  String get pendingFailureMessage => _pendingFailureMessage;
+
+  /// Clear the pending failure message after it has been shown to the user.
+  void acknowledgeFailureMarker() {
+    if (_pendingFailureMessage.isEmpty) return;
+    _pendingFailureMessage = '';
+    notifyListeners();
+  }
+
   /// Current app version.
   String get currentVersion => _appVersion;
 
@@ -124,12 +138,19 @@ class UpdateService extends ChangeNotifier {
 
   StreamSubscription<RustSignalPack<UpdateCheckResult>>? _checkSub;
   StreamSubscription<RustSignalPack<UpdateDownloadProgress>>? _progressSub;
+  StreamSubscription<RustSignalPack<UpdateFailureMarker>>? _failureMarkerSub;
 
   void _init() {
     _checkSub = UpdateCheckResult.rustSignalStream.listen(_onCheckResult);
     _progressSub = UpdateDownloadProgress.rustSignalStream.listen(
       _onDownloadProgress,
     );
+    // Subscribe BEFORE requesting so we never miss the response (no startup
+    // race), then ask Rust whether a previous portable update failed.
+    _failureMarkerSub = UpdateFailureMarker.rustSignalStream.listen(
+      _onFailureMarker,
+    );
+    RequestUpdateFailureMarker().sendSignalToRust();
   }
 
   @override
@@ -137,6 +158,7 @@ class UpdateService extends ChangeNotifier {
     _checkTimeoutTimer?.cancel();
     _checkSub?.cancel();
     _progressSub?.cancel();
+    _failureMarkerSub?.cancel();
     super.dispose();
   }
 
@@ -246,6 +268,15 @@ class UpdateService extends ChangeNotifier {
       default:
         break;
     }
+    notifyListeners();
+  }
+
+  /// Handle the pending failure marker reported by Rust on startup.
+  void _onFailureMarker(RustSignalPack<UpdateFailureMarker> pack) {
+    final message = pack.message.message;
+    if (message.isEmpty) return;
+    logInfo('UpdateService', 'pending update failure marker received');
+    _pendingFailureMessage = message;
     notifyListeners();
   }
 

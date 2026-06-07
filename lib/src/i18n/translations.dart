@@ -840,6 +840,8 @@ class S {
   String get checkUpdate => _t('检查更新', 'Check for Updates');
   String downloadUpdate(String size) => _t('下载更新 ($size)', 'Download ($size)');
   String get recheck => _t('重新检查', 'Recheck');
+  String get updateFailedTitle => _t('上次更新失败', 'Previous Update Failed');
+  String get updateFailedOpenSite => _t('前往官网下载', 'Download from Website');
   String get officialWebsite => _t('官方网站', 'Official Website');
   String get visitWebsiteForMore =>
       _t('访问官网获取更多信息', 'Visit website for more information');

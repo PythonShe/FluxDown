@@ -315,6 +315,11 @@ class _FluxDownAppState extends State<FluxDownApp>
 
     // 监听更新服务 — changelog 就绪后自动弹出更新日志弹窗
     UpdateService.instance.addListener(_onUpdateServiceChanged);
+    // 主动消费一次：若失败标记响应在监听器注册前就已到达（notifyListeners
+    // 已触发但当时无监听者），此处补偿一次，避免错过更新失败提示。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _onUpdateServiceChanged();
+    });
 
     // Listen for args from second instances (single-instance enforcement).
     // When a second instance is launched (e.g. double-clicking a .torrent
@@ -386,9 +391,18 @@ class _FluxDownAppState extends State<FluxDownApp>
     TrayService.instance.refreshMenu();
   }
 
-  /// 当 UpdateService 状态变化时，检查是否应该弹出更新日志弹窗。
+  /// 当 UpdateService 状态变化时，检查是否应该弹出更新日志弹窗 / 更新失败提示。
   void _onUpdateServiceChanged() {
     final svc = UpdateService.instance;
+
+    // 优先处理「上次更新失败」标记（便携版覆盖文件失败等）。
+    if (svc.pendingFailureMessage.isNotEmpty) {
+      _showUpdateFailureDialog(svc.pendingFailureMessage);
+      // 立刻确认，避免 notifyListeners 再次触发重复弹窗。
+      svc.acknowledgeFailureMarker();
+      return;
+    }
+
     if (!svc.shouldShowChangelog) return;
     if (!mounted) return;
 
@@ -407,6 +421,38 @@ class _FluxDownAppState extends State<FluxDownApp>
       onLater: () {
         // No-op — dialog already dismissed, changelog marked as shown.
       },
+    );
+  }
+
+  /// 弹出「上次更新失败」提示对话框，引导用户手动恢复 / 重新下载。
+  void _showUpdateFailureDialog(String message) {
+    if (!mounted) return;
+    final ctx = _navigatorKey.currentContext;
+    if (ctx == null) return;
+
+    final s = S.of(currentLocale);
+    logInfo('FluxDownApp', 'showing update failure dialog');
+
+    showShadDialog<void>(
+      context: ctx,
+      builder: (dialogCtx) => ShadDialog.alert(
+        title: Text(s.updateFailedTitle),
+        description: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text(message),
+        ),
+        actions: [
+          ShadButton.outline(
+            onPressed: () =>
+                launchUrl(Uri.parse('https://fluxdown.app')),
+            child: Text(s.updateFailedOpenSite),
+          ),
+          ShadButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: Text(s.confirm),
+          ),
+        ],
+      ),
     );
   }
 
