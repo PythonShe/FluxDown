@@ -349,6 +349,9 @@ CREATE TABLE queues (
 消息协议（4字节 LE 长度前缀 + JSON）：
 - `{"action":"ping","msg_id":N}` → `{"success":true,"message":"pong","msg_id":N}`
 - `{"action":"download","msg_id":N,...}` → `{"success":true,"message":"download accepted","msg_id":N}`
+- `{"action":"warmup","msg_id":N}` → `{"success":true,"message":"warmed","msg_id":N}`（NMH 本地应答不转发：确保 App 已拉起+管道已连接；扩展在下载流程入口 fire-and-forget 发送，让 App 冷启动与 cookie 收集并行）
+
+NMH 连接策略：ping 只探测不拉起 App;其余 action 未连接时 auto-launch App 并以固定 50ms 间隔轮询管道(上限 10s);写失败(App 重启后陈旧管道)进程内重连+重发一次(写失败=内核未收帧,重发安全;读失败不重发,防重复任务)。
 
 NMH 注册：
 - NMH 清单：`~/.config/google-chrome/NativeMessagingHosts/com.fluxdown.nmh.json`（Linux）

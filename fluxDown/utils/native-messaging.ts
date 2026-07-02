@@ -13,6 +13,8 @@
  *   - 使用 connectNative() 持久连接，复用同一 NMH 进程
  *   - 请求-响应通过 msg_id 匹配（递增 ID + pending Map）
  *   - App 未运行时由 NMH 自动启动，扩展端无需关心唤起逻辑
+ *   - "warmup" 消息由 NMH 本地应答（确保 App 已拉起 + 管道已连接，不转发给 App），
+ *     下载流程入口 fire-and-forget 发送，让 App 冷启动与 cookie 收集并行
  *   - 超时 12s（预留 NMH 启动 App 的等待时间）
  */
 
@@ -304,6 +306,30 @@ export async function sendBatchDownloadRequest(
         ? `${succeeded}/${results.length} items sent (${failed} failed)`
         : `${succeeded} items sent`,
   };
+}
+
+// 进行中的 warmup 请求（去重：并发下载入口只发一个 warmup）
+let _warmupInFlight: Promise<ApiResponse> | null = null;
+
+/**
+ * 预热 NMH 链路：让 NMH 提前拉起 App 并建立管道连接。
+ *
+ * Fire-and-forget 语义——调用方不等待、不处理结果。价值在冷启动路径：
+ * 下载入口先发 warmup，App 启动（~0.7-1s）与 cookie/认证收集（最多 500ms）
+ * 并行进行，而不是串行叠加。App 已运行时 warmup 是 ~1ms 的本地快速应答。
+ *
+ * 有意用 sendMessage 而非 sendWithRetry：warmup 是纯优化，失败（旧版 NMH
+ * 不识别、App 未安装）静默忽略，真正的下载发送自带完整重试链。
+ * 旧版 NMH 会把 warmup 当普通消息转发给 App（App 回 unknown action），
+ * 但转发前同样会 auto-launch——预热效果不变。
+ */
+export function warmupNativeHost(): void {
+  if (_warmupInFlight) return;
+  _warmupInFlight = sendMessage("warmup").finally(() => {
+    _warmupInFlight = null;
+  });
+  // 吞掉结果与异常：预热失败不影响任何现有流程
+  _warmupInFlight.catch(() => {});
 }
 
 export async function checkFluxDownAvailable(): Promise<boolean> {

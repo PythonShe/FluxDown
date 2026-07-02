@@ -33,6 +33,7 @@ import {
   sendBatchDownloadRequest,
   checkFluxDownAvailable,
   checkFluxDownAvailableWithRetry,
+  warmupNativeHost,
 } from "@/utils/native-messaging";
 import type {
   DownloadRequest,
@@ -1941,6 +1942,11 @@ export default defineBackground(() => {
     storedCookies?: string,
     storedHeaders?: Record<string, string>,
   ): Promise<boolean> {
+    // === 预热 NMH 链路（fire-and-forget） ===
+    // App 冷启动 ~0.7-1s，下方 cookie/认证收集最多 ~500ms。先发 warmup
+    // 让两者并行；App 已运行时 warmup 是 ~1ms 本地应答，无副作用。
+    warmupNativeHost();
+
     // === 提取认证信息（Cookie / Authorization 等） ===
     // 策略 1：从 webRequest 缓存获取（最可靠 — 浏览器真正发出的请求头）
     // 重定向修复：onSendHeaders 以浏览器原始请求 URL 为 key 缓存 headers，
@@ -2290,6 +2296,9 @@ export default defineBackground(() => {
         if (!Array.isArray(items) || items.length === 0) {
           return { success: false, message: "No items" };
         }
+
+        // 预热 NMH：App 冷启动与下方逐项 cookie 收集（各 500ms 上限）并行
+        warmupNativeHost();
 
         // 为每个 URL 提取 cookies，构建 BatchDownloadItem 列表
         // Bug 9 修复：cookies API 加 500ms 超时，与 sendToFluxDown 保持一致

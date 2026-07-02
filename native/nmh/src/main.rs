@@ -11,8 +11,12 @@
 //!   - Synchronous, single-threaded, no async runtime.
 //!   - Pipe connection is lazy: established on first message, reconnected on error.
 //!   - When the FluxDown App is not running, NMH automatically launches it and
-//!     polls for the Named Pipe with increasing intervals (100→200→400ms…).
+//!     polls for the IPC endpoint at a fixed 50ms interval (up to 10s).
 //!   - "ping" messages only check connectivity — they never launch the App.
+//!   - "warmup" messages ensure the App is running and the pipe is connected,
+//!     then are answered locally (never forwarded to the App). The extension
+//!     sends one at download-flow entry so App cold-start overlaps with its
+//!     cookie collection instead of running after it.
 //!   - Diagnostic log is written to `%TEMP%/fluxdown_nmh.log`.
 //!   - Message size limit: 1 MB (Chrome NMH hard limit).
 
@@ -36,9 +40,13 @@ const APP_EXE_NAME: &str = "flux_down.exe";
 /// Maximum time (ms) to wait for the App to start and create its pipe.
 const APP_LAUNCH_TIMEOUT_MS: u64 = 10_000;
 
-/// Initial polling interval after launching the App (ms).
-/// Doubles after each attempt: 100 → 200 → 400 → 800 → …
-const PIPE_POLL_INITIAL_MS: u64 = 100;
+/// Polling interval (ms) while waiting for the App's IPC endpoint after
+/// launching it. Fixed and short: connecting to a nonexistent local pipe or
+/// socket fails in microseconds, so tight polling is essentially free —
+/// exponential back-off would quantize the observed connect latency to its
+/// checkpoint times (measured: endpoint ready in ~300-700ms, but back-off
+/// checkpoints at 700/1500ms wasted up to ~800ms per cold start).
+const PIPE_POLL_INTERVAL_MS: u64 = 50;
 
 /// Minimum cooldown (ms) between two App launch attempts.
 /// Prevents crash-loops if the App crashes on start.
@@ -53,12 +61,25 @@ struct IncomingMessage {
     msg_id: u64,
 }
 
-/// Response sent back to the browser extension.
+/// Response sent back to the browser extension for messages the NMH answers
+/// locally: error replies and "warmup" acknowledgements.
 #[derive(Debug, Serialize)]
-struct ErrorResponse {
+struct HostResponse {
     success: bool,
     message: String,
     msg_id: u64,
+}
+
+/// Serialize and write a locally-generated response to stdout.
+fn respond_status(success: bool, message: &str, msg_id: u64) {
+    let resp = HostResponse {
+        success,
+        message: message.to_string(),
+        msg_id,
+    };
+    if let Ok(json) = serde_json::to_vec(&resp) {
+        write_stdout_message(&json);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -559,7 +580,7 @@ fn ipc_address() -> &'static str {
 }
 
 /// Try to connect to the IPC endpoint. If unavailable, launch the App
-/// (subject to cooldown) and poll with exponential back-off until the
+/// (subject to cooldown) and poll at a fixed 50ms interval until the
 /// endpoint appears or the timeout is reached.
 fn connect_with_auto_launch(last_launch: &mut Option<Instant>) -> Option<pipe::PipeHandle> {
     let addr = ipc_address();
@@ -594,13 +615,12 @@ fn connect_with_auto_launch(last_launch: &mut Option<Instant>) -> Option<pipe::P
     }
     *last_launch = Some(Instant::now());
 
-    // Poll with exponential back-off: 100 → 200 → 400 → 800 → 1000(cap) → …
+    // Poll at a fixed short interval, attempting to connect immediately:
+    // a failed connect to a local pipe/socket costs microseconds, while any
+    // sleep-first back-off adds its full interval to every cold start.
     let deadline = Instant::now() + std::time::Duration::from_millis(APP_LAUNCH_TIMEOUT_MS);
-    let mut interval = PIPE_POLL_INITIAL_MS;
 
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(interval));
-
         if let Some(p) = pipe::PipeHandle::connect(addr) {
             let elapsed = last_launch.map_or(0, |t| t.elapsed().as_millis() as u64);
             log(&format!("ipc connected after {}ms", elapsed));
@@ -611,12 +631,43 @@ fn connect_with_auto_launch(last_launch: &mut Option<Instant>) -> Option<pipe::P
             break;
         }
 
-        // Cap interval at 1000ms to keep responsiveness.
-        interval = (interval * 2).min(1000);
+        std::thread::sleep(std::time::Duration::from_millis(PIPE_POLL_INTERVAL_MS));
     }
 
     log("ipc connect timed out after launch");
     None
+}
+
+/// Reconnect after a write failure and resend the frame once.
+///
+/// A write failure means the kernel never accepted the frame, so the App
+/// cannot have processed it — resending is duplicate-safe. The common cause
+/// is a stale pipe handle after the App restarted; without this, the
+/// extension pays a full port-teardown → new-NMH → ping → resend round-trip
+/// (~0.5-1s) for the first download after every App restart.
+///
+/// "ping" reconnects without launching the App (liveness checks must not
+/// have side effects); everything else goes through auto-launch.
+fn reconnect_and_resend(
+    raw: &[u8],
+    is_ping: bool,
+    last_launch: &mut Option<Instant>,
+) -> Option<pipe::PipeHandle> {
+    let mut p = if is_ping {
+        pipe::PipeHandle::connect(ipc_address())?
+    } else {
+        connect_with_auto_launch(last_launch)?
+    };
+    match p.write_message(raw) {
+        Ok(()) => {
+            log("reconnected and resent after write failure");
+            Some(p)
+        }
+        Err(e) => {
+            log(&format!("resend after reconnect failed ({})", e));
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +683,8 @@ fn main() {
     while let Some(raw) = read_stdin_message() {
         let parsed = serde_json::from_slice::<IncomingMessage>(&raw);
         let msg_id = parsed.as_ref().map_or(0, |m| m.msg_id);
-        let is_ping = parsed.as_ref().is_ok_and(|m| m.action == "ping");
+        let action = parsed.as_ref().map_or("", |m| m.action.as_str());
+        let is_ping = action == "ping";
 
         // Ensure IPC connection.
         // "ping" only does a direct connect (no App launch for status checks).
@@ -644,49 +696,54 @@ fn main() {
             };
         }
 
-        let Some(ref mut p) = pipe else {
-            let resp = ErrorResponse {
-                success: false,
-                message: "app_not_running".to_string(),
-                msg_id,
-            };
-            if let Ok(json) = serde_json::to_vec(&resp) {
-                write_stdout_message(&json);
+        // "warmup" is answered locally — its only job is to get the App
+        // launched and the pipe connected as early as possible. Never
+        // forwarded to the App, so the App-side protocol is untouched.
+        // NOTE: a cached handle may be stale (App restarted); warmup does
+        // not probe it. The next real message self-heals via
+        // reconnect_and_resend, so an optimistic "warmed" costs nothing.
+        if action == "warmup" {
+            if pipe.is_some() {
+                respond_status(true, "warmed", msg_id);
+            } else {
+                respond_status(false, "app_not_running", msg_id);
             }
             continue;
+        }
+
+        // Take the handle out; it is put back only if this message's
+        // write/read round-trip proves the connection healthy.
+        let mut p = match pipe.take() {
+            Some(p) => p,
+            None => {
+                respond_status(false, "app_not_running", msg_id);
+                continue;
+            }
         };
 
-        // Forward message to App via Named Pipe.
+        // Forward message to App. On write failure, reconnect and resend
+        // once in-process instead of bouncing the error to the extension.
         if let Err(e) = p.write_message(&raw) {
-            log(&format!("pipe write failed ({}), dropping connection", e));
-            pipe = None;
-            let resp = ErrorResponse {
-                success: false,
-                message: "app_not_running".to_string(),
-                msg_id,
-            };
-            if let Ok(json) = serde_json::to_vec(&resp) {
-                write_stdout_message(&json);
+            log(&format!("pipe write failed ({}), reconnecting", e));
+            drop(p);
+            match reconnect_and_resend(&raw, is_ping, &mut last_launch) {
+                Some(fresh) => p = fresh,
+                None => {
+                    respond_status(false, "app_not_running", msg_id);
+                    continue;
+                }
             }
-            continue;
         }
 
         // Read response from App.
         match p.read_message() {
             Ok(response_data) => {
                 write_stdout_message(&response_data);
+                pipe = Some(p);
             }
             Err(e) => {
                 log(&format!("pipe read failed ({}), dropping connection", e));
-                pipe = None;
-                let resp = ErrorResponse {
-                    success: false,
-                    message: "app_not_running".to_string(),
-                    msg_id,
-                };
-                if let Ok(json) = serde_json::to_vec(&resp) {
-                    write_stdout_message(&json);
-                }
+                respond_status(false, "app_not_running", msg_id);
             }
         }
     }
