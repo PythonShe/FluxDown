@@ -94,3 +94,5 @@ skills-lock.json
 test/batch_delete_scale_test.dart
 test/resume_all_test.dart
 website/fluxdown-website-latest.tar
+design/mobile/
+docs/
