@@ -142,6 +142,7 @@ const int SPI_GETWORKAREA = 0x0030;
 
 // Virtual key codes
 const int VK_LBUTTON = 0x01;
+const int VK_RBUTTON = 0x02;
 
 // BLENDFUNCTION 常量
 const int AC_SRC_OVER = 0x00;
@@ -390,4 +391,213 @@ typedef _CreateDIBSection_Dart =
 final createDIBSection = _gdi32
     .lookupFunction<_CreateDIBSection_Native, _CreateDIBSection_Dart>(
       'CreateDIBSection',
+    );
+
+// =============================================================================
+// 悬浮球扩展绑定（S1.1/S1.3）
+// =============================================================================
+
+/// MONITORINFO 结构体
+final class MONITORINFO extends Struct {
+  @Uint32()
+  external int cbSize;
+  external RECT rcMonitor;
+  external RECT rcWork;
+  @Uint32()
+  external int dwFlags;
+}
+
+// SetWindowPos flags
+const int SWP_NOSIZE = 0x0001;
+const int SWP_NOZORDER = 0x0004;
+const int SWP_NOACTIVATE = 0x0010;
+
+// GetWindowLongPtrW index / window styles
+const int GWL_STYLE = -16;
+const int WS_CAPTION = 0x00C00000;
+const int WS_THICKFRAME = 0x00040000;
+
+// MonitorFromWindow / MonitorFromPoint flags
+const int MONITOR_DEFAULTTONEAREST = 2;
+
+// GetSystemMetrics indices
+const int SM_CXDRAG = 68;
+const int SM_CYDRAG = 69;
+
+// ShowWindow commands（悬浮球补充）
+const int SW_HIDE = 0;
+
+// SetWindowPos
+typedef _SetWindowPos_Native =
+    Int32 Function(
+      IntPtr hWnd,
+      IntPtr hWndInsertAfter,
+      Int32 x,
+      Int32 y,
+      Int32 cx,
+      Int32 cy,
+      Uint32 uFlags,
+    );
+typedef _SetWindowPos_Dart =
+    int Function(
+      int hWnd,
+      int hWndInsertAfter,
+      int x,
+      int y,
+      int cx,
+      int cy,
+      int uFlags,
+    );
+final setWindowPos = _user32
+    .lookupFunction<_SetWindowPos_Native, _SetWindowPos_Dart>('SetWindowPos');
+
+// GetForegroundWindow
+typedef _GetForegroundWindow_Native = IntPtr Function();
+typedef _GetForegroundWindow_Dart = int Function();
+final getForegroundWindow = _user32
+    .lookupFunction<_GetForegroundWindow_Native, _GetForegroundWindow_Dart>(
+      'GetForegroundWindow',
+    );
+
+// GetWindowRect
+typedef _GetWindowRect_Native = Int32 Function(
+  IntPtr hWnd,
+  Pointer<RECT> lpRect,
+);
+typedef _GetWindowRect_Dart = int Function(int hWnd, Pointer<RECT> lpRect);
+final getWindowRect = _user32
+    .lookupFunction<_GetWindowRect_Native, _GetWindowRect_Dart>(
+      'GetWindowRect',
+    );
+
+// MonitorFromWindow
+typedef _MonitorFromWindow_Native = IntPtr Function(
+  IntPtr hwnd,
+  Uint32 dwFlags,
+);
+typedef _MonitorFromWindow_Dart = int Function(int hwnd, int dwFlags);
+final monitorFromWindow = _user32
+    .lookupFunction<_MonitorFromWindow_Native, _MonitorFromWindow_Dart>(
+      'MonitorFromWindow',
+    );
+
+// GetMonitorInfoW
+typedef _GetMonitorInfoW_Native = Int32 Function(
+  IntPtr hMonitor,
+  Pointer<MONITORINFO> lpmi,
+);
+typedef _GetMonitorInfoW_Dart = int Function(
+  int hMonitor,
+  Pointer<MONITORINFO> lpmi,
+);
+final getMonitorInfoW = _user32
+    .lookupFunction<_GetMonitorInfoW_Native, _GetMonitorInfoW_Dart>(
+      'GetMonitorInfoW',
+    );
+
+// GetWindowThreadProcessId
+typedef _GetWindowThreadProcessId_Native = Uint32 Function(
+  IntPtr hWnd,
+  Pointer<Uint32> lpdwProcessId,
+);
+typedef _GetWindowThreadProcessId_Dart = int Function(
+  int hWnd,
+  Pointer<Uint32> lpdwProcessId,
+);
+final getWindowThreadProcessId = _user32
+    .lookupFunction<
+      _GetWindowThreadProcessId_Native,
+      _GetWindowThreadProcessId_Dart
+    >('GetWindowThreadProcessId');
+
+// GetWindowLongPtrW
+typedef _GetWindowLongPtrW_Native = IntPtr Function(
+  IntPtr hWnd,
+  Int32 nIndex,
+);
+typedef _GetWindowLongPtrW_Dart = int Function(int hWnd, int nIndex);
+final getWindowLongPtrW = _user32
+    .lookupFunction<_GetWindowLongPtrW_Native, _GetWindowLongPtrW_Dart>(
+      'GetWindowLongPtrW',
+    );
+
+// GetSystemMetrics
+typedef _GetSystemMetrics_Native = Int32 Function(Int32 nIndex);
+typedef _GetSystemMetrics_Dart = int Function(int nIndex);
+final getSystemMetrics = _user32
+    .lookupFunction<_GetSystemMetrics_Native, _GetSystemMetrics_Dart>(
+      'GetSystemMetrics',
+    );
+
+// GetCurrentProcessId
+typedef _GetCurrentProcessId_Native = Uint32 Function();
+typedef _GetCurrentProcessId_Dart = int Function();
+final getCurrentProcessId = _kernel32
+    .lookupFunction<_GetCurrentProcessId_Native, _GetCurrentProcessId_Dart>(
+      'GetCurrentProcessId',
+    );
+
+// =============================================================================
+// 悬浮球右键菜单绑定（TrackPopupMenuEx，阻塞式，同 tray_manager 模式）
+// =============================================================================
+
+// AppendMenuW flags
+const int MF_STRING = 0x00000000;
+const int MF_SEPARATOR = 0x00000800;
+
+// TrackPopupMenuEx flags
+const int TPM_RETURNCMD = 0x0100;
+const int TPM_RIGHTBUTTON = 0x0002;
+const int TPM_NONOTIFY = 0x0080;
+
+// CreatePopupMenu
+typedef _CreatePopupMenu_Native = IntPtr Function();
+typedef _CreatePopupMenu_Dart = int Function();
+final createPopupMenu = _user32
+    .lookupFunction<_CreatePopupMenu_Native, _CreatePopupMenu_Dart>(
+      'CreatePopupMenu',
+    );
+
+// AppendMenuW
+typedef _AppendMenuW_Native =
+    Int32 Function(
+      IntPtr hMenu,
+      Uint32 uFlags,
+      IntPtr uIDNewItem,
+      Pointer<Utf16> lpNewItem,
+    );
+typedef _AppendMenuW_Dart =
+    int Function(int hMenu, int uFlags, int uIDNewItem, Pointer<Utf16> item);
+final appendMenuW = _user32
+    .lookupFunction<_AppendMenuW_Native, _AppendMenuW_Dart>('AppendMenuW');
+
+// TrackPopupMenuEx — TPM_RETURNCMD 模式下返回选中命令 ID（0=取消）
+typedef _TrackPopupMenuEx_Native =
+    Int32 Function(
+      IntPtr hMenu,
+      Uint32 uFlags,
+      Int32 x,
+      Int32 y,
+      IntPtr hwnd,
+      Pointer<Void> lptpm,
+    );
+typedef _TrackPopupMenuEx_Dart =
+    int Function(int hMenu, int uFlags, int x, int y, int hwnd, Pointer<Void> lptpm);
+final trackPopupMenuEx = _user32
+    .lookupFunction<_TrackPopupMenuEx_Native, _TrackPopupMenuEx_Dart>(
+      'TrackPopupMenuEx',
+    );
+
+// DestroyMenu
+typedef _DestroyMenu_Native = Int32 Function(IntPtr hMenu);
+typedef _DestroyMenu_Dart = int Function(int hMenu);
+final destroyMenu = _user32
+    .lookupFunction<_DestroyMenu_Native, _DestroyMenu_Dart>('DestroyMenu');
+
+// SetForegroundWindow — TrackPopupMenu 前必须调用，否则菜单不消失（MSDN 已知怪癖）
+typedef _SetForegroundWindow_Native = Int32 Function(IntPtr hWnd);
+typedef _SetForegroundWindow_Dart = int Function(int hWnd);
+final setForegroundWindow = _user32
+    .lookupFunction<_SetForegroundWindow_Native, _SetForegroundWindow_Dart>(
+      'SetForegroundWindow',
     );

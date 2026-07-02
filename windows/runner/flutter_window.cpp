@@ -40,6 +40,55 @@ bool FlutterWindow::OnCreate() {
           "com.fluxdown/single_instance",
           &flutter::StandardMethodCodec::GetInstance());
 
+  // Floating ball channel (plan A6): handles registerDropTarget /
+  // unregisterDropTarget from Dart; forwards drop payloads back.
+  floating_ball_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "com.fluxdown/floating_ball",
+          &flutter::StandardMethodCodec::GetInstance());
+  floating_ball_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() == "registerDropTarget") {
+          const auto* args =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (!args) {
+            result->Error("bad_args", "expected map with hwnd");
+            return;
+          }
+          auto it = args->find(flutter::EncodableValue("hwnd"));
+          if (it == args->end()) {
+            result->Error("bad_args", "missing hwnd");
+            return;
+          }
+          const int64_t hwnd_val =
+              std::holds_alternative<int64_t>(it->second)
+                  ? std::get<int64_t>(it->second)
+                  : static_cast<int64_t>(std::get<int32_t>(it->second));
+          if (!ball_drop_target_) {
+            ball_drop_target_ =
+                new FloatingBallDropTarget(floating_ball_channel_.get());
+          }
+          HRESULT hr = ball_drop_target_->RegisterOn(
+              reinterpret_cast<HWND>(hwnd_val));
+          if (SUCCEEDED(hr)) {
+            result->Success();
+          } else {
+            result->Error("register_failed",
+                          "RegisterDragDrop hr=" + std::to_string(hr));
+          }
+        } else if (call.method_name() == "unregisterDropTarget") {
+          if (ball_drop_target_) {
+            ball_drop_target_->Revoke();
+          }
+          result->Success();
+        } else {
+          result->NotImplemented();
+        }
+      });
+
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   // Check --silentStart before the callback to avoid capturing by reference.
@@ -66,6 +115,11 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (ball_drop_target_) {
+    ball_drop_target_->Revoke();
+    ball_drop_target_->Release();
+    ball_drop_target_ = nullptr;
+  }
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

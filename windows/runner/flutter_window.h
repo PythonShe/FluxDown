@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include "floating_ball_drop_target.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -34,6 +35,11 @@ class FlutterWindow : public Win32Window {
   // Method channel for forwarding second-instance args to Dart.
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       single_instance_channel_;
+
+  // Floating ball: MethodChannel + OLE drop target (plan S1.2).
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      floating_ball_channel_;
+  FloatingBallDropTarget* ball_drop_target_ = nullptr;  // COM ref-counted
 
   // Tracks whether the window was hidden via ShowWindow(SW_HIDE) so that
   // we can synthesize a SIZE_RESTORED event when it becomes visible again.

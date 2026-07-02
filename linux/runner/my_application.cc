@@ -7,6 +7,8 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+#include "floating_ball_window.h"
+
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
@@ -14,6 +16,9 @@ struct _MyApplication {
   // the MethodChannel when a second instance opens files.  Not owned here —
   // the GTK widget tree owns the FlView.
   FlView* view;
+  // Native controller for the com.fluxdown/floating_ball channel (S3.4/A6).
+  // Created once in my_application_activate() and owned here.
+  FloatingBallWindow* floating_ball;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -106,6 +111,13 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+
+  // Register the floating-ball MethodChannel (plan A6/S3.4). The GTK ball
+  // window itself is created lazily on the first "showBall" call — it must
+  // never be a GtkApplicationWindow (see floating_ball_window.h) so it can
+  // outlive a hidden main window without quitting the GApplication.
+  self->floating_ball =
+      floating_ball_window_new(fl_engine_get_binary_messenger(fl_view_get_engine(view)));
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -218,8 +230,8 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_pointer(&self->floating_ball, floating_ball_window_free);
   // self->view is owned by the GTK widget tree — do not unref here.
-  G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
 static void my_application_class_init(MyApplicationClass* klass) {

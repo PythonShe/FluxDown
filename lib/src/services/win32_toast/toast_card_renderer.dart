@@ -13,11 +13,11 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 import '../../theme/app_colors.dart';
 import '../../theme/flux_theme_tokens.dart';
+import '../native_overlay/offscreen_rasterizer.dart';
 
 // =============================================================================
 // 布局常量（逻辑像素）— Win32 侧按 DPI scale 换算命中区域
@@ -122,7 +122,7 @@ Future<ToastCardImage> _renderVariant(
   ToastVariant variant,
   double scale,
 ) async {
-  final ui.Image image = await _rasterizeWidget(
+  final ui.Image image = await rasterizeWidget(
     _ToastCard(spec: spec, variant: variant),
     logicalSize: const Size(kToastWindowW, kToastWindowH),
     scale: scale,
@@ -137,89 +137,10 @@ Future<ToastCardImage> _renderVariant(
     return ToastCardImage(
       image.width,
       image.height,
-      _rgbaToPremultipliedBgra(byteData.buffer.asUint8List()),
+      rgbaToPremultipliedBgra(byteData.buffer.asUint8List()),
     );
   } finally {
     image.dispose();
-  }
-}
-
-/// RGBA（straight alpha）→ BGRA（premultiplied）— UpdateLayeredWindow 要求
-Uint8List _rgbaToPremultipliedBgra(Uint8List rgba) {
-  final out = Uint8List(rgba.length);
-  for (var i = 0; i < rgba.length; i += 4) {
-    final r = rgba[i];
-    final g = rgba[i + 1];
-    final b = rgba[i + 2];
-    final a = rgba[i + 3];
-    out[i] = (b * a) ~/ 255;
-    out[i + 1] = (g * a) ~/ 255;
-    out[i + 2] = (r * a) ~/ 255;
-    out[i + 3] = a;
-  }
-  return out;
-}
-
-/// 离屏光栅化任意 widget（不上屏、不进 widget tree）。
-///
-/// 手工组装 BuildOwner + RenderView 管线 — 与 `screenshot` 包同原理，
-/// 在主引擎主 isolate 内同步 layout/paint，仅 toImage 为异步。
-Future<ui.Image> _rasterizeWidget(
-  Widget widget, {
-  required Size logicalSize,
-  required double scale,
-}) async {
-  final boundary = RenderRepaintBoundary();
-  final pipelineOwner = PipelineOwner();
-  final buildOwner = BuildOwner(focusManager: FocusManager());
-
-  final renderView = RenderView(
-    view: WidgetsBinding.instance.platformDispatcher.views.first,
-    configuration: ViewConfiguration(
-      logicalConstraints: BoxConstraints.tight(logicalSize),
-      physicalConstraints: BoxConstraints.tight(logicalSize * scale),
-      devicePixelRatio: scale,
-    ),
-    child: RenderPositionedBox(
-      alignment: Alignment.center,
-      child: boundary,
-    ),
-  );
-
-  pipelineOwner.rootNode = renderView;
-  renderView.prepareInitialFrame();
-
-  final rootElement =
-      RenderObjectToWidgetAdapter<RenderBox>(
-        container: boundary,
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: MediaQuery(
-            data: MediaQueryData(
-              size: logicalSize,
-              devicePixelRatio: scale,
-            ),
-            child: widget,
-          ),
-        ),
-      ).attachToRenderTree(buildOwner);
-
-  try {
-    buildOwner.buildScope(rootElement);
-    buildOwner.finalizeTree();
-
-    pipelineOwner.flushLayout();
-    pipelineOwner.flushCompositingBits();
-    pipelineOwner.flushPaint();
-
-    return await boundary.toImage(pixelRatio: scale);
-  } finally {
-    // 卸载 element tree，释放 render objects
-    rootElement.update(
-      RenderObjectToWidgetAdapter<RenderBox>(container: boundary),
-    );
-    buildOwner.buildScope(rootElement);
-    buildOwner.finalizeTree();
   }
 }
 

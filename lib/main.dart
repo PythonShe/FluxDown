@@ -16,11 +16,14 @@ import 'src/models/download_controller.dart';
 import 'src/models/settings_provider.dart';
 import 'src/pages/home_page.dart';
 import 'src/services/external_download_service.dart';
+import 'src/services/floating_ball/floating_ball_service.dart';
+import 'src/services/floating_ball/wayland_degradation_service.dart';
 import 'src/services/hls_quality_service.dart';
 import 'src/services/bt_file_selection_service.dart';
 import 'src/services/analytics_service.dart';
 import 'src/services/log_service.dart';
 import 'src/services/notification_service.dart';
+import 'src/services/power_service.dart';
 import 'src/services/tray_service.dart';
 import 'src/i18n/locale_provider.dart';
 import 'src/services/update_service.dart';
@@ -291,6 +294,9 @@ class _FluxDownAppState extends State<FluxDownApp>
     // 配置加载完成后，同步 analytics 的实际同意状态
     _syncAnalyticsAfterConfigLoad();
 
+    // 悬浮球服务 — 配置加载完成后初始化（S0.5 初始化钩子）
+    _initFloatingBallAfterConfigLoad();
+
     // 延迟 5 秒后台静默检查更新（避免阻塞启动流程）
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
@@ -526,6 +532,41 @@ class _FluxDownAppState extends State<FluxDownApp>
     });
   }
 
+  /// 等配置加载完成后初始化悬浮球服务（S0.5：floatingBallEnabled/坐标
+  /// 均来自 Rust config，须先就绪；与 torrent 关联处理同款监听模式）。
+  void _initFloatingBallAfterConfigLoad() {
+    void doInit() {
+      FloatingBallService.instance.init(
+        settings: _settingsForExternal,
+        theme: themeProvider,
+        navigatorKey: _navigatorKey,
+      );
+    }
+
+    if (_settingsForExternal.loaded) {
+      doInit();
+      return;
+    }
+    late final void Function() listener;
+    Timer? timeout;
+    void cleanup() {
+      timeout?.cancel();
+      _settingsForExternal.removeListener(listener);
+    }
+
+    listener = () {
+      if (_settingsForExternal.loaded) {
+        cleanup();
+        if (mounted) doInit();
+      }
+    };
+    _settingsForExternal.addListener(listener);
+    timeout = Timer(const Duration(seconds: 10), () {
+      cleanup();
+      if (mounted) doInit();
+    });
+  }
+
   /// Handle .torrent files passed via command-line args.
   /// Creates download tasks using the default save directory from settings.
   void _handleInitialTorrentFiles() {
@@ -638,11 +679,17 @@ class _FluxDownAppState extends State<FluxDownApp>
       logInfo('FluxDownApp', 'hiding window immediately...');
       await windowManager.hide();
 
+      // 释放唤醒锁（Windows 线程级状态随进程退出也会清除，此处保证子进程回收）
+      logInfo('FluxDownApp', 'shutting down PowerService...');
+      await PowerService.instance.shutdown();
+
       // 后台清理：通知服务 → 托盘图标
       logInfo('FluxDownApp', 'shutting down NotificationService...');
       NotificationService.instance.shutdown();
       logInfo('FluxDownApp', 'waiting for pending notifications...');
       await NotificationService.instance.waitForPending();
+      logInfo('FluxDownApp', 'destroying floating ball...');
+      FloatingBallService.instance.destroy();
       logInfo('FluxDownApp', 'destroying tray...');
       await TrayService.instance.destroy();
 
@@ -690,6 +737,10 @@ class _FluxDownAppState extends State<FluxDownApp>
   @override
   void onWindowFocus() {
     logInfo('FluxDownApp', 'onWindowFocus');
+    // Wayland 降级形态③：主窗获焦时读一次剪贴板（失焦读取被协议门控）
+    unawaited(
+      WaylandDegradationService.instance.checkClipboardOnRestore(),
+    );
   }
 
   @override

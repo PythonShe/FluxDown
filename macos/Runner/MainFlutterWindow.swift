@@ -30,6 +30,10 @@ class MainFlutterWindow: NSWindow {
             }
         }
 
+        // 悬浮球原生层（macOS）— MethodChannel `com.fluxdown/floating_ball`。
+        // 详见 FloatingBallPanel.swift；协议参照 lib/src/services/floating_ball/floating_ball_service.dart。
+        FloatingBallPanel.shared.register(with: flutterViewController.engine.binaryMessenger)
+
         RegisterGeneratedPlugins(registry: flutterViewController)
 
         super.awakeFromNib()

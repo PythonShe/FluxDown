@@ -7,6 +7,7 @@ import '../../i18n/locale_provider.dart';
 import '../../models/download_task.dart';
 import '../../theme/flux_theme_tokens.dart';
 import '../log_service.dart';
+import '../native_overlay/win32_layered_window.dart';
 import '../open_folder.dart';
 import 'toast_card_renderer.dart';
 import 'win32_bindings.dart';
@@ -72,7 +73,6 @@ class _ToastState {
 // =============================================================================
 
 final Map<int, _ToastState> _states = {}; // hwnd → state
-bool _classRegistered = false;
 const String _className = 'FluxDownToast_v3';
 
 // 复用的 POINT 指针：避免每 tick calloc/free（16ms × 整个 Toast 生命周期）
@@ -186,7 +186,7 @@ class Win32ToastWindow {
 
   Future<void> _showBatch(_ToastBatch batch) async {
     try {
-      _ensureClassRegistered();
+      ensureLayeredWindowClass(_className);
       await _createToastWindow(batch);
       _ensureMasterTimer();
     } catch (e, stack) {
@@ -219,43 +219,6 @@ class Win32ToastWindow {
   void _onToastDismissed() {
     _showing = false;
     Future.delayed(const Duration(milliseconds: 400), _tryShowNext);
-  }
-}
-
-// =============================================================================
-// 窗口类注册（使用 DefWindowProcW 原生指针，无 Dart 回调）
-// =============================================================================
-
-void _ensureClassRegistered() {
-  if (_classRegistered) return;
-
-  final hInstance = getModuleHandleW(nullptr);
-  final classNamePtr = _className.toNativeUtf16();
-  final cursorPtr = Pointer<Utf16>.fromAddress(32512); // IDC_ARROW
-
-  final wndClass = calloc<WNDCLASSEXW>();
-  try {
-    wndClass.ref.cbSize = sizeOf<WNDCLASSEXW>();
-    wndClass.ref.style = 0;
-    // 直接使用 DefWindowProcW 的原生函数指针 — 不经过 Dart VM
-    wndClass.ref.lpfnWndProc = defWindowProcWPtr;
-    wndClass.ref.cbClsExtra = 0;
-    wndClass.ref.cbWndExtra = 0;
-    wndClass.ref.hInstance = hInstance;
-    wndClass.ref.hIcon = 0;
-    wndClass.ref.hCursor = loadCursorW(0, cursorPtr);
-    wndClass.ref.hbrBackground = 0; // 分层窗口，无背景刷
-    wndClass.ref.lpszMenuName = nullptr;
-    wndClass.ref.lpszClassName = classNamePtr;
-    wndClass.ref.hIconSm = 0;
-
-    final atom = registerClassExW(wndClass);
-    if (atom == 0) throw StateError('RegisterClassExW failed');
-    _classRegistered = true;
-    logInfo(_tag, 'window class registered, atom=$atom');
-  } finally {
-    calloc.free(wndClass);
-    calloc.free(classNamePtr);
   }
 }
 
@@ -354,7 +317,9 @@ Future<void> _createToastWindow(_ToastBatch batch) async {
     state.memDC = createCompatibleDC(0);
     if (state.memDC == 0) throw StateError('CreateCompatibleDC failed');
     for (final img in images) {
-      state.hBitmaps.add(_createDibFromImage(img));
+      state.hBitmaps.add(
+        createDibFromBgra(img.width, img.height, img.bgraPremultiplied),
+      );
     }
 
     _states[hwnd] = state;
@@ -379,34 +344,7 @@ Future<void> _createToastWindow(_ToastBatch batch) async {
   }
 }
 
-/// premultiplied BGRA 像素 → 32bpp top-down DIB
-int _createDibFromImage(ToastCardImage img) {
-  final bmi = calloc<BITMAPINFOHEADER>();
-  final ppvBits = calloc<Pointer<Void>>();
-  try {
-    bmi.ref
-      ..biSize = sizeOf<BITMAPINFOHEADER>()
-      ..biWidth = img.width
-      ..biHeight = -img.height // 负值 = top-down 行序
-      ..biPlanes = 1
-      ..biBitCount = 32
-      ..biCompression = BI_RGB;
-
-    final hBitmap = createDIBSection(0, bmi, DIB_RGB_COLORS, ppvBits, 0, 0);
-    if (hBitmap == 0 || ppvBits.value == nullptr) {
-      throw StateError('CreateDIBSection failed');
-    }
-
-    final dst = ppvBits.value
-        .cast<Uint8>()
-        .asTypedList(img.bgraPremultiplied.length);
-    dst.setAll(0, img.bgraPremultiplied);
-    return hBitmap;
-  } finally {
-    calloc.free(bmi);
-    calloc.free(ppvBits);
-  }
-}
+// （DIB 创建已抽取至 native_overlay/win32_layered_window.dart）
 
 /// 命中区域：渲染器逻辑坐标 × DPI scale → 物理像素
 void _calcHitAreas(_ToastState state, double scale) {
@@ -433,47 +371,17 @@ void _calcHitAreas(_ToastState state, double scale) {
 /// 把变体位图贴入分层窗口（同时应用当前整窗 alpha）。
 void _pushVariant(int hwnd, _ToastState state, int variant) {
   if (variant < 0 || variant >= state.hBitmaps.length) return;
-  final old = selectObject(state.memDC, state.hBitmaps[variant]);
-
-  final ptDst = calloc<POINT>();
-  final size = calloc<SIZE>();
-  final ptSrc = calloc<POINT>();
-  final blend = calloc<BLENDFUNCTION>();
-  try {
-    ptDst.ref
-      ..x = state.screenX
-      ..y = state.screenY;
-    size.ref
-      ..cx = state.scaledW
-      ..cy = state.scaledH;
-    ptSrc.ref
-      ..x = 0
-      ..y = 0;
-    blend.ref
-      ..BlendOp = AC_SRC_OVER
-      ..BlendFlags = 0
-      ..SourceConstantAlpha = state.alpha
-      ..AlphaFormat = AC_SRC_ALPHA;
-
-    updateLayeredWindow(
-      hwnd,
-      0,
-      ptDst,
-      size,
-      state.memDC,
-      ptSrc,
-      0,
-      blend,
-      ULW_ALPHA,
-    );
-    state.currentVariant = variant;
-  } finally {
-    selectObject(state.memDC, old);
-    calloc.free(ptDst);
-    calloc.free(size);
-    calloc.free(ptSrc);
-    calloc.free(blend);
-  }
+  pushLayeredBitmap(
+    hwnd: hwnd,
+    memDC: state.memDC,
+    hBitmap: state.hBitmaps[variant],
+    screenX: state.screenX,
+    screenY: state.screenY,
+    width: state.scaledW,
+    height: state.scaledH,
+    alpha: state.alpha,
+  );
+  state.currentVariant = variant;
 }
 
 // =============================================================================

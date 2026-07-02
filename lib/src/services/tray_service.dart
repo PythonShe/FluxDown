@@ -6,6 +6,8 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../i18n/locale_provider.dart';
+import '../models/settings_provider.dart';
+import 'floating_ball/floating_ball_service.dart';
 import 'log_service.dart';
 
 const _tag = 'TrayService';
@@ -82,6 +84,12 @@ class TrayService with TrayListener {
     final menu = Menu(
       items: [
         MenuItem(key: 'show_window', label: currentS.trayShowWindow),
+        MenuItem.checkbox(
+          key: 'toggle_ball',
+          label: currentS.trayShowFloatingBall,
+          checked: SettingsProvider.globalInstance?.floatingBallEnabled ??
+              false,
+        ),
         MenuItem.separator(),
         MenuItem(key: 'exit_app', label: currentS.trayExit),
       ],
@@ -98,6 +106,12 @@ class TrayService with TrayListener {
     final menu = Menu(
       items: [
         MenuItem(key: 'show_window', label: currentS.trayShowWindow),
+        MenuItem.checkbox(
+          key: 'toggle_ball',
+          label: currentS.trayShowFloatingBall,
+          checked: SettingsProvider.globalInstance?.floatingBallEnabled ??
+              false,
+        ),
         MenuItem.separator(),
         MenuItem(key: 'exit_app', label: currentS.trayExit),
       ],
@@ -149,6 +163,15 @@ class TrayService with TrayListener {
       return;
     }
     try {
+      // 诊断日志：窗口前置状态（macOS 最小化恢复问题排查用，issue #420）
+      final isMinimized = await windowManager.isMinimized();
+      final isVisible = await windowManager.isVisible();
+      logInfo(
+        _tag,
+        'window state before show: isMinimized=$isMinimized, '
+        'isVisible=$isVisible',
+      );
+      // window_manager 0.5.1 的 show() 内部已处理 isMinimized → restore()
       logInfo(_tag, 'calling windowManager.show()...');
       await windowManager.show();
       logInfo(_tag, 'calling windowManager.focus()...');
@@ -206,6 +229,11 @@ class TrayService with TrayListener {
     switch (menuItem.key) {
       case 'show_window':
         _showWindow();
+      case 'toggle_ball':
+        final enabled =
+            SettingsProvider.globalInstance?.floatingBallEnabled ?? false;
+        FloatingBallService.instance.setEnabled(!enabled);
+        refreshMenu(); // 同步复选状态
       case 'exit_app':
         _handleExit();
     }

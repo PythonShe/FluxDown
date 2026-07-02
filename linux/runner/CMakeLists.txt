@@ -28,6 +28,7 @@ add_custom_command(
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
+  "floating_ball_window.cc"
   "${GRESOURCE_C}"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )

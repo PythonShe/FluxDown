@@ -98,9 +98,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
-  // Initialize COM, so that it is available for use in the library and/or
-  // plugins.
-  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  // Initialize OLE (superset of COM STA init) — required by RegisterDragDrop
+  // for the floating-ball drop target (S0.6). OleInitialize internally calls
+  // CoInitializeEx(COINIT_APARTMENTTHREADED); same-thread re-entry from
+  // plugins (e.g. window_manager's CoInitialize) returns S_FALSE, harmless.
+  ::OleInitialize(nullptr);
 
   flutter::DartProject project(L"data");
 
@@ -129,7 +131,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     std::cerr.flush();
   }
 
-  ::CoUninitialize();
+  ::OleUninitialize();
   if (mutex) ::CloseHandle(mutex);
   return EXIT_SUCCESS;
 }
