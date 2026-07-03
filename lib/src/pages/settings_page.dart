@@ -850,7 +850,7 @@ class _SettingsNavItemState extends State<_SettingsNavItem> {
 // 设置内容区
 // ─────────────────────────────────────────────
 
-class _SettingsContent extends StatelessWidget {
+class _SettingsContent extends StatefulWidget {
   final SettingsCategory category;
   final SettingsProvider settingsProvider;
   final DownloadController? downloadController;
@@ -862,8 +862,35 @@ class _SettingsContent extends StatelessWidget {
   });
 
   @override
+  State<_SettingsContent> createState() => _SettingsContentState();
+}
+
+class _SettingsContentState extends State<_SettingsContent> {
+  final _scrollController = ScrollController();
+
+  @override
+  void didUpdateWidget(covariant _SettingsContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 切换分类时回到顶部，避免沿用上一分类的滚动位置
+    if (widget.category != oldWidget.category &&
+        _scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final category = widget.category;
+    final settingsProvider = widget.settingsProvider;
+    final downloadController = widget.downloadController;
     return SingleChildScrollView(
+      controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 24),
       child: Align(
         alignment: Alignment.topCenter,
