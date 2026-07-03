@@ -1253,4 +1253,57 @@ class S {
       _t('$count 个任务下载完成', '$count Downloads Complete');
   String andMoreFiles(int count) => _t('等 $count 个文件', 'and $count more');
   String get openFileFolder => _t('打开文件夹', 'Open Folder');
+
+  // ─────────────────────────────────────────────
+  // 移动端（Mobile）
+  // ─────────────────────────────────────────────
+
+  String get mobileNavDownloads => _t('下载', 'Downloads');
+  String mobileSpeedSummary(String speed, int n) =>
+      _t('↓ $speed · $n 个任务', '↓ $speed · $n task(s)');
+  String get mobileIdleSummary => _t('空闲 · 无进行中任务', 'Idle · no active tasks');
+  String get mobileSearchHint => _t('搜索任务名称…', 'Search tasks…');
+  String get mobileFilterTasks => _t('筛选任务', 'Filter Tasks');
+  String get mobileFileType => _t('文件类型', 'File Type');
+  String get mobileByQueue => _t('按队列', 'By Queue');
+  String get mobileResetFilter => _t('重置筛选', 'Reset Filters');
+  String get mobileMoveToQueue => _t('移动到队列…', 'Move to Queue…');
+  String get mobileSelectQueue => _t('选择目标队列', 'Choose Target Queue');
+  String get mobileMovedToQueue => _t('已移动到队列', 'Moved to queue');
+  String get mobilePaste => _t('粘贴', 'Paste');
+  String get mobilePasted => _t('已从剪贴板粘贴', 'Pasted from clipboard');
+  String get mobileClipboardEmpty => _t('剪贴板为空', 'Clipboard is empty');
+  String get mobileSaveTo => _t('保存到', 'Save to');
+  String get mobileAdvancedOptions =>
+      _t('高级选项（Cookie / User-Agent / 校验）', 'Advanced (Cookie / UA / Checksum)');
+  String get mobileEnterUrl => _t('请输入下载链接', 'Enter a download URL');
+  String get mobileDownloadStarted => _t('已开始下载', 'Download started');
+  String get mobileUrlHint =>
+      _t('下载链接（支持多行批量 / magnet / m3u8）', 'URLs (multi-line / magnet / m3u8)');
+  String get mobilePausedAllToast => _t('已暂停全部任务', 'All tasks paused');
+  String get mobileResumedAllToast => _t('已恢复全部任务', 'All tasks resumed');
+  String get mobileTaskDetail => _t('任务详情', 'Task Details');
+  String get mobileSegTitle => _t('分段可视化', 'Segments');
+  String get mobileSegRunning => _t('动态拆分运行中', 'dynamic split active');
+  String get mobileSegStopped => _t('已停止', 'stopped');
+  String get mobileSegDone => _t('已完成', 'Done');
+  String get mobileSegActive => _t('下载中', 'Active');
+  String get mobileSegPending => _t('待下载', 'Pending');
+  String get mobileSpeedCurve => _t('速度曲线', 'Speed Curve');
+  String get mobileSpeedWindow => _t('近 60 秒', 'Last 60s');
+  String mobileSpeedPeak(String v) => _t('峰值 $v', 'Peak $v');
+  String get mobileTaskInfo => _t('任务信息', 'Task Info');
+  String get mobileProtocol => _t('协议', 'Protocol');
+  String get mobileCreatedAt => _t('创建时间', 'Created');
+  String get mobileBoostAction => _t('Boost 优先下载', 'Boost Priority');
+  String get mobileBoosted => _t('已 Boost', 'Boosted');
+  String get mobileBoostOn => _t('已启用 Boost 优先下载', 'Boost enabled');
+  String get mobileBoostOff => _t('已取消 Boost', 'Boost cancelled');
+  String get mobileRetry => _t('重试', 'Retry');
+  String get mobileTaskDeleted => _t('已删除任务', 'Task deleted');
+  String get mobileTaskFileDeleted => _t('已删除任务和文件', 'Task & file deleted');
+  String get mobilePrivacyPolicy => _t('隐私政策', 'Privacy Policy');
+  String get mobileOpenSource => _t('开源许可', 'Open Source Licenses');
+  String get mobileFooter =>
+      _t('FluxDown · 零广告 · 零追踪 · 本地优先', 'FluxDown · No ads · No tracking · Local-first');
 }

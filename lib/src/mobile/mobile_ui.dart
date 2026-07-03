@@ -1,0 +1,462 @@
+import 'dart:math' as math;
+import 'dart:ui';
+
+import 'package:flutter/widgets.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
+
+import '../models/download_task.dart';
+import '../theme/app_colors.dart';
+
+/// 移动端设计 Token（对应 design/mobile 设计稿）
+abstract final class MobileDims {
+  static const pageMargin = 16.0;
+  static const cardRadius = 12.0;
+  static const cardGap = 10.0;
+  static const appBarHeight = 56.0;
+  static const tabsHeight = 44.0;
+  static const dockBottomGap = 16.0;
+  static const fabSize = 46.0;
+  /// 列表底部留白（悬浮 Dock + FAB 手势区）
+  static const scrollBottomPadding = 120.0;
+}
+
+/// 顶栏 / Dock 通用毛玻璃滤镜
+final ImageFilter mobileBlurFilter = ImageFilter.blur(sigmaX: 22, sigmaY: 22);
+
+/// 将任务的分段下载区间映射到 [cells] 个可视化格子的填充率 [0,1]。
+///
+/// 规则：
+/// - 已完成任务 → 全部填满；
+/// - 总大小未知 → 全部为 0；
+/// - 无分段信息 → 按整体进度做前缀填充；
+/// - 有分段信息 → 每个分段的已下载区间 `[startByte, startByte+downloadedBytes)`
+///   按字节比例累加到重叠的格子上（结果 clamp 到 [0,1]）。
+List<double> mobileSegmentCellFills(DownloadTask task, int cells) {
+  if (task.status == TaskStatus.completed) {
+    return List.filled(cells, 1.0);
+  }
+  final total = task.totalBytes;
+  if (total <= 0) return List.filled(cells, 0.0);
+
+  final segments = task.segments;
+  if (segments == null || segments.isEmpty) {
+    // 无分段信息 → 按整体进度前缀填充
+    final filled = task.progress * cells;
+    return List.generate(
+      cells,
+      (i) => (filled - i).clamp(0.0, 1.0),
+    );
+  }
+
+  final fills = List.filled(cells, 0.0);
+  final cellSize = total / cells;
+  for (final seg in segments) {
+    if (seg.downloadedBytes <= 0) continue;
+    final start = seg.startByte.toDouble();
+    final end = start + seg.downloadedBytes.toDouble();
+    final firstCell = (start / cellSize).floor().clamp(0, cells - 1);
+    final lastCell = ((end - 1) / cellSize).floor().clamp(0, cells - 1);
+    for (var i = firstCell; i <= lastCell; i++) {
+      final cellStart = i * cellSize;
+      final cellEnd = cellStart + cellSize;
+      final overlap =
+          (math.min(end, cellEnd) - math.max(start, cellStart)) / cellSize;
+      fills[i] = (fills[i] + overlap).clamp(0.0, 1.0);
+    }
+  }
+  return fills;
+}
+
+/// 文件分类 → Lucide 图标
+IconData mobileCategoryIcon(FileCategory category) {
+  return switch (category) {
+    FileCategory.video => LucideIcons.film,
+    FileCategory.audio => LucideIcons.music,
+    FileCategory.document => LucideIcons.fileText,
+    FileCategory.image => LucideIcons.image,
+    FileCategory.archive => LucideIcons.archive,
+    FileCategory.all => LucideIcons.layoutGrid,
+    FileCategory.other => LucideIcons.file,
+  };
+}
+
+/// 轻量 Toast（复用 ShadSonner）
+void showMobileToast(BuildContext context, String message) {
+  ShadSonner.of(context).show(
+    ShadToast(
+      title: Text(message, maxLines: 2, overflow: TextOverflow.ellipsis),
+      duration: const Duration(milliseconds: 2000),
+    ),
+  );
+}
+
+/// 玻璃卡片装饰（浅色: 白面板；深色: 深面板）
+BoxDecoration mobileCardDecoration(AppColors c) {
+  return BoxDecoration(
+    color: c.surface1,
+    borderRadius: BorderRadius.circular(MobileDims.cardRadius),
+    border: Border.all(color: c.border),
+    boxShadow: [
+      BoxShadow(
+        color: c.shadow.withValues(alpha: 0.05),
+        blurRadius: 3,
+        offset: const Offset(0, 1),
+      ),
+    ],
+  );
+}
+
+/// 胶囊 Chip（筛选 / 线程数 / 队列选择）
+class MobileChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const MobileChip({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? c.accent.withValues(alpha: 0.10) : c.surface1,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? c.accent.withValues(alpha: 0.35) : c.border,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            color: selected ? c.accent : c.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 圆形图标按钮（顶栏）
+class MobileIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool showDot;
+  final Color? color;
+
+  const MobileIconButton({
+    super.key,
+    required this.icon,
+    required this.onTap,
+    this.showDot = false,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        width: 40,
+        height: 40,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Icon(icon, size: 19, color: color ?? c.textPrimary),
+            if (showDot)
+              Positioned(
+                top: 7,
+                right: 7,
+                child: Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: c.accent,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: c.surface1, width: 1.5),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 进度条（细，圆角）
+class MobileProgressBar extends StatelessWidget {
+  final double progress;
+  final Color color;
+  final double height;
+
+  const MobileProgressBar({
+    super.key,
+    required this.progress,
+    required this.color,
+    this.height = 5,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(height / 2),
+      child: SizedBox(
+        height: height,
+        child: Stack(
+          children: [
+            Container(color: c.switchTrack),
+            FractionallySizedBox(
+              widthFactor: progress.clamp(0.0, 1.0),
+              child: Container(color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// 底部弹层（Liquid Glass 风格）
+// ─────────────────────────────────────────────
+
+/// 从底部滑入的弹层。[builder] 构建内容（置于玻璃容器内）。
+Future<T?> showMobileSheet<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+}) {
+  return showGeneralDialog<T>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'mobile-sheet',
+    barrierColor: const Color(0x59000000),
+    transitionDuration: const Duration(milliseconds: 320),
+    pageBuilder: (ctx, _, _) {
+      return Align(
+        alignment: Alignment.bottomCenter,
+        child: AnimatedPadding(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(ctx).bottom,
+          ),
+          child: builder(ctx),
+        ),
+      );
+    },
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: const Cubic(0.32, 0.72, 0.32, 1),
+        reverseCurve: Curves.easeIn,
+      );
+      return SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 1),
+          end: Offset.zero,
+        ).animate(curved),
+        child: child,
+      );
+    },
+  );
+}
+
+/// 弹层玻璃容器：圆角顶部 + 毛玻璃 + 抓手 + 标题
+class MobileSheetContainer extends StatelessWidget {
+  final String? title;
+  final Widget child;
+
+  /// 固定在底部的页脚（如「开始下载」按钮），不随内容滚动。
+  final Widget? footer;
+
+  const MobileSheetContainer({
+    super.key,
+    this.title,
+    required this.child,
+    this.footer,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    final media = MediaQuery.of(context);
+    final maxHeight = media.size.height * 0.86;
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+        child: Container(
+          width: double.infinity,
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          decoration: BoxDecoration(
+            color: c.bg.withValues(alpha: 0.82),
+            border: Border(
+              top: BorderSide(color: c.border.withValues(alpha: 0.8)),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 抓手
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4.5,
+                  margin: const EdgeInsets.only(top: 10, bottom: 2),
+                  decoration: BoxDecoration(
+                    color: c.switchTrack,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ),
+              if (title != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+                  child: Text(
+                    title!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: c.textPrimary,
+                    ),
+                  ),
+                ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(
+                    20,
+                    6,
+                    20,
+                    footer != null ? 10 : 30 + media.padding.bottom,
+                  ),
+                  child: child,
+                ),
+              ),
+              if (footer != null)
+                Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.fromLTRB(
+                    20,
+                    12,
+                    20,
+                    16 + media.padding.bottom,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border(top: BorderSide(color: c.border)),
+                  ),
+                  child: footer!,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 弹层字段小标题
+class MobileFieldLabel extends StatelessWidget {
+  final String text;
+
+  const MobileFieldLabel(this.text, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 14, bottom: 8, left: 2, right: 2),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: c.textMuted,
+        ),
+      ),
+    );
+  }
+}
+
+/// 主按钮（胶囊，accent 填充）
+class MobilePrimaryButton extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final VoidCallback onTap;
+  final bool destructive;
+  final bool filled;
+
+  const MobilePrimaryButton({
+    super.key,
+    required this.label,
+    this.icon,
+    required this.onTap,
+    this.destructive = false,
+    this.filled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    final Color fg;
+    final Color bgColor;
+    final Color borderColor;
+    if (destructive) {
+      fg = c.statusError;
+      bgColor = const Color(0x00000000);
+      borderColor = c.statusError.withValues(alpha: 0.3);
+    } else if (filled) {
+      fg = c.accentForeground;
+      bgColor = c.accent;
+      borderColor = c.accent;
+    } else {
+      fg = c.textPrimary;
+      bgColor = const Color(0x00000000);
+      borderColor = c.border;
+    }
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: borderColor),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 16, color: fg),
+              const SizedBox(width: 7),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: fg,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

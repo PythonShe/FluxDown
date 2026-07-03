@@ -187,6 +187,12 @@ fn platform_reveal_file(path: &str) {
     }
 }
 
+/// Android/iOS 等移动平台：无桌面文件管理器概念，仅记日志。
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn platform_reveal_file(path: &str) {
+    crate::logger::log_info!("[reveal] reveal file not supported on this platform: {path}");
+}
+
 // ---------------------------------------------------------------------------
 // 平台默认：打开目录（不选中）
 // ---------------------------------------------------------------------------
@@ -220,6 +226,12 @@ fn platform_open_dir(dir: &str) {
     if let Err(e) = std::process::Command::new("xdg-open").arg(dir).spawn() {
         crate::logger::log_info!("[reveal] xdg-open failed: {e}");
     }
+}
+
+/// Android/iOS 等移动平台：无桌面文件管理器概念，仅记日志。
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn platform_open_dir(dir: &str) {
+    crate::logger::log_info!("[reveal] open dir not supported on this platform: {dir}");
 }
 
 #[cfg(target_os = "linux")]

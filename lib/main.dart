@@ -15,6 +15,7 @@ import 'src/services/window_state_service.dart';
 import 'src/models/download_controller.dart';
 import 'src/models/settings_provider.dart';
 import 'src/pages/home_page.dart';
+import 'src/mobile/mobile_app.dart';
 import 'src/services/external_download_service.dart';
 import 'src/services/floating_ball/floating_ball_service.dart';
 import 'src/services/floating_ball/wayland_degradation_service.dart';
@@ -84,6 +85,21 @@ Future<void> main(List<String> args) async {
   final themeProvider = ThemeProvider();
   await themeProvider.init();
   logInfo('main', 'theme initialized');
+
+  // ===== 移动端启动流程 =====
+  // Android / iOS 走精简初始化：无窗口管理、托盘、开机启动等桌面服务。
+  if (Platform.isAndroid || Platform.isIOS) {
+    logInfo('main', 'initializing Rust runtime (mobile)...');
+    await initializeRust(assignRustSignal);
+    logInfo('main', 'starting mobile shell');
+    runApp(
+      FluxDownMobileApp(
+        themeProvider: themeProvider,
+        localeNotifier: localeNotifier,
+      ),
+    );
+    return;
+  }
 
   logInfo('main', 'initializing windowManager...');
   await windowManager.ensureInitialized();

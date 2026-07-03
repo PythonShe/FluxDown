@@ -27,6 +27,10 @@ bool isPortableMode() {
 /// | Linux           | —         | `$XDG_DATA_HOME/fluxdown/`                      |
 /// | macOS           | —         | `~/Library/Application Support/fluxdown/`        |
 String resolveDataDir() {
+  if (Platform.isAndroid) {
+    // 应用内部存储（无需权限）；与包名保持一致
+    return '/data/data/com.fluxdown.app/files/fluxdown';
+  }
   if (Platform.isLinux) {
     final xdgData = Platform.environment['XDG_DATA_HOME'] ??
         '${Platform.environment['HOME']}/.local/share';

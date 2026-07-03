@@ -1168,8 +1168,10 @@ class SettingsProvider extends ChangeNotifier {
     _ => '',
   };
 
-  /// 启动时同步开机启动状态（从系统注册表读取实际状态）
+  /// 启动时同步开机启动状态（从系统注册表读取实际状态）。
+  /// 移动端无开机启动概念，launch_at_startup 插件也未注册，直接跳过。
   Future<void> _syncAutoStartupState() async {
+    if (Platform.isAndroid || Platform.isIOS) return;
     final actual = await launchAtStartup.isEnabled();
     if (_autoStartup != actual) {
       _autoStartup = actual;
@@ -1179,6 +1181,11 @@ class SettingsProvider extends ChangeNotifier {
 
   /// 平台默认下载目录
   static String _platformDefaultSaveDir() {
+    if (Platform.isAndroid) {
+      // 应用专属外部目录，无需存储权限即可写入；
+      // 公共 Download 目录（SAF/MediaStore）作为后续跟进项。
+      return '/storage/emulated/0/Android/data/com.fluxdown.app/files/Download';
+    }
     final home =
         Platform.environment['USERPROFILE'] ??
         Platform.environment['HOME'] ??

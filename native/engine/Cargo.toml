@@ -51,7 +51,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [target."cfg(not(windows))".dependencies]
 libc = "0.2"
 librqbit = { version = "8", default-features = false, features = ["rust-tls"] }
-reqwest = { version = "0.12", features = ["stream", "rustls-tls-native-roots", "cookies", "json", "socks"] }
+# default-features = false：去掉 default-tls（native-tls→openssl，Android 交叉编译无 openssl）；
+# 其余默认特性显式保留，Linux/macOS 行为不变
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls-native-roots", "cookies", "json", "socks", "charset", "http2", "system-proxy", "macos-system-configuration"] }
 
 [dev-dependencies]
 http = "1.4.0"
