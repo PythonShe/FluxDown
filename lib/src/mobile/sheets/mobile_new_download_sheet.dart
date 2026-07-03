@@ -8,6 +8,7 @@ import '../../models/download_controller.dart';
 import '../../models/settings_provider.dart';
 import '../../theme/app_colors.dart';
 import '../mobile_ui.dart';
+import '../services/mobile_storage_service.dart';
 
 /// UA 预设（与桌面新建下载对话框一致）
 const _uaPresets = <String, String>{
@@ -109,6 +110,14 @@ class _NewDownloadSheetState extends State<_NewDownloadSheet> {
     final existing = _urlController.text.trimRight();
     _urlController.text = existing.isEmpty ? text : '$existing\n$text';
     showMobileToast(context, s.mobilePasted);
+  }
+
+  /// 调起系统文件管理器选择保存目录
+  Future<void> _pickSaveDir() async {
+    final picked = await pickMobileDownloadDirectory(context);
+    if (picked != null && picked.trim().isNotEmpty && mounted) {
+      setState(() => _dirController.text = picked);
+    }
   }
 
   void _start() {
@@ -224,10 +233,13 @@ class _NewDownloadSheetState extends State<_NewDownloadSheet> {
             ],
           ),
           MobileFieldLabel(s.mobileSaveTo),
-          ShadInput(
-            controller: _dirController,
-            placeholder: Text(s.selectSaveDir),
-          ),
+          if (MobileStorageService.supported)
+            _DirPickRow(path: _dirController.text, onTap: _pickSaveDir)
+          else
+            ShadInput(
+              controller: _dirController,
+              placeholder: Text(s.selectSaveDir),
+            ),
           MobileFieldLabel(s.threads),
           Wrap(
             spacing: 8,
@@ -325,6 +337,47 @@ class _NewDownloadSheetState extends State<_NewDownloadSheet> {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// 保存目录行：文件夹图标 + 路径 + 箭头，点按调起系统目录选择器
+class _DirPickRow extends StatelessWidget {
+  final String path;
+  final VoidCallback onTap;
+
+  const _DirPickRow({required this.path, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: c.surface1,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: c.border),
+        ),
+        child: Row(
+          children: [
+            Icon(LucideIcons.folderOpen, size: 17, color: c.textSecondary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                path,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 13, color: c.textPrimary),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(LucideIcons.chevronRight, size: 15, color: c.textMuted),
+          ],
+        ),
       ),
     );
   }

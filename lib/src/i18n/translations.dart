@@ -1306,4 +1306,15 @@ class S {
   String get mobileOpenSource => _t('开源许可', 'Open Source Licenses');
   String get mobileFooter =>
       _t('FluxDown · 零广告 · 零追踪 · 本地优先', 'FluxDown · No ads · No tracking · Local-first');
+  String get mobilePickDirUnmappable => _t(
+    '无法解析所选目录，请选择设备存储中的文件夹',
+    "Couldn't resolve the folder; pick one on device storage",
+  );
+  String get mobileAllFilesTitle =>
+      _t('需要「所有文件访问」权限', '"All files access" required');
+  String get mobileAllFilesDesc => _t(
+    '下载到公共目录（如 Download）需要授予「所有文件访问」权限，点击「去授权」前往系统设置开启。',
+    'Saving to public folders (e.g. Download) requires the "All files access" permission. Tap "Grant" to enable it in system settings.',
+  );
+  String get mobileGoGrant => _t('去授权', 'Grant');
 }

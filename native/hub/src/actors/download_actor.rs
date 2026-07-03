@@ -35,6 +35,14 @@ use fluxdown_api::server::{ApiServerConfig, spawn_api_server};
 
 /// Compute default save directory (platform-dependent).
 fn default_save_dir() -> String {
+    // Android：应用专属外部目录（免权限可写）；公共 Download 目录需
+    // SAF / All-files 权限，由 Dart 侧引导用户选择后经配置下发。
+    #[cfg(target_os = "android")]
+    {
+        if let Some(pkg) = fluxdown_engine::data_dir::android_package_name() {
+            return format!("/storage/emulated/0/Android/data/{pkg}/files/Download");
+        }
+    }
     if cfg!(target_os = "windows")
         && let Some(profile) = std::env::var_os("USERPROFILE")
     {

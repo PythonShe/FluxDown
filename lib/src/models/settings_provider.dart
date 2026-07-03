@@ -1179,6 +1179,9 @@ class SettingsProvider extends ChangeNotifier {
     }
   }
 
+  /// 平台默认下载目录（公开只读：供移动端判断「用户是否已自定义」）
+  static String get platformDefaultSaveDir => _platformDefaultSaveDir();
+
   /// 平台默认下载目录
   static String _platformDefaultSaveDir() {
     if (Platform.isAndroid) {

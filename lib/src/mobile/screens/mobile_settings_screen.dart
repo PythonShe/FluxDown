@@ -8,6 +8,7 @@ import '../../models/download_task.dart';
 import '../../models/settings_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/theme_provider.dart';
+import '../services/mobile_storage_service.dart';
 import '../mobile_ui.dart';
 
 const _appVersion = String.fromEnvironment(
@@ -357,9 +358,18 @@ class MobileSettingsScreen extends StatelessWidget {
 
   // ── 输入弹层 ──
 
-  void _editSaveDir(BuildContext context) {
+  Future<void> _editSaveDir(BuildContext context) async {
+    // Android：调用系统文件管理器选择目录（SAF）；其他平台退回文本输入
+    if (MobileStorageService.supported) {
+      final picked = await pickMobileDownloadDirectory(context);
+      if (picked != null && picked.trim().isNotEmpty) {
+        settings.setDefaultSaveDir(picked.trim());
+      }
+      return;
+    }
+    if (!context.mounted) return;
     final s = LocaleScope.of(context);
-    _showInputSheet(
+    await _showInputSheet(
       context,
       title: s.defaultSaveDir,
       initial: settings.defaultSaveDir,

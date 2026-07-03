@@ -8,6 +8,7 @@ import '../theme/app_colors.dart';
 import '../theme/theme_provider.dart';
 import 'mobile_ui.dart';
 import 'screens/mobile_settings_screen.dart';
+import 'services/mobile_storage_service.dart';
 import 'screens/mobile_tasks_screen.dart';
 
 /// 移动端根壳：任务列表 / 设置 两屏切换 + 悬浮玻璃 Dock
@@ -34,6 +35,20 @@ class _MobileShellState extends State<MobileShell> {
   void initState() {
     super.initState();
     _settings.requestConfig();
+    _ensureAndroidSaveDir();
+  }
+
+  /// Android：让 framework 创建应用专属外部下载目录
+  /// （`Android/data` 层禁止应用自建子树，Rust 引擎写入前必须初始化），
+  /// 并在用户未自定义时把默认保存目录同步为 framework 返回的真实路径
+  /// （多用户 / 特殊分区场景下与硬编码路径可能不同）。
+  Future<void> _ensureAndroidSaveDir() async {
+    final dir = await MobileStorageService.appExternalDownloadDir();
+    if (dir == null || dir.isEmpty || !mounted) return;
+    if (_settings.defaultSaveDir == SettingsProvider.platformDefaultSaveDir &&
+        _settings.defaultSaveDir != dir) {
+      _settings.setDefaultSaveDir(dir);
+    }
   }
 
   @override

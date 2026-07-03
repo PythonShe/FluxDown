@@ -10,6 +10,7 @@
 //! | Windows         | Installed | `%LOCALAPPDATA%\FluxDown\`                      |
 //! | Linux           | —         | `$XDG_DATA_HOME/fluxdown/`                      |
 //! | macOS           | —         | `~/Library/Application Support/fluxdown/`        |
+//! | Android         | —         | `/data/data/<package>/files/fluxdown/`           |
 //!
 //! ### Portable detection (Windows only)
 //!
@@ -106,11 +107,53 @@ fn resolve_data_dir_inner() -> PathBuf {
         exe_dir()
     }
 
-    // Catch-all for other platforms (e.g. Android/iOS stubs) — should never
+    // Android: 应用内部存储 `/data/data/<package>/files/fluxdown`。
+    // 包名 = 进程名（`/proc/self/cmdline` 首个 NUL 之前的内容）。
+    // 该目录无需任何存储权限即可读写，与 Dart 侧 `resolveDataDir()` 保持一致。
+    #[cfg(target_os = "android")]
+    {
+        match android_package_name() {
+            Some(pkg) => PathBuf::from(format!("/data/data/{pkg}/files/fluxdown")),
+            None => exe_dir(),
+        }
+    }
+
+    // Catch-all for other platforms (e.g. iOS stubs) — should never
     // be reached in practice.
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "android"
+    )))]
     {
         exe_dir()
+    }
+}
+
+/// Android：从 `/proc/self/cmdline` 读取当前进程名（= 应用包名）。
+/// 进程名可能带 `:subprocess` 后缀，取冒号前部分。
+///
+/// 供宿主（hub）拼接应用专属外部目录等 Android 路径使用。
+///
+/// # Examples
+///
+/// ```ignore
+/// // 仅在 Android 目标上可用
+/// if let Some(pkg) = fluxdown_engine::data_dir::android_package_name() {
+///     let dir = format!("/storage/emulated/0/Android/data/{pkg}/files/Download");
+/// }
+/// ```
+#[cfg(target_os = "android")]
+pub fn android_package_name() -> Option<String> {
+    let raw = std::fs::read("/proc/self/cmdline").ok()?;
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    let name = std::str::from_utf8(&raw[..end]).ok()?;
+    let name = name.split(':').next().unwrap_or(name).trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
     }
 }
 
