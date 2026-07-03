@@ -1194,10 +1194,17 @@ fn set_hidden(path: &Path) {
 /// before any BT session is active, so there is no concurrency risk.
 pub fn rescue_stranded_staging_files(
     completed_bt_tasks: &[(String, String, String)], // (task_id, save_dir, current_file_name)
+    // save_dir → 其他任务经完成哨兵声明的顶层名(小写折叠)。errored
+    // mid-completion 的任务重启后会带哨兵重试,rescue 的 dedup 必须避开
+    // 这些名字,否则 rescue 占名后对方重试复用哨兵会 merge/覆盖进
+    // rescue 出的产物(跨任务哨兵劫持,同 compute_completion_layout)。
+    claims_by_dir: &HashMap<String, HashSet<String>>,
 ) -> Vec<(String, String)> {
     let mut updates: Vec<(String, String)> = Vec::new();
+    let empty_claims: HashSet<String> = HashSet::new();
 
     for (task_id, save_dir, current_file_name) in completed_bt_tasks {
+        let claimed = claims_by_dir.get(save_dir).unwrap_or(&empty_claims);
         let stage_dir = bt_stage_dir(save_dir, task_id);
         if !stage_dir.exists() {
             continue;
@@ -1282,7 +1289,7 @@ pub fn rescue_stranded_staging_files(
             }
             let child_name = entry.file_name();
             let child_name_str = child_name.to_string_lossy();
-            let final_name = dedup_name_in_dir(save_path, &child_name_str);
+            let final_name = dedup_name_in_dir(save_path, &child_name_str, claimed);
             let dst = save_path.join(&final_name);
 
             match move_path(&entry.path(), &dst) {
@@ -1339,7 +1346,7 @@ pub fn rescue_stranded_staging_files(
                 );
                 continue;
             }
-            let final_child_name = dedup_name_in_dir(save_path, &child_name_str);
+            let final_child_name = dedup_name_in_dir(save_path, &child_name_str, claimed);
             let dst = save_path.join(&final_child_name);
 
             match move_path(&entry.path(), &dst) {
@@ -1390,19 +1397,38 @@ pub fn rescue_stranded_staging_files(
 
 /// Deduplicate a file or directory name inside `dir`.
 ///
-/// If `dir/name` does not exist, returns `name` unchanged.
-/// Otherwise appends ` (1)`, ` (2)`, … until a free slot is found.
-/// Mirrors the logic in `downloader::dedup_filename` but runs synchronously
-/// (called from the BT runtime thread after downloading is complete).
-fn dedup_name_in_dir(dir: &Path, name: &str) -> String {
+/// If the name is free, returns `name` unchanged.  Otherwise appends
+/// ` (1)`, ` (2)`, … until a free slot is found.  Mirrors the logic in
+/// `downloader::dedup_filename` but runs synchronously (called from the BT
+/// runtime thread after downloading is complete).
+///
+/// 冲突判定同时覆盖三类占用:
+/// - **磁盘同名条目(大小写折叠)**:Windows/APFS 文件系统大小写不敏感,
+///   精确字节比较会漏判 `MOVIE (1)` vs 已存在的 `Movie (1)`,选中后
+///   move 落盘走 REPLACE 语义静默覆盖真实文件。折叠用 `to_lowercase`,
+///   非 UTF-8 名经 lossy 转换——只可能把不冲突误判为冲突(多让一个编号),
+///   决不会漏判。Linux 上折叠偏保守(ext4 大小写敏感,`movie` 与 `Movie`
+///   本可共存),代价仅是多让出一个名字,换取全平台一致的安全行为。
+/// - **同名 HTTP/HLS 临时文件 `<name>.fdownloading`**:下载中的 HTTP 任务
+///   已预订最终名(manager 启动期 dedup 认 temp),BT 完成若占用该名,
+///   HTTP finalize rename 会覆盖 BT 产物(跨协议撞名)。
+/// - **`avoid` 集合(小写折叠)**:其他 BT 任务经完成哨兵声明、但可能尚未
+///   在磁盘留下足迹的顶层名(见 `bt_completion_top_*` claim-aware dedup)。
+fn dedup_name_in_dir(dir: &Path, name: &str, avoid: &HashSet<String>) -> String {
+    let temp_ext = crate::downloader::TEMP_EXT;
     let candidate = dir.join(name);
-    if !candidate.exists() {
+    let temp_candidate = dir.join(format!("{name}{temp_ext}"));
+    if !candidate.exists() && !temp_candidate.exists() && !avoid.contains(&name.to_lowercase()) {
         return name.to_string();
     }
 
-    // Scan directory once to avoid per-candidate filesystem round-trips.
-    let existing: std::collections::HashSet<std::ffi::OsString> = std::fs::read_dir(dir)
-        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name()).collect())
+    // Scan directory once (case-folded) to avoid per-candidate FS round-trips.
+    let existing: HashSet<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_lowercase())
+                .collect()
+        })
         .unwrap_or_default();
 
     let stem = Path::new(name)
@@ -1416,7 +1442,12 @@ fn dedup_name_in_dir(dir: &Path, name: &str) -> String {
             Some(e) => format!("{} ({}).{}", stem, i, e),
             None => format!("{} ({})", stem, i),
         };
-        if !existing.contains(std::ffi::OsStr::new(&new_name)) {
+        let folded = new_name.to_lowercase();
+        let folded_temp = format!("{folded}{temp_ext}");
+        if !existing.contains(&folded)
+            && !existing.contains(&folded_temp)
+            && !avoid.contains(&folded)
+        {
             return new_name;
         }
     }
@@ -1458,11 +1489,22 @@ fn dedup_name_in_dir(dir: &Path, name: &str) -> String {
 /// `reuse_top`:上一次(部分失败的)completion 通过哨兵(config
 /// `bt_completion_top_<task_id>`)记录的最终顶层名。重试时复用同名可让
 /// 降级链把剩余文件 merge 进同一 dst(文件级 rename 的 REPLACE_EXISTING
-/// 语义保证幂等),而不是 fresh dedup 撞名分裂出 `Name (1)/`。带类型
-/// 校验:哨兵名被外部占用为**不匹配的类型**(container 期望目录、单文件
-/// 期望文件)时放弃复用退回 fresh dedup——防御 Windows
-/// `rename(dir, existing_file)` 静默吞文件的实测行为。仅 container 与
-/// 单文件分支适用;flat 多文件分支的逐名 dedup 撞名为 v0 既有行为。
+/// 语义保证幂等),而不是 fresh dedup 撞名分裂出 `Name (1)/`。复用校验:
+/// - **container 分支**:哨兵名不存在或为**目录**时复用(目录可能是自身
+///   上次降级链的部分产物,merge 继续);被外部占用为文件时放弃复用退回
+///   fresh dedup——防御 Windows `rename(dir, existing_file)` 静默吞文件。
+/// - **单文件分支**:哨兵名**不存在才复用**。合法重试中 dst 通常不存在
+///   (move_file 的 copy 半成品失败即清理、成功则任务完成哨兵已删);
+///   dst 已存在时无法区分「他人产物(另一同名任务/外部文件)」与「自身
+///   半成品清理失败的残留」,复用会经 REPLACE 语义静默覆盖——前者是
+///   数据丢失(跨任务哨兵劫持),故一律 fresh dedup 换名:最坏遗留一个
+///   垃圾半成品孤儿,绝不覆盖可能属于他人的文件。
+///
+/// flat 多文件分支的逐名 dedup 撞名为 v0 既有行为。
+///
+/// `claimed`:其他任务经完成哨兵声明(但可能尚未落盘)的顶层名集合
+/// (小写折叠,同 save_dir)。所有 fresh dedup 都会避开这些名字,使
+/// 并发同名任务无法抢走一个已声明、正在重试中的名字。
 fn compute_completion_layout(
     save_dir: &Path,
     stage_dir: &Path,
@@ -1470,6 +1512,7 @@ fn compute_completion_layout(
     all_selected: bool,
     custom_name: &str,
     reuse_top: Option<&str>,
+    claimed: &HashSet<String>,
 ) -> Option<(Vec<(PathBuf, PathBuf)>, String)> {
     if selected_paths.is_empty() {
         return None;
@@ -1527,7 +1570,7 @@ fn compute_completion_layout(
         };
         let final_top = match reuse_top {
             Some(n) if !save_dir.join(n).exists() || save_dir.join(n).is_dir() => n.to_string(),
-            _ => dedup_name_in_dir(save_dir, desired),
+            _ => dedup_name_in_dir(save_dir, desired, claimed),
         };
         let src = stage_dir.join(top);
         let dst = save_dir.join(&final_top);
@@ -1548,8 +1591,10 @@ fn compute_completion_layout(
             custom_name
         };
         let final_name = match reuse_top {
-            Some(n) if !save_dir.join(n).exists() || save_dir.join(n).is_file() => n.to_string(),
-            _ => dedup_name_in_dir(save_dir, desired),
+            // 仅当哨兵名未被占用才复用;dst 已存在(无论类型)⟹ 非本任务
+            // 合法重试的残留,fresh dedup 换名,绝不 REPLACE 覆盖(见函数 doc)。
+            Some(n) if !save_dir.join(n).exists() => n.to_string(),
+            _ => dedup_name_in_dir(save_dir, desired, claimed),
         };
         let src = stage_dir.join(rel);
         let dst = save_dir.join(&final_name);
@@ -1559,6 +1604,8 @@ fn compute_completion_layout(
     // Per-file flat move: covers all-selected flat torrent + partial multi.
     // Dedup each basename against save_dir AND against names already chosen
     // in this batch so two staged files cannot collide on the same dst.
+    // `taken` 存小写折叠名:批内两个仅大小写不同的 basename(种子内合法)
+    // 在 Windows 上是同一 dst,精确比较会漏判并互相覆盖。
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut moves: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(selected_paths.len());
     let mut top_level: Option<String> = None;
@@ -1576,14 +1623,14 @@ fn compute_completion_layout(
             basename.as_str()
         };
         // First dedup against the on-disk contents of save_dir.
-        let mut candidate = dedup_name_in_dir(save_dir, candidate_seed);
+        let mut candidate = dedup_name_in_dir(save_dir, candidate_seed, claimed);
         // Then dedup against names already chosen in *this* batch.  Use a plain
         // numeric counter on the seed's stem/ext (`stem (n).ext`) rather than
         // prepending `_` to the whole candidate, which previously stacked
         // underscores (`_file (1).ext`, `__file (1).ext`, …) and corrupted the
         // base name.  This keeps the same `name (n).ext` style as
         // `dedup_name_in_dir` itself.
-        if taken.contains(&candidate) {
+        if taken.contains(&candidate.to_lowercase()) {
             let stem = Path::new(candidate_seed)
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -1599,8 +1646,8 @@ fn compute_completion_layout(
                     None => format!("{} ({})", stem, n),
                 };
                 // Reconcile against disk again so we never overwrite a real file.
-                let deduped = dedup_name_in_dir(save_dir, &numbered);
-                if !taken.contains(&deduped) {
+                let deduped = dedup_name_in_dir(save_dir, &numbered, claimed);
+                if !taken.contains(&deduped.to_lowercase()) {
                     candidate = deduped;
                     break;
                 }
@@ -1608,7 +1655,7 @@ fn compute_completion_layout(
             // 极端兜底:9999 个编号变体都被占用(需约 1 万个同 basename 文件挤入同一
             // 扁平目录)时,candidate 仍为已占用名,会导致 moves 出现重复目标 → 落盘时
             // 静默覆盖丢数据。此处用 UUID 后缀保证唯一,杜绝覆盖。
-            if taken.contains(&candidate) {
+            if taken.contains(&candidate.to_lowercase()) {
                 let uniq = uuid::Uuid::new_v4();
                 candidate = match ext {
                     Some(e) => format!("{} ({}).{}", stem, uniq, e),
@@ -1616,7 +1663,7 @@ fn compute_completion_layout(
                 };
             }
         }
-        taken.insert(candidate.clone());
+        taken.insert(candidate.to_lowercase());
         let src = stage_dir.join(rel);
         let dst = save_dir.join(&candidate);
         if top_level.is_none() {
@@ -1644,7 +1691,11 @@ fn compute_completion_layout(
 fn move_path(src: &Path, dst: &Path) -> std::io::Result<()> {
     if !src.is_dir() {
         let mut budget = RETRY_SLEEP_BUDGET;
-        return move_file(src, dst, &mut budget);
+        // 顶层文件 move 一律 noreplace(见 move_file doc):dedup 在完成锁内
+        // 保证 dst 空闲,此刻 dst 已被占只能是锁外写者(HTTP finalize/外部
+        // 程序)在 dedup 与 move 的间隙抢得——占位声明使本次 move 失败重试
+        // 换名,决不 REPLACE 覆盖对方产物。
+        return move_file(src, dst, &mut budget, false);
     }
     // 防御(实测:Windows `rename(dir, existing_file)` 会静默吞掉该文件):
     // dst 已存在且不是目录 → 不走目录 rename 快路径,直接报错让上层处理
@@ -1673,16 +1724,35 @@ const RETRY_SLEEP_BUDGET: u32 = 8;
 /// 瞬时锁重试的单次退避间隔(对齐 staging 清理重试先例)。
 const RETRY_DELAY: Duration = Duration::from_millis(250);
 
-/// 移动单个文件:rename(Windows = `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`,
-/// 覆盖已存在 dst,重试幂等)→ 对 ERROR_SHARING_VIOLATION(32)/
+/// 移动单个文件:rename → 对 ERROR_SHARING_VIOLATION(32)/
 /// ERROR_LOCK_VIOLATION(33) 在预算内退避重试(第三方独占句柄如 AV 扫描,
 /// Rust 默认 FULL-share 句柄不触发)→ copy 兜底。
+///
+/// `replace` 语义:
+/// - `true`(容器 merge 子文件,经 [`move_dir_recursive`]):rename 为
+///   Windows `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`,覆盖已存在 dst——
+///   重试幂等必需:上次尝试可能留下**截断的**半拷贝子文件,必须能盖写。
+///   dst 目录树属于本任务(哨兵复用校验 + create_dir_all 创建),无跨任务
+///   覆盖风险。
+/// - `false`(顶层文件 move):先以 `create_new(dst)` **原子占名**——两个
+///   写者(并发 HTTP finalize、另一 BT 完成)竞争同名时后到者得
+///   `AlreadyExists`,决不覆盖;成功后 rename/copy 覆盖的是**自己的**占位
+///   文件。占名失败向上传播,completion 标 ERROR,自动重试 fresh dedup
+///   换名,自愈。崩溃于占名与 rename 之间会遗留 0 字节占位孤儿(重试
+///   dedup 自动避开),属可接受的罕见崩溃残留。
 ///
 /// copy 成功但 remove_file(src) 失败(实测:share=READ 无 DELETE 的第三方
 /// 句柄允许读、不允许删)→ 返回 Ok:dst 已是完整副本,任务目标达成;src
 /// 残留在 staging 内由 staging 清理(带重试)与启动清理移除——绝不能因
 /// "伪失败"把整次 completion 标 ERROR 触发无谓的重验重下。
-fn move_file(src: &Path, dst: &Path, budget: &mut u32) -> std::io::Result<()> {
+fn move_file(src: &Path, dst: &Path, budget: &mut u32, replace: bool) -> std::io::Result<()> {
+    if !replace {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dst)
+            .map(drop)?;
+    }
     let mut last_err;
     loop {
         match std::fs::rename(src, dst) {
@@ -1736,7 +1806,7 @@ fn move_dir_recursive(src: &Path, dst: &Path, budget: &mut u32) -> std::io::Resu
         let child_dst = dst.join(entry.file_name());
         let result = match entry.file_type() {
             Ok(t) if t.is_dir() => move_dir_recursive(&entry.path(), &child_dst, budget),
-            Ok(_) => move_file(&entry.path(), &child_dst, budget),
+            Ok(_) => move_file(&entry.path(), &child_dst, budget, true),
             Err(e) => Err(e),
         };
         if let Err(e) = result
@@ -3194,6 +3264,30 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
                 // 锁内读写,与并发同名任务的完成序列全局串行化,无 TOCTOU。
                 let sentinel_key = format!("bt_completion_top_{}", task_id);
                 let reuse_top: Option<String> = db.get_config(&sentinel_key).await.ok().flatten();
+                // Claim-aware dedup:采集**其他**任务的活跃哨兵名(同
+                // save_dir,小写折叠)。这些名字已被声明但可能尚未在磁盘留下
+                // 足迹(对方首次 move 零足迹失败、等待重试中),fresh dedup 若
+                // 占用它们,对方重试复用哨兵时会 merge 进/覆盖本任务产物
+                // (跨任务哨兵劫持)。锁内读取,与哨兵写入全局串行,无 TOCTOU。
+                let claimed: HashSet<String> = {
+                    let mut set = HashSet::new();
+                    if let Ok(rows) = db.list_config_with_prefix("bt_completion_top_").await {
+                        for (key, value) in rows {
+                            let Some(tid) = key.strip_prefix("bt_completion_top_") else {
+                                continue;
+                            };
+                            if tid == task_id {
+                                continue;
+                            }
+                            if let Ok(Some(t)) = db.load_task_by_id(tid).await
+                                && t.save_dir == save_dir
+                            {
+                                set.insert(value.to_lowercase());
+                            }
+                        }
+                    }
+                    set
+                };
                 let layout = compute_completion_layout(
                     &save_path,
                     &stage_dir,
@@ -3201,6 +3295,7 @@ async fn bt_download_inner(p: BtInnerParams) -> Result<(), DownloadError> {
                     all_selected,
                     &custom_name,
                     reuse_top.as_deref(),
+                    &claimed,
                 );
                 match layout {
                     None => {
@@ -3620,6 +3715,7 @@ pub fn probe_torrent_meta(probe_id: String, torrent_bytes: Vec<u8>) -> TorrentMe
 #[cfg(test)]
 mod tests {
     use super::compute_bt_display_progress;
+    use std::collections::{HashMap, HashSet};
 
     // -------------------------------------------------------------------------
     // urlencoding_decode — literal multi-byte UTF-8 must not be mangled (F052).
@@ -3746,7 +3842,15 @@ mod tests {
             PathBuf::from("dirA/file.txt"),
             PathBuf::from("dirB/file.txt"),
         ];
-        let layout = super::compute_completion_layout(&tmp, &stage, &selected, false, "", None);
+        let layout = super::compute_completion_layout(
+            &tmp,
+            &stage,
+            &selected,
+            false,
+            "",
+            None,
+            &HashSet::new(),
+        );
         let _ = std::fs::remove_dir_all(&tmp);
 
         // Avoid `.unwrap()`/`.expect()` (denied by clippy) — match explicitly.
@@ -4263,7 +4367,10 @@ mod tests {
 
         let dst = base.join("moved.bin");
         let mut budget = super::RETRY_SLEEP_BUDGET;
-        let result = super::move_file(&src, &dst, &mut budget);
+        // replace=true(容器 merge 子文件语义):本测试判别 rename vs copy 用
+        // creation time,claim 占位(replace=false)会因 NTFS tunneling 污染
+        // 判别;瞬时锁重试逻辑与占名协议正交。
+        let result = super::move_file(&src, &dst, &mut budget, true);
         let _ = locker.join();
 
         assert!(result.is_ok(), "move_file failed: {result:?}");
@@ -4298,7 +4405,7 @@ mod tests {
 
         let dst = base.join("copied.bin");
         let mut budget = 0u32; // 预算清零:立即走 copy 兜底
-        let result = super::move_file(&src, &dst, &mut budget);
+        let result = super::move_file(&src, &dst, &mut budget, false);
         assert!(result.is_ok(), "copy-succeeded case must be Ok: {result:?}");
         assert_eq!(
             std::fs::metadata(&dst).map(|m| m.len()).unwrap_or(0),
@@ -4328,10 +4435,73 @@ mod tests {
         let dst = base.join("no_such_parent").join("data.bin");
 
         let mut budget = 0u32;
-        let result = super::move_file(&src, &dst, &mut budget);
+        let result = super::move_file(&src, &dst, &mut budget, false);
         assert!(result.is_err(), "must fail when dst parent missing");
         assert!(!dst.exists(), "no partial dst may remain");
         assert!(src.exists(), "src must stay intact for retry");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // -------------------------------------------------------------------------
+    // move_file — replace=false claim semantics + replace=true merge overwrite
+    // (atomic claim protocol closing the REPLACE rename TOCTOU window).
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn move_file_replace_false_dst_exists_fails_preserves_both() {
+        let base = unique_test_dir("claim_exists");
+        let _ = std::fs::create_dir_all(&base);
+        let src = base.join("src.bin");
+        let dst = base.join("dst.bin");
+        let _ = std::fs::write(&src, b"incoming");
+        let _ = std::fs::write(&dst, b"original");
+
+        let mut budget = 0u32;
+        let result = super::move_file(&src, &dst, &mut budget, false);
+        match result {
+            Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists),
+            Ok(()) => panic!("replace=false must not overwrite an occupied dst"),
+        }
+        assert_eq!(std::fs::read(&dst).unwrap_or_default(), b"original");
+        assert_eq!(std::fs::read(&src).unwrap_or_default(), b"incoming");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn move_file_replace_false_dst_free_succeeds() {
+        let base = unique_test_dir("claim_free");
+        let _ = std::fs::create_dir_all(&base);
+        let src = base.join("src.bin");
+        let dst = base.join("dst.bin");
+        let _ = std::fs::write(&src, b"payload");
+
+        let mut budget = 0u32;
+        let result = super::move_file(&src, &dst, &mut budget, false);
+        assert!(
+            result.is_ok(),
+            "replace=false must succeed on a free dst: {result:?}"
+        );
+        assert_eq!(std::fs::read(&dst).unwrap_or_default(), b"payload");
+        assert!(!src.exists(), "src must be gone after a successful move");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn move_file_replace_true_dst_exists_overwrites() {
+        let base = unique_test_dir("merge_overwrite");
+        let _ = std::fs::create_dir_all(&base);
+        let src = base.join("src.bin");
+        let dst = base.join("dst.bin");
+        let _ = std::fs::write(&src, b"new-content");
+        let _ = std::fs::write(&dst, b"stale");
+
+        let mut budget = 0u32;
+        let result = super::move_file(&src, &dst, &mut budget, true);
+        assert!(
+            result.is_ok(),
+            "replace=true must overwrite dst: {result:?}"
+        );
+        assert_eq!(std::fs::read(&dst).unwrap_or_default(), b"new-content");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -4360,7 +4530,7 @@ mod tests {
             save.to_string_lossy().into_owned(),
             "Torrent".to_string(),
         )];
-        let updates = super::rescue_stranded_staging_files(&input);
+        let updates = super::rescue_stranded_staging_files(&input, &HashMap::new());
 
         assert!(
             updates.is_empty(),
@@ -4401,8 +4571,15 @@ mod tests {
 
         // Case 1: dst 是目录(自身上次产物)→ 复用。
         let _ = std::fs::create_dir_all(save.join("Torrent"));
-        let layout =
-            super::compute_completion_layout(&save, &stage, &selected, true, "", Some("Torrent"));
+        let layout = super::compute_completion_layout(
+            &save,
+            &stage,
+            &selected,
+            true,
+            "",
+            Some("Torrent"),
+            &HashSet::new(),
+        );
         let (_, top) = match layout {
             Some(v) => v,
             None => panic!("layout should be Some"),
@@ -4412,8 +4589,15 @@ mod tests {
         // Case 2: dst 被外部占用为文件 → 放弃哨兵,fresh dedup。
         let _ = std::fs::remove_dir_all(save.join("Torrent"));
         let _ = std::fs::write(save.join("Torrent"), b"unrelated user file");
-        let layout =
-            super::compute_completion_layout(&save, &stage, &selected, true, "", Some("Torrent"));
+        let layout = super::compute_completion_layout(
+            &save,
+            &stage,
+            &selected,
+            true,
+            "",
+            Some("Torrent"),
+            &HashSet::new(),
+        );
         let (_, top) = match layout {
             Some(v) => v,
             None => panic!("layout should be Some"),
@@ -4424,7 +4608,15 @@ mod tests {
         );
 
         // Case 3: 无哨兵 → 既有 dedup 行为(名字避开已存在文件)。
-        let layout = super::compute_completion_layout(&save, &stage, &selected, true, "", None);
+        let layout = super::compute_completion_layout(
+            &save,
+            &stage,
+            &selected,
+            true,
+            "",
+            None,
+            &HashSet::new(),
+        );
         let (_, top) = match layout {
             Some(v) => v,
             None => panic!("layout should be Some"),
@@ -4450,7 +4642,7 @@ mod tests {
             save.to_string_lossy().into_owned(),
             "Torrent".to_string(),
         )];
-        let updates = super::rescue_stranded_staging_files(&input);
+        let updates = super::rescue_stranded_staging_files(&input, &HashMap::new());
 
         assert!(
             updates.is_empty(),
@@ -4530,5 +4722,209 @@ mod tests {
         // 被阻塞子项的数据保留在 src,可重试。
         assert!(src.join("blocked").join("inner.bin").exists());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// merge 语义幂等:dst 已存在子文件为旧/截断版本时必须被 src 版本覆盖,
+    /// 防止中断残留(截断文件)在重试合并后永久留存。
+    #[test]
+    fn move_dir_recursive_merge_overwrites_stale_child_file() {
+        let base = unique_test_dir("merge_stale_child");
+        let src = base.join("src");
+        let dst = base.join("dst");
+        let _ = std::fs::create_dir_all(&src);
+        let _ = std::fs::create_dir_all(&dst);
+        // src carries the fresh, complete content.
+        let _ = std::fs::write(src.join("a.bin"), b"fresh-full-content");
+        // dst already has a stale/truncated same-name file from a prior
+        // interrupted move — merge must overwrite it, not leave it stuck.
+        let _ = std::fs::write(dst.join("a.bin"), b"old");
+
+        let mut budget = 0u32;
+        let result = super::move_dir_recursive(&src, &dst, &mut budget);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            std::fs::read(dst.join("a.bin")).unwrap_or_default(),
+            b"fresh-full-content"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // -------------------------------------------------------------------------
+    // dedup_name_in_dir — case-folded disk scan, `.fdownloading` occupancy,
+    // and `avoid` set (BUG-BT-DEDUP-CASE-FOLD / cross-task claim guard).
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn dedup_name_in_dir_case_folds_existing_disk_entries() {
+        let dir = unique_test_dir("dedup_case_fold");
+        let _ = std::fs::create_dir_all(&dir);
+        // Exact-case entry forces the early-return probe to see a conflict
+        // on every platform (Linux's Path::exists() is case-sensitive).
+        let _ = std::fs::write(dir.join("MOVIE.mkv"), b"x");
+        // Differently-cased numbered variant already occupies " (1)".
+        let _ = std::fs::write(dir.join("Movie (1).mkv"), b"x");
+
+        let name = super::dedup_name_in_dir(&dir, "MOVIE.mkv", &HashSet::new());
+        assert_ne!(
+            name, "MOVIE (1).mkv",
+            "case-different existing 'Movie (1).mkv' must be treated as occupied"
+        );
+        assert_eq!(name, "MOVIE (2).mkv");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dedup_name_in_dir_fdownloading_temp_file_counts_as_occupied() {
+        let dir = unique_test_dir("dedup_temp_occupied");
+        let _ = std::fs::create_dir_all(&dir);
+        // Only the in-progress temp file exists; the final name does not.
+        let _ = std::fs::write(dir.join("movie.mkv.fdownloading"), b"partial");
+
+        let name = super::dedup_name_in_dir(&dir, "movie.mkv", &HashSet::new());
+        assert_eq!(name, "movie (1).mkv");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dedup_name_in_dir_avoid_set_blocks_name() {
+        let dir = unique_test_dir("dedup_avoid_set");
+        let _ = std::fs::create_dir_all(&dir);
+        // Nothing on disk, but another concurrent task has claimed the name.
+        let mut avoid = HashSet::new();
+        avoid.insert("movie.mkv".to_string());
+
+        let name = super::dedup_name_in_dir(&dir, "Movie.mkv", &avoid);
+        assert_eq!(name, "Movie (1).mkv");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -------------------------------------------------------------------------
+    // compute_completion_layout — single-file branch sentinel-reuse guard
+    // (BUG-BT-SENTINEL-HIJACK): an occupied dst must never be REPLACE-moved
+    // into just because it matches a stale/cross-task sentinel name.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn completion_layout_single_file_sentinel_rejects_occupied_dst() {
+        use std::path::PathBuf;
+        let save = unique_test_dir("single_sentinel_occupied");
+        let stage = save.join(".stage");
+        let _ = std::fs::create_dir_all(&save);
+        // 模拟另一同名任务已在 save_dir 落地同名产物。
+        let _ = std::fs::write(save.join("movie.mkv"), b"someone else's file");
+        let selected = vec![PathBuf::from("movie.mkv")];
+
+        let layout = super::compute_completion_layout(
+            &save,
+            &stage,
+            &selected,
+            false,
+            "",
+            Some("movie.mkv"),
+            &HashSet::new(),
+        );
+        let (_, top) = match layout {
+            Some(v) => v,
+            None => panic!("layout should be Some"),
+        };
+        assert_ne!(
+            top, "movie.mkv",
+            "occupied sentinel name must not be reused (would REPLACE the other task's file)"
+        );
+        assert_eq!(top, "movie (1).mkv");
+        let _ = std::fs::remove_dir_all(&save);
+    }
+
+    #[test]
+    fn completion_layout_single_file_sentinel_reused_when_absent() {
+        use std::path::PathBuf;
+        let save = unique_test_dir("single_sentinel_absent");
+        let stage = save.join(".stage");
+        let _ = std::fs::create_dir_all(&save);
+        let selected = vec![PathBuf::from("movie.mkv")];
+
+        let layout = super::compute_completion_layout(
+            &save,
+            &stage,
+            &selected,
+            false,
+            "",
+            Some("movie.mkv"),
+            &HashSet::new(),
+        );
+        let (_, top) = match layout {
+            Some(v) => v,
+            None => panic!("layout should be Some"),
+        };
+        assert_eq!(
+            top, "movie.mkv",
+            "legitimate retry with no on-disk conflict must reuse the sentinel name"
+        );
+        let _ = std::fs::remove_dir_all(&save);
+    }
+
+    #[test]
+    fn completion_layout_single_file_claimed_set_avoids_name() {
+        use std::path::PathBuf;
+        let save = unique_test_dir("single_claimed");
+        let stage = save.join(".stage");
+        let _ = std::fs::create_dir_all(&save);
+        let selected = vec![PathBuf::from("movie.mkv")];
+        let mut claimed = HashSet::new();
+        claimed.insert("movie.mkv".to_string());
+
+        let layout =
+            super::compute_completion_layout(&save, &stage, &selected, false, "", None, &claimed);
+        let (_, top) = match layout {
+            Some(v) => v,
+            None => panic!("layout should be Some"),
+        };
+        assert_eq!(
+            top, "movie (1).mkv",
+            "fresh dedup must avoid a name claimed by another concurrent task"
+        );
+        let _ = std::fs::remove_dir_all(&save);
+    }
+
+    // -------------------------------------------------------------------------
+    // rescue_stranded_staging_files — claims_by_dir avoidance: the recovery
+    // path is also subject to the cross-task sentinel-claim guard.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn rescue_stranded_staging_files_avoids_claimed_name() {
+        let save = unique_test_dir("rescue_claimed");
+        let _ = std::fs::create_dir_all(&save);
+        let task_id = "claimed-task-01";
+        let stage = super::bt_stage_dir(&save.to_string_lossy(), task_id);
+        let _ = std::fs::create_dir_all(&stage);
+        let _ = std::fs::write(stage.join("data.bin"), b"payload");
+
+        let save_dir_string = save.to_string_lossy().into_owned();
+        let input = vec![(
+            task_id.to_string(),
+            save_dir_string.clone(),
+            "data.bin".to_string(),
+        )];
+        let mut claimed = HashSet::new();
+        claimed.insert("data.bin".to_string());
+        let mut claims_by_dir = HashMap::new();
+        claims_by_dir.insert(save_dir_string, claimed);
+
+        let updates = super::rescue_stranded_staging_files(&input, &claims_by_dir);
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].0, task_id);
+        assert_ne!(
+            updates[0].1, "data.bin",
+            "claimed name must not be reused by rescue (cross-task hijack)"
+        );
+        assert_eq!(updates[0].1, "data (1).bin");
+        assert!(save.join("data (1).bin").exists());
+        assert!(
+            !stage.exists(),
+            "staging dir should be cleaned up after move"
+        );
+        let _ = std::fs::remove_dir_all(&save);
     }
 }

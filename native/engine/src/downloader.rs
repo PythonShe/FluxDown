@@ -1578,19 +1578,23 @@ pub(crate) fn decode_bytes_utf8_or_gbk(bytes: &[u8]) -> Result<String, String> {
 /// By consulting `reserved` — a snapshot taken **before** spawning, in the
 /// manager's synchronous section — each task can see which names its siblings
 /// have already claimed and avoid them.
+/// `avoid`:**小写折叠**的额外占用名(如 finalize 冲突时从 DB 采集的同目录
+/// 未完成任务 file_name)。与磁盘条目一并视为冲突,防止 finalize 换名撞上
+/// 兄弟任务「已预订但临时文件尚未落盘」的名字造成 DB 指针别名(两任务
+/// file_name 指向同一磁盘名,误删其一即毁对方产物)。
 pub async fn dedup_filename(
     dir: &Path,
     name: &str,
     reserved: &std::collections::HashSet<std::path::PathBuf>,
+    avoid: &std::collections::HashSet<String>,
 ) -> String {
-    use std::ffi::OsStr;
-
     // Phase 1: fast probe — most of the time there is no conflict.
     let candidate = dir.join(name);
     let temp_candidate = PathBuf::from(format!("{}{}", candidate.display(), TEMP_EXT));
     // Also check the in-flight reservation set BEFORE the async disk probes
     // so that two tasks starting simultaneously both see each other's claim.
     if !reserved.contains(&temp_candidate)
+        && !avoid.contains(&name.to_lowercase())
         && !tokio::fs::try_exists(&candidate).await.unwrap_or(false)
         && !tokio::fs::try_exists(&temp_candidate)
             .await
@@ -1601,11 +1605,16 @@ pub async fn dedup_filename(
 
     // Phase 2: conflict detected — scan directory into memory to avoid
     // up to 19998 filesystem calls in the dedup loop.
-    let existing = {
+    //
+    // 条目名**小写折叠**后入集:Windows/APFS 大小写不敏感,精确字节比较会
+    // 漏判 `MOVIE (1).mp4` vs 已存在的 `Movie (1).mp4`,finalize rename 的
+    // REPLACE 语义会静默覆盖真实文件。非 UTF-8 名经 lossy 转换,只可能把
+    // 不冲突误判为冲突(多让一个编号),决不会漏判。
+    let existing: std::collections::HashSet<String> = {
         let mut set = std::collections::HashSet::new();
         if let Ok(mut entries) = tokio::fs::read_dir(dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
-                set.insert(entry.file_name()); // OsString: handles non-UTF-8
+                set.insert(entry.file_name().to_string_lossy().to_lowercase());
             }
         }
         set
@@ -1625,20 +1634,51 @@ pub async fn dedup_filename(
         };
         let temp_name = format!("{}{}", new_name, TEMP_EXT);
         let temp_path = dir.join(&temp_name);
-        // Check both the final/in-progress disk files AND the in-flight set.
+        // Check the final/in-progress disk files, the in-flight set AND avoid.
         if !reserved.contains(&temp_path)
-            && !existing.contains(OsStr::new(&new_name))
-            && !existing.contains(OsStr::new(&temp_name))
+            && !avoid.contains(&new_name.to_lowercase())
+            && !existing.contains(&new_name.to_lowercase())
+            && !existing.contains(&temp_name.to_lowercase())
         {
             return new_name;
         }
     }
-    name.to_string()
+    // 极端兜底:1..=9999 个编号变体全被占用时,此前返回**原名不变**,finalize
+    // rename 会静默覆盖已存在文件丢数据。与 BT 侧 `dedup_name_in_dir` 对齐,
+    // 用 UUID 后缀保证唯一。(BUG-BT-DEDUP-FALLBACK-OVERWRITE 的 HTTP 同类)
+    let uniq = uuid::Uuid::new_v4();
+    match ext {
+        Some(e) => format!("{} ({}).{}", stem, uniq, e),
+        None => format!("{} ({})", stem, uniq),
+    }
 }
 
 /// Temporary file extension used during download (like Chrome's `.crdownload`).
 /// The file is renamed to the final name only after all data is verified.
 pub const TEMP_EXT: &str = ".fdownloading";
+
+/// 原子占名 + 落盘:`create_new(dst)` 独占创建 0 字节占位(两个写者竞争
+/// 同名时后到者得 `ErrorKind::AlreadyExists`,决不覆盖对方)→ rename 把
+/// `src` 盖到**自己的**占位上(此处 REPLACE 语义安全:占位归本调用所有)。
+/// rename 失败时清理占位再返回错误——残留占位会永久占住最终名。
+///
+/// 崩溃于占名与 rename 之间会遗留 0 字节占位孤儿:后续重试的 dedup 视其
+/// 为已占自动换名,属可接受的罕见崩溃残留。
+pub(crate) async fn claim_rename(src: &Path, dst: &Path) -> std::io::Result<()> {
+    tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dst)
+        .await
+        .map(drop)?;
+    match tokio::fs::rename(src, dst).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(dst).await;
+            Err(e)
+        }
+    }
+}
 
 /// Buffer size for `BufWriter` wrapping file I/O during downloads.
 /// 256 KB reduces the frequency of syscalls compared to the default 8 KB,
@@ -1664,7 +1704,7 @@ pub async fn run_download(params: DownloadParams) {
     let result = run_download_inner(&params).await;
 
     match result {
-        Ok(total) => {
+        Ok((total, finalize_renamed)) => {
             log_info!(
                 "[download] task {} completed, total={} bytes",
                 task_id_log,
@@ -1679,7 +1719,9 @@ pub async fn run_download(params: DownloadParams) {
                     total_bytes: total,
                     status: 3,
                     error_message: String::new(),
-                    file_name: String::new(),
+                    // finalize 阶段因目标名被占而改名时携带新名(reporter
+                    // 对非空 file_name 锁存);未改名传空串 = 保持原名。
+                    file_name: finalize_renamed.unwrap_or_default(),
                     segment_details: None,
                 })
                 .await;
@@ -1928,7 +1970,10 @@ async fn compute_segments_with_advisor(p: &DownloadParams, info: &FileInfo) -> i
     result
 }
 
-async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
+/// 返回 `(actual_total, finalize_renamed)`:`finalize_renamed` 仅当 finalize
+/// 阶段因目标名被占用而改名时为 `Some(新名)`,调用方须经完成信号上报
+/// (progress_reporter 对非空 file_name 锁存,空串 = 不变)。
+async fn run_download_inner(p: &DownloadParams) -> Result<(i64, Option<String>), DownloadError> {
     log_info!("[download] task {} starting, url={}", p.task_id, p.url);
 
     // Transition to status=5 (preparing) — probing server, resolving file info
@@ -2599,27 +2644,99 @@ async fn run_download_inner(p: &DownloadParams) -> Result<i64, DownloadError> {
         })?;
     }
 
-    // All data verified — rename temp file to final destination.
+    // All data verified — move the temp file to its final destination.
     // This is the atomic moment the file "appears" as complete.
-    tokio::fs::rename(&temp_path, &dest_path)
-        .await
-        .map_err(|e| {
-            DownloadError::Other(format!(
-                "failed to rename {} → {}: {}",
-                temp_path.display(),
-                dest_path.display(),
+    //
+    // 完成终验 + 原子占名:dest 可能在下载期间被占用——manager 的启动期
+    // 名字预订对 BT 完成移动不可见(预订落盘为 `.fdownloading` 之前有秒级
+    // 空档),同名 BT 任务此间完成即占走该名;用户/外部程序也可能放入同名
+    // 文件。Windows 的 rename = MOVEFILE_REPLACE_EXISTING 会静默覆盖对方
+    // 产物,且「先 exists 后 rename」存在 TOCTOU——改用 [`claim_rename`]
+    // 的 `create_new` 原子占名,占名失败(AlreadyExists)则重新 dedup 换名
+    // 重试;换名候选同时避开 DB 里同目录未完成任务已登记的 file_name
+    // (兄弟任务预订名),防 DB 指针别名。
+    let mut chosen = actual_name.clone();
+    let mut avoid: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut avoid_loaded = false;
+    let mut attempt = 0u32;
+    loop {
+        let dst = save_dir.join(&chosen);
+        match claim_rename(&temp_path, &dst).await {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempt += 1;
+                // 5 次足够越过任何现实的并发突发;仍失败说明目录状态异常
+                // (如 dedup 结果被外部持续抢占),报错保留 temp 供重试。
+                if attempt > 5 {
+                    return Err(DownloadError::Other(format!(
+                        "failed to claim a destination name for {} after {} attempts \
+                         (directory keeps racing us)",
+                        dest_path.display(),
+                        attempt
+                    )));
+                }
+                if !avoid_loaded {
+                    avoid_loaded = true;
+                    if let Ok(names) =
+                        p.db.list_active_sibling_file_names(&p.save_dir, &p.task_id)
+                            .await
+                    {
+                        avoid = names.into_iter().map(|n| n.to_lowercase()).collect();
+                    }
+                }
+                log_info!(
+                    "[download] task {} destination '{}' is taken; re-deduping",
+                    p.task_id,
+                    dst.display()
+                );
+                chosen = dedup_filename(
+                    &save_dir,
+                    &actual_name,
+                    &std::collections::HashSet::new(),
+                    &avoid,
+                )
+                .await;
+            }
+            Err(e) => {
+                return Err(DownloadError::Other(format!(
+                    "failed to rename {} → {}: {}",
+                    temp_path.display(),
+                    save_dir.join(&chosen).display(),
+                    e
+                )));
+            }
+        }
+    }
+    let finalize_renamed = if chosen == actual_name {
+        None
+    } else {
+        Some(chosen.clone())
+    };
+    let final_dest = save_dir.join(&chosen);
+    if let Some(name) = &finalize_renamed {
+        // rename 成功后落库(对齐 BT 完成路径:先落盘、后更新指针)。落库
+        // 失败仅记日志——信号仍会携带新名,UI 与磁盘一致,DB 待下次修正。
+        if let Err(e) =
+            p.db.update_task_file_info(&p.task_id, name, actual_total)
+                .await
+        {
+            log_info!(
+                "[download] task {} failed to persist finalize rename '{}': {}",
+                p.task_id,
+                name,
                 e
-            ))
-        })?;
+            );
+        }
+    }
 
     log_info!(
         "[download] task {} renamed {} → {}",
         p.task_id,
         temp_path.display(),
-        dest_path.display()
+        final_dest.display()
     );
 
-    Ok(actual_total)
+    Ok((actual_total, finalize_renamed))
 }
 
 // ---------------------------------------------------------------------------
@@ -3485,7 +3602,13 @@ mod tests {
         let _ = tokio::fs::remove_file(dir.join("test.txt")).await;
         let _ = tokio::fs::remove_file(dir.join(format!("test.txt{TEMP_EXT}"))).await;
 
-        let result = dedup_filename(&dir, "test.txt", &std::collections::HashSet::new()).await;
+        let result = dedup_filename(
+            &dir,
+            "test.txt",
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .await;
         assert_eq!(result, "test.txt");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -3500,10 +3623,50 @@ mod tests {
             .await
             .unwrap_or(());
 
-        let result = dedup_filename(&dir, "test.txt", &std::collections::HashSet::new()).await;
+        let result = dedup_filename(
+            &dir,
+            "test.txt",
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .await;
         assert_eq!(result, "test (1).txt");
 
         // Clean up
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn dedup_filename_case_folds_across_disk_variants() {
+        let dir = std::env::temp_dir().join("fluxdown_test_dedup_case_fold");
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        // Exact-case entry forces Phase 1's `try_exists()` probe to see a
+        // conflict on every platform (Linux's exists() is case-sensitive,
+        // unlike Windows/APFS where a bare `Test.txt` would already do it).
+        tokio::fs::write(dir.join("TEST.txt"), b"")
+            .await
+            .unwrap_or(());
+        tokio::fs::write(dir.join("Test.txt"), b"")
+            .await
+            .unwrap_or(());
+        // Differently-cased numbered variant already occupies " (1)".
+        tokio::fs::write(dir.join("Test (1).txt"), b"")
+            .await
+            .unwrap_or(());
+
+        let result = dedup_filename(
+            &dir,
+            "TEST.txt",
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .await;
+        assert_ne!(
+            result, "TEST (1).txt",
+            "case-different existing 'Test (1).txt' must be treated as occupied"
+        );
+        assert_eq!(result, "TEST (2).txt");
+
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
@@ -3516,7 +3679,13 @@ mod tests {
             .await
             .unwrap_or(());
 
-        let result = dedup_filename(&dir, "test.txt", &std::collections::HashSet::new()).await;
+        let result = dedup_filename(
+            &dir,
+            "test.txt",
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .await;
         assert_eq!(result, "test (1).txt");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -3530,7 +3699,13 @@ mod tests {
             .await
             .unwrap_or(());
 
-        let result = dedup_filename(&dir, "README", &std::collections::HashSet::new()).await;
+        let result = dedup_filename(
+            &dir,
+            "README",
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )
+        .await;
         assert_eq!(result, "README (1)");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -3551,7 +3726,13 @@ mod tests {
         reserved.insert(reserved_temp.clone());
 
         // Should NOT return "video.mp4" because its .fdownloading path is reserved.
-        let result = dedup_filename(&dir, "video.mp4", &reserved).await;
+        let result = dedup_filename(
+            &dir,
+            "video.mp4",
+            &reserved,
+            &std::collections::HashSet::new(),
+        )
+        .await;
         assert_eq!(result, "video (1).mp4");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -3571,7 +3752,13 @@ mod tests {
 
         // "video.mp4" conflicts (on disk), "video (1).mp4" conflicts (reserved),
         // so should fall through to "video (2).mp4".
-        let result = dedup_filename(&dir, "video.mp4", &reserved).await;
+        let result = dedup_filename(
+            &dir,
+            "video.mp4",
+            &reserved,
+            &std::collections::HashSet::new(),
+        )
+        .await;
         assert_eq!(result, "video (2).mp4");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -3604,7 +3791,13 @@ mod tests {
         let mut reserved = std::collections::HashSet::new();
         reserved.insert(dir.join(format!("sibling.bin{TEMP_EXT}")));
 
-        let result = dedup_filename(&dir, "setup.exe", &reserved).await;
+        let result = dedup_filename(
+            &dir,
+            "setup.exe",
+            &reserved,
+            &std::collections::HashSet::new(),
+        )
+        .await;
         assert_eq!(
             result, "setup.exe",
             "reserved 集合不含本任务名时，dedup 必须返回原名（PR #296 回归 bug）"
@@ -4099,5 +4292,71 @@ mod tests {
         // （run_download 中 auto_name.is_empty() 检查会提前返回错误）。
         // 让此处返回 false 才能让 HTML 安全网在边界 case 下仍能触发。
         assert!(!super::filename_looks_like_html(""));
+    }
+
+    // -------------------------------------------------------------------------
+    // claim_rename — atomic occupy-then-rename protocol closes the REPLACE
+    // rename TOCTOU overwrite window between finalize competitors.
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn claim_rename_succeeds_when_dst_free() {
+        let dir = std::env::temp_dir().join("fluxdown_test_claim_rename_free");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        let _ = tokio::fs::write(&src, b"payload").await;
+
+        let result = super::claim_rename(&src, &dst).await;
+        assert!(
+            result.is_ok(),
+            "claim_rename must succeed on a free dst: {result:?}"
+        );
+        assert_eq!(tokio::fs::read(&dst).await.unwrap_or_default(), b"payload");
+        assert!(!src.exists(), "src must be gone after a successful rename");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn claim_rename_fails_when_dst_exists_preserves_both() {
+        let dir = std::env::temp_dir().join("fluxdown_test_claim_rename_exists");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        let _ = tokio::fs::write(&src, b"incoming").await;
+        let _ = tokio::fs::write(&dst, b"original").await;
+
+        let result = super::claim_rename(&src, &dst).await;
+        match result {
+            Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists),
+            Ok(()) => panic!("claim_rename must not silently overwrite an occupied dst"),
+        }
+        // dst must be untouched — this is the TOCTOU window the protocol closes.
+        assert_eq!(tokio::fs::read(&dst).await.unwrap_or_default(), b"original");
+        // src must survive intact for the caller's dedup-and-retry path.
+        assert_eq!(tokio::fs::read(&src).await.unwrap_or_default(), b"incoming");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn dedup_filename_avoid_param_case_folds_and_renames() {
+        let dir = std::env::temp_dir().join("fluxdown_test_dedup_avoid_case_fold");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        // Empty directory, no reserved entries — only `avoid` forces a rename,
+        // and the match must hold across case folding (lower-cased entry vs
+        // mixed-case name).
+        let mut avoid = std::collections::HashSet::new();
+        avoid.insert("movie.mkv".to_string());
+
+        let result =
+            dedup_filename(&dir, "Movie.mkv", &std::collections::HashSet::new(), &avoid).await;
+        assert_eq!(result, "Movie (1).mkv");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

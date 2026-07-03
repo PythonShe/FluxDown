@@ -258,8 +258,6 @@ fn dedup_filename_sync(
     name: &str,
     reserved: &HashSet<std::path::PathBuf>,
 ) -> String {
-    use std::ffi::OsStr;
-
     let temp_ext = downloader::TEMP_EXT;
 
     // Phase 1: fast probe.
@@ -270,8 +268,17 @@ fn dedup_filename_sync(
     }
 
     // Phase 2: conflict — scan directory once into a set.
-    let existing: HashSet<std::ffi::OsString> = std::fs::read_dir(dir)
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.file_name())).collect())
+    // 条目名小写折叠:Windows/APFS 大小写不敏感,精确比较会漏判仅大小写
+    // 不同的编号变体,finalize rename 的 REPLACE 语义会静默覆盖真实文件
+    // (同 `downloader::dedup_filename`)。
+    let existing: HashSet<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| {
+                e.ok()
+                    .map(|e| e.file_name().to_string_lossy().to_lowercase())
+            })
+            .collect()
+        })
         .unwrap_or_default();
 
     let stem = std::path::Path::new(name)
@@ -291,13 +298,19 @@ fn dedup_filename_sync(
         let temp_name = format!("{}{}", new_name, temp_ext);
         let temp_path = dir.join(&temp_name);
         if !reserved.contains(&temp_path)
-            && !existing.contains(OsStr::new(&new_name))
-            && !existing.contains(OsStr::new(&temp_name))
+            && !existing.contains(&new_name.to_lowercase())
+            && !existing.contains(&temp_name.to_lowercase())
         {
             return new_name;
         }
     }
-    name.to_string()
+    // 极端兜底:编号变体全被占用时返回原名会导致落盘覆盖,用 UUID 后缀
+    // 保证唯一(对齐 `downloader::dedup_filename` / BT `dedup_name_in_dir`)。
+    let uniq = uuid::Uuid::new_v4();
+    match ext {
+        Some(e) => format!("{} ({}).{}", stem, uniq, e),
+        None => format!("{} ({})", stem, uniq),
+    }
 }
 
 /// Notification sent from a spawned download task when it finishes.
@@ -1240,8 +1253,32 @@ impl DownloadManager {
                 .collect();
 
             if !rescue_input.is_empty() {
+                // 采集**未完成**任务的活跃完成哨兵(bt_completion_top_*),
+                // 按 save_dir 归组(小写折叠)。errored mid-completion 的任务
+                // 重启恢复后会带哨兵重试完成移动,rescue 的 dedup 必须避开这
+                // 些已声明的名字,否则对方重试复用哨兵会 merge/覆盖进 rescue
+                // 出的产物(跨任务哨兵劫持)。status==3 任务的哨兵已在完成
+                // 路径删除,残留即孤儿,无需排除——其名字已落盘,磁盘 dedup
+                // 自然避开。
+                let mut rescue_claims: std::collections::HashMap<
+                    String,
+                    std::collections::HashSet<String>,
+                > = std::collections::HashMap::new();
+                if let Ok(rows) = self.db.list_config_with_prefix("bt_completion_top_").await {
+                    for (key, value) in rows {
+                        let Some(tid) = key.strip_prefix("bt_completion_top_") else {
+                            continue;
+                        };
+                        if let Some((_, save_dir, _, _)) = task_map.get(tid) {
+                            rescue_claims
+                                .entry((*save_dir).to_string())
+                                .or_default()
+                                .insert(value.to_lowercase());
+                        }
+                    }
+                }
                 let rescued = tokio::task::spawn_blocking(move || {
-                    bt_downloader::rescue_stranded_staging_files(&rescue_input)
+                    bt_downloader::rescue_stranded_staging_files(&rescue_input, &rescue_claims)
                 })
                 .await
                 .unwrap_or_default();

@@ -1401,8 +1401,13 @@ async fn remux_ts_to_mp4(ts_path: &std::path::Path, task_id: &str) -> Option<Pat
     }
     let stem = ts_path.file_stem().and_then(|s| s.to_str())?;
     let desired_name = format!("{}.mp4", stem);
-    let unique_name =
-        dedup_filename(parent, &desired_name, &std::collections::HashSet::new()).await;
+    let unique_name = dedup_filename(
+        parent,
+        &desired_name,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    )
+    .await;
     let mp4_path = parent.join(&unique_name);
 
     let ts_owned = ts_path.to_owned();
@@ -1416,14 +1421,24 @@ async fn remux_ts_to_mp4(ts_path: &std::path::Path, task_id: &str) -> Option<Pat
         drop(ts_data);
         std::fs::write(&mp4_tmp_inner, &mp4_data)?;
         drop(mp4_data);
-        if mp4_owned.exists() {
+        // 原子占名(同 `downloader::claim_rename` 协议,此处在阻塞线程内走
+        // 同步 API):create_new 独占创建占位——dedup 与落盘之间若有并发
+        // 写者(同名 HTTP/BT 任务完成)抢得该名,后到者得 AlreadyExists,
+        // 决不覆盖;rename 覆盖的是自己的占位。失败清理占位与 tmp。
+        if let Err(e) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&mp4_owned)
+            .map(drop)
+        {
             let _ = std::fs::remove_file(&mp4_tmp_inner);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "mp4 target appeared after dedup",
-            ));
+            return Err(e);
         }
-        std::fs::rename(&mp4_tmp_inner, &mp4_owned)?;
+        if let Err(e) = std::fs::rename(&mp4_tmp_inner, &mp4_owned) {
+            let _ = std::fs::remove_file(&mp4_owned);
+            let _ = std::fs::remove_file(&mp4_tmp_inner);
+            return Err(e);
+        }
         Ok(())
     })
     .await

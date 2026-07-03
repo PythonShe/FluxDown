@@ -920,6 +920,57 @@ impl Db {
         Ok(())
     }
 
+    /// List all config rows whose key starts with `prefix` (literal match).
+    ///
+    /// `prefix` 中的 LIKE 通配符(`%` / `_` / `\`)会被转义,保证按字面前缀
+    /// 匹配。用于枚举任务级哨兵行(如 `bt_completion_top_<task_id>`——BT 完成
+    /// 移动的 claim-aware dedup 需要看到其他任务已声明的顶层名)。
+    pub async fn list_config_with_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, String)>, DbError> {
+        let escaped = prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let rows = sqlx::query("SELECT key, value FROM config WHERE key LIKE $1 ESCAPE '\\'")
+            .bind(format!("{escaped}%"))
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            out.push((row.try_get("key")?, row.try_get("value")?));
+        }
+        Ok(out)
+    }
+
+    /// 同一 `save_dir` 下其他**未完成**任务已登记的 `file_name` 列表。
+    ///
+    /// HTTP finalize 占名冲突时用作 dedup 避让集:兄弟任务在启动期已把
+    /// dedup 后的最终名落库,但其 `.fdownloading` 临时文件可能尚未创建,
+    /// 仅凭磁盘探测会把该名误判为空闲,造成两条任务 `file_name` 指向同一
+    /// 磁盘名(误删其一即毁对方产物)。已完成任务(status=3)无需列出——
+    /// 其产物在磁盘上,dedup 的磁盘探测自然避开。
+    pub async fn list_active_sibling_file_names(
+        &self,
+        save_dir: &str,
+        exclude_task_id: &str,
+    ) -> Result<Vec<String>, DbError> {
+        let rows = sqlx::query(
+            "SELECT file_name FROM tasks
+             WHERE save_dir = $1 AND id <> $2 AND status <> 3 AND file_name <> ''",
+        )
+        .bind(save_dir)
+        .bind(exclude_task_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            out.push(row.try_get("file_name")?);
+        }
+        Ok(out)
+    }
+
     /// Load all config entries as a HashMap.
     pub async fn get_all_config(&self) -> Result<HashMap<String, String>, DbError> {
         let rows = sqlx::query("SELECT key, value FROM config")
