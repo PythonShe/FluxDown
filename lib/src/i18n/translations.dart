@@ -418,6 +418,11 @@ class S {
     '桌面常驻置顶小球，显示下载速度与进度，支持拖拽链接/种子快速建任务',
     'Always-on-top desktop widget showing speed & progress; drag URLs or torrents onto it to create tasks',
   );
+  String get floatingBallActiveOnly => _t('仅下载时显示', 'Show Only While Downloading');
+  String get floatingBallActiveOnlyDesc => _t(
+    '仅在有下载任务进行时显示悬浮球，其余时候自动隐藏',
+    'Show the floating ball only when downloads are active; hide it otherwise',
+  );
   String get floatingBallWaylandUnsupported => _t(
     '当前桌面环境（Wayland）不支持悬浮窗定位与置顶，悬浮球不可用。已启用替代方案：托盘显示实时速度；复制链接后唤起主窗口会自动填入下载对话框。本地文件（含 .torrent）请从主窗口添加或双击文件。',
     'Your desktop session (Wayland) does not allow positioned always-on-top windows, so the floating ball is unavailable. Alternatives enabled: the tray shows live speed, and copied URLs are auto-filled into the download dialog when you open the main window. Add local files (incl. .torrent) from the main window or by double-clicking them.',

@@ -55,6 +55,9 @@ class FloatingBallService {
   bool _transitioning = false; // 在途锁（防快速反复切换交叠）
   LinuxBallCapability _linuxCapability = LinuxBallCapability.unknown;
 
+  // 原生窗口当前可见性（仅下 activeOnly 模式下有意义；避免重复 show/hide 调用）。
+  bool _nativeVisible = false;
+
   // 唤醒检测（S0.5：墙钟跳变 >30s = 唤醒）
   Timer? _heartbeat;
   DateTime _lastBeat = DateTime.now();
@@ -130,7 +133,11 @@ class FloatingBallService {
       // 2. 读坐标（哨兵 -1 → 默认停靠）→ 校验
       final (x, y) = _resolvePosition();
 
-      // 3. 创建窗口
+      // 3. 目标可见性：activeOnly 且当前无活跃任务 → 建资源但不显示（避免闪烁）
+      final wantVisible =
+          !_activeOnly || (_controller?.state.isActive ?? false);
+
+      // 4. 创建窗口
       if (Platform.isWindows) {
         final win = Win32BallWindow.instance
           ..onClicked = _onBallClicked
@@ -138,10 +145,10 @@ class FloatingBallService {
           ..onContextMenu = _onBallContextMenu
           ..onDpiChanged = (_) => _rerenderAll();
         win.create(x: x, y: y);
-        await _renderAndPush();
-        win.show();
-        // 4. C++ 侧注册 IDropTarget（S1.2）。失败仅降级（球保留展示/
-        // 点击/拖动，仅拖放不可用）—— 不拆整球。
+        await _renderAndPush(); // 未 show 也先备好位图，show 瞬间无空白帧
+        if (wantVisible) win.show();
+        // 5. C++ 侧注册 IDropTarget（S1.2）。失败仅降级（球保留展示/
+        // 点击/拖动，仅拖放不可用）—— 不拆整球。隐藏态注册无害（显示后即可用）。
         try {
           await _channel.invokeMethod('registerDropTarget', {
             'hwnd': Win32BallWindow.instance.hwnd,
@@ -150,14 +157,18 @@ class FloatingBallService {
           logError(_tag, 'registerDropTarget failed (drop disabled)', e);
         }
       } else {
-        await _channel.invokeMethod('showBall', {
-          'x': x.toDouble(),
-          'y': y.toDouble(),
-        });
-        await _renderAndPush();
+        // 非 Windows：showBall 兼建窗+显示；隐藏态整体跳过，re-show 时再建。
+        if (wantVisible) {
+          await _channel.invokeMethod('showBall', {
+            'x': x.toDouble(),
+            'y': y.toDouble(),
+          });
+          await _renderAndPush();
+        }
       }
+      _nativeVisible = wantVisible;
 
-      // 5. 心跳（唤醒检测）
+      // 6. 心跳（唤醒检测）
       _startHeartbeat();
 
       _enabled = true;
@@ -215,6 +226,7 @@ class FloatingBallService {
         }),
       );
     }
+    _nativeVisible = false;
     _enabled = false;
   }
 
@@ -235,10 +247,68 @@ class FloatingBallService {
   // ===========================================================================
   // 渲染管线
   // ===========================================================================
-
   void _onDataChanged() {
     if (!_enabled) return;
+    _applyActiveOnlyVisibility();
+    if (!_nativeVisible) return; // 隐藏态无需渲染
     unawaited(_renderAndPush());
+  }
+
+  /// 是否处于「仅下载时显示」模式。
+  bool get _activeOnly => _effectiveSettings?.floatingBallActiveOnly ?? false;
+
+  /// 依据 activeOnly 设置与当前活跃态，决定原生窗口显隐（幂等）。
+  ///
+  /// 关闭 activeOnly → 始终显示；开启 → 有活跃任务才显示。
+  void _applyActiveOnlyVisibility() {
+    if (!_enabled) return;
+    final shouldShow = !_activeOnly || (_controller?.state.isActive ?? false);
+    if (shouldShow == _nativeVisible) return;
+    if (shouldShow) {
+      _showNative();
+    } else {
+      _hideNative();
+    }
+  }
+
+  /// 设置页切换 activeOnly 后重新评估可见性（隐藏→显示时补一帧渲染）。
+  void refreshVisibility() {
+    if (!_enabled) return;
+    final wasVisible = _nativeVisible;
+    _applyActiveOnlyVisibility();
+    if (_nativeVisible && !wasVisible) unawaited(_renderAndPush());
+  }
+
+  void _showNative() {
+    if (Platform.isWindows) {
+      Win32BallWindow.instance.show();
+    } else {
+      final (x, y) = _resolvePosition();
+      unawaited(
+        _channel.invokeMethod('showBall', {
+          'x': x.toDouble(),
+          'y': y.toDouble(),
+        }).catchError((Object e) {
+          logError(_tag, 'showBall failed', e);
+          return null;
+        }),
+      );
+    }
+    _nativeVisible = true;
+  }
+
+  void _hideNative() {
+    if (Platform.isWindows) {
+      Win32BallWindow.instance.hide();
+    } else {
+      unawaited(
+        _channel.invokeMethod('hideBall').catchError((Object e) {
+          logError(_tag, 'hideBall failed', e);
+          return null;
+        }),
+      );
+    }
+    _nativeVisible = false;
   }
 
   /// 应用图标切换（设置-外观）→ 重载球心 logo 并整体重绘
@@ -619,6 +689,7 @@ class FloatingBallService {
       );
       Win32BallWindow.instance.moveTo(x, y);
     }
+    if (!_nativeVisible) return; // 隐藏态（activeOnly idle）无需重绘
     unawaited(_rerenderAll());
   }
 }

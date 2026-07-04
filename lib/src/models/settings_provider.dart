@@ -34,6 +34,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _floatingBallEnabled = false; // 默认关闭（与 closeToTray 保守默认一致）
   double _floatingBallX = -1; // 绝对像素坐标；-1 哨兵 = 未设置（用默认停靠）
   double _floatingBallY = -1;
+  bool _floatingBallActiveOnly = false; // 仅下载时显示，其余隐藏（默认关=常显）
   bool _clipboardWatchEnabled = false; // 仅 Linux Wayland 降级分支展示
 
   // 侧边栏区块显示设置
@@ -189,6 +190,7 @@ class SettingsProvider extends ChangeNotifier {
   bool get floatingBallEnabled => _floatingBallEnabled;
   double get floatingBallX => _floatingBallX;
   double get floatingBallY => _floatingBallY;
+  bool get floatingBallActiveOnly => _floatingBallActiveOnly;
   bool get clipboardWatchEnabled => _clipboardWatchEnabled;
 
   // 侧边栏显示 Getters
@@ -409,6 +411,13 @@ class SettingsProvider extends ChangeNotifier {
     _floatingBallEnabled = value;
     notifyListeners();
     _saveToRust('floating_ball_enabled', value.toString());
+  }
+
+  void setFloatingBallActiveOnly(bool value) {
+    if (_floatingBallActiveOnly == value) return;
+    _floatingBallActiveOnly = value;
+    notifyListeners();
+    _saveToRust('floating_ball_active_only', value.toString());
   }
 
   /// 保存悬浮球坐标（绝对像素）。拖动结束时调用，不触发 UI 重建。
@@ -1108,6 +1117,8 @@ class SettingsProvider extends ChangeNotifier {
           _floatingBallX = double.tryParse(entry.value) ?? -1;
         case 'floating_ball_y':
           _floatingBallY = double.tryParse(entry.value) ?? -1;
+        case 'floating_ball_active_only':
+          _floatingBallActiveOnly = entry.value == 'true'; // 默认 false
         case 'clipboard_watch_enabled':
           _clipboardWatchEnabled = entry.value == 'true'; // 默认 false
         case 'log_max_size_mb':

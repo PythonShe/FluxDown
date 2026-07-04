@@ -1248,6 +1248,22 @@ class _GeneralContent extends StatelessWidget {
                 onChanged: (v) => FloatingBallService.instance.setEnabled(v),
               ),
             ),
+            if (settingsProvider.floatingBallEnabled &&
+                !FloatingBallService.instance.isDegraded) ...[
+              const SizedBox(height: 10),
+              _SettingCard(
+                label: LocaleScope.of(context).floatingBallActiveOnly,
+                description:
+                    LocaleScope.of(context).floatingBallActiveOnlyDesc,
+                child: ShadSwitch(
+                  value: settingsProvider.floatingBallActiveOnly,
+                  onChanged: (v) {
+                    settingsProvider.setFloatingBallActiveOnly(v);
+                    FloatingBallService.instance.refreshVisibility();
+                  },
+                ),
+              ),
+            ],
             if (Platform.isLinux &&
                 FloatingBallService.instance.isDegraded) ...[
               const SizedBox(height: 10),
