@@ -77,20 +77,20 @@ export function SetSelect({
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content
           position="popper"
-          sideOffset={4}
-          className="z-50 overflow-hidden rounded-lg border border-line bg-surface"
+          sideOffset={6}
+          className="select-pop"
           style={{ minWidth: 'var(--radix-select-trigger-width)', boxShadow: 'var(--shadow)' }}
         >
-          <SelectPrimitive.Viewport className="p-1">
+          <SelectPrimitive.Viewport>
             {options.map((o) => (
               <SelectPrimitive.Item
                 key={o.value}
                 value={o.value}
-                className="relative flex h-8 cursor-pointer items-center rounded-md px-2 pr-7 text-[13px] text-text outline-none select-none data-[highlighted]:bg-[var(--hover)]"
+                className="select-item"
               >
                 <SelectPrimitive.ItemText>{o.label}</SelectPrimitive.ItemText>
-                <SelectPrimitive.ItemIndicator className="absolute right-2 inline-flex items-center">
-                  <Check className="h-3.5 w-3.5 text-accent" />
+                <SelectPrimitive.ItemIndicator className="select-item-check">
+                  <Check className="h-3.5 w-3.5" />
                 </SelectPrimitive.ItemIndicator>
               </SelectPrimitive.Item>
             ))}

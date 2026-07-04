@@ -111,9 +111,37 @@ svg { display: block; }
   height: 34px; padding: 0 11px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--surface);
   font-size: 13px; cursor: pointer; color: var(--text);
+  transition: border-color .15s, box-shadow .15s, background .15s;
 }
-.select svg { width: 14px; height: 14px; color: var(--text3); }
-.select:hover { background: var(--hover); }
+.select svg { width: 14px; height: 14px; color: var(--text3); transition: transform .18s ease; }
+.select:hover { border-color: var(--text3); }
+.select[data-state="open"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
+.select[data-state="open"] svg { transform: rotate(180deg); color: var(--accent); }
+
+/* Radix Select 下拉浮层 */
+.select-pop {
+  z-index: 50; overflow: hidden;
+  min-width: var(--radix-select-trigger-width);
+  padding: 5px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--surface);
+  box-shadow: var(--shadow);
+  transform-origin: var(--radix-select-content-transform-origin);
+  animation: selectPop .14s cubic-bezier(.2,.9,.3,1);
+}
+@keyframes selectPop {
+  from { opacity: 0; transform: translateY(-4px) scale(.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.select-item {
+  position: relative; display: flex; align-items: center;
+  height: 32px; padding: 0 30px 0 10px; border-radius: 8px;
+  font-size: 13px; color: var(--text); cursor: pointer; outline: none;
+  user-select: none; transition: background .12s, color .12s;
+}
+.select-item[data-highlighted] { background: var(--hover); }
+.select-item[data-state="checked"] { background: var(--accent-weak); color: var(--accent); font-weight: 500; }
+.select-item-check { position: absolute; right: 9px; display: inline-flex; align-items: center; color: var(--accent); }
+.select-item-check svg { width: 14px; height: 14px; }
 
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 

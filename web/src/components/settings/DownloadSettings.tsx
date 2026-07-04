@@ -1,6 +1,7 @@
 // 下载：默认保存目录 / 全局限速 / 全局 User-Agent（服务器 config 表）。
 import type { ConfigMap } from '../../lib/types'
-import { NumberFieldRow, SetRow, SetSelect, TextFieldRow } from './controls'
+import { FsPicker } from '../dialogs/fs-picker'
+import { NumberFieldRow, SetRow, SetSelect, TextInput } from './controls'
 
 const MB = 1024 * 1024
 
@@ -45,12 +46,12 @@ export function DownloadSettings({
       <h2 className="set-title">下载</h2>
       <p className="set-desc">保存在服务器 config 表，作用于下载引擎</p>
       <div className="set-group">
-        <TextFieldRow
-          title="默认保存目录"
-          desc="服务器文件系统路径"
-          value={saveDir}
-          onCommit={(v) => mutate({ default_save_dir: v })}
-        />
+        <SetRow title="默认保存目录" desc="服务器文件系统路径">
+          <div className="dir-row" style={{ width: 300, flexShrink: 0 }}>
+            <TextInput value={saveDir} onCommit={(v) => mutate({ default_save_dir: v })} />
+            <FsPicker value={saveDir} onChange={(p) => mutate({ default_save_dir: p })} />
+          </div>
+        </SetRow>
         <NumberFieldRow
           title="全局限速"
           desc="单位 MB/s，Token Bucket，0 = 不限速"
