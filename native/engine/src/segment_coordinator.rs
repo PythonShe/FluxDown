@@ -38,7 +38,7 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::db::Db;
@@ -204,6 +204,101 @@ const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
 /// 5 秒足够容忍正常的 CDN 抖动，又能快速从真正卡死的连接中恢复。
 /// 这解决了大文件下载到 98%+ 时 TCP 连接卡死、速度趋近 0 的问题。
 const CHUNK_STALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// fdatasync 合并闸的最小间隔：全局每 2s 至多触发一次整盘 fdatasync。
+///
+/// 取值略小于 [`DB_SAVE_INTERVAL_SECS`]（3s），确保每个落库周期内仍有一次新鲜
+/// fsync 覆盖，同时把 64 段各自每 3s 的冗余整盘 fsync 合并为全局约每 2–3s 一次。
+const MIN_SYNC_GAP: Duration = Duration::from_secs(2);
+
+/// 全局（单文件级）fdatasync 合并闸。
+///
+/// `fdatasync(fd)` 刷的是【整个文件 inode】的脏页，与调用它的具体 fd 无关。多段
+/// 下载中每个 worker 各持一个指向同一文件的 fd，若各自周期性 fsync，则文件会被
+/// 重复整盘刷写（N 段 → 每周期 N 次）。本闸把并发的 fsync 请求合并为全局每
+/// [`MIN_SYNC_GAP`] 至多一次。
+///
+/// # 正确性契约
+///
+/// [`FileSyncGate::sync_if_stale`] 返回一次【已完成】fdatasync 的**起始时刻** `S`。
+/// fdatasync 保证刷入所有在其【起始】前发起的写入，故凡在 `S` 之前完成的写入
+/// （其字节此刻已在 OS 页缓存）此刻均已持久化到磁盘。调用方须先 `file.flush()`
+/// 把自己的 BufWriter 落入页缓存、记下快照时刻 `snap_t`，**仅当** `S >= snap_t`
+/// 时才把该快照偏移写入 DB，从而维持 "DB 偏移 <= 已持久化字节" 不变式
+/// （BUG-COORD-FSYNC）。因判据用 fsync 的【起始】而非完成时刻，即便复用他段触发
+/// 的 fsync，也绝不会信任一次早于自身 flush 的 fsync（Windows 共享文件缓存同理）。
+#[derive(Clone)]
+struct FileSyncGate {
+    inner: Arc<StdMutex<GateState>>,
+    notify: Arc<Notify>,
+}
+
+struct GateState {
+    /// 是否有一次 fdatasync 正在进行（串行化并发请求，避免重复整盘刷）。
+    syncing: bool,
+    /// 最近一次【已完成】fdatasync 的起始时刻；None 表示尚无任何 fsync。
+    last_completed_start: Option<Instant>,
+}
+
+impl FileSyncGate {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(StdMutex::new(GateState {
+                syncing: false,
+                last_completed_start: None,
+            })),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// 合并式 fdatasync：若距上次【已完成】fsync 起始不足 [`MIN_SYNC_GAP`] 则跳过、
+    /// 复用其结果；否则（且无并发 fsync 在跑时）由本调用执行一次整盘 fdatasync。
+    /// 返回一次已完成 fsync 的**起始时刻**（见类型级正确性契约）。
+    async fn sync_if_stale(&self, file: &tokio::fs::File) -> std::io::Result<Instant> {
+        loop {
+            // 决策阶段：持锁判断，绝不跨 .await 持锁。
+            let do_sync = {
+                let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                match st.last_completed_start {
+                    // 距最近一次已完成 fsync 起始不足 MIN_SYNC_GAP → 复用，跳过本次。
+                    Some(s) if s.elapsed() < MIN_SYNC_GAP => return Ok(s),
+                    // 无新鲜 fsync，但已有一次在进行 → 等待其完成后重判。
+                    _ if st.syncing => false,
+                    // 无新鲜 fsync 且无在途 → 由本调用执行。
+                    _ => {
+                        st.syncing = true;
+                        true
+                    }
+                }
+            };
+
+            if do_sync {
+                // my_start 记于 fdatasync 之前：它是"覆盖判据"的时刻锚点。
+                let my_start = Instant::now();
+                let res = file.sync_data().await;
+                {
+                    let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                    st.syncing = false;
+                    if res.is_ok() {
+                        st.last_completed_start = Some(my_start);
+                    }
+                }
+                self.notify.notify_waiters();
+                res?;
+                return Ok(my_start);
+            }
+
+            // 等待在途 fsync 完成后重判。带 50ms 兜底以规避 notify TOCTOU（与
+            // speed_limiter 相同处理）：notify_waiters 只唤醒已注册者，若通知在
+            // 注册前触发会丢失，超时确保下一轮必然重判，绝不永久阻塞。
+            tokio::select! {
+                biased;
+                () = self.notify.notified() => {}
+                () = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Segment state
@@ -676,6 +771,10 @@ pub async fn run_coordinated_download(
         .min(initial_segment_count as usize)
         .min(MAX_SEGMENTS as usize);
 
+    // fdatasync 合并闸：多段共享，把各 worker 每 3s 的整盘 fsync 合并为全局约每
+    // MIN_SYNC_GAP 一次（fdatasync 本就刷整个 inode，per-fd 重复毫无意义）。
+    let sync_gate = FileSyncGate::new();
+
     let mut worker_assign_txs: Vec<Option<mpsc::Sender<WorkerAssignment>>> =
         Vec::with_capacity(initial_workers);
     let mut worker_handles: Vec<Option<tokio::task::JoinHandle<()>>> =
@@ -726,6 +825,7 @@ pub async fn run_coordinated_download(
             spec.clone(),
             etag.to_string(),
             last_modified.to_string(),
+            sync_gate.clone(),
         );
 
         worker_assign_txs.push(Some(assign_tx));
@@ -1691,6 +1791,7 @@ fn spawn_worker(
     spec: crate::downloader::RequestSpec,
     etag: String,
     last_modified: String,
+    sync_gate: FileSyncGate,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Worker loop: keep accepting assignments until the channel closes.
@@ -1718,6 +1819,7 @@ fn spawn_worker(
                 &spec,
                 &etag,
                 &last_modified,
+                &sync_gate,
             )
             .await;
 
@@ -1776,6 +1878,7 @@ async fn do_segment_with_retry(
     spec: &crate::downloader::RequestSpec,
     expected_etag: &str,
     expected_last_modified: &str,
+    sync_gate: &FileSyncGate,
 ) -> Result<i64, DownloadError> {
     let mut attempts = 0u32;
 
@@ -1799,6 +1902,7 @@ async fn do_segment_with_retry(
             spec,
             expected_etag,
             expected_last_modified,
+            sync_gate,
         )
         .await
         {
@@ -1872,6 +1976,7 @@ async fn do_segment(
     spec: &crate::downloader::RequestSpec,
     expected_etag: &str,
     expected_last_modified: &str,
+    sync_gate: &FileSyncGate,
 ) -> Result<i64, DownloadError> {
     if actual_start > seg_end {
         // Already complete.
@@ -2037,6 +2142,13 @@ async fn do_segment(
     let mut seg_downloaded = actual_start - seg_start;
     let mut last_report = Instant::now();
     let mut last_db_save = Instant::now();
+    // durable_offset：仅记录【已被 fdatasync 覆盖】的偏移，供周期落库使用，以维持
+    // BUG-COORD-FSYNC 不变式（"DB 偏移 <= 已持久化字节"）。异常退出/段完成路径不
+    // 经此水位，直接 fsync + 落 seg_downloaded（见循环内各 break 分支及循环后收尾）。
+    // pending_snap 暂存"已写入页缓存但尚未被 fsync 覆盖"的最新快照，待后续 fsync
+    // 覆盖后提交，使各段落库水位仅滞后约一个落库周期。
+    let mut durable_offset = seg_downloaded;
+    let mut pending_snap: Option<(i64, Instant)> = None;
 
     // The effective end byte, which may shrink if the coordinator splits us.
     //
@@ -2160,16 +2272,37 @@ async fn do_segment(
                         }
 
                         // --- DB persistence (periodic) ---
+                        // 落库前必须保证偏移已 fdatasync 落盘：DB 记录的偏移是 resume
+                        // 的信任来源，若只 flush（用户态→页缓存）就落库，掉电后该区间
+                        // 在盘上仍是预分配的 0，resume 据 DB 跳过 → 永久空洞且骗过完整性
+                        // 检查（BUG-COORD-FSYNC）。
+                        //
+                        // 但 fdatasync 刷的是【整个文件 inode】的脏页，与 fd 无关——64 段
+                        // 各自每 3s fsync 是重复整盘刷写。改用 FileSyncGate 合并为全局每
+                        // MIN_SYNC_GAP 至多一次 fdatasync，并仅把【已被某次 fsync 覆盖】的
+                        // 偏移 durable_offset 写入 DB，严格保持上述不变式；未被覆盖的最新
+                        // 快照暂存 pending_snap，待后续 fsync 覆盖后提交（滞后约一个周期）。
                         if last_db_save.elapsed().as_secs() >= DB_SAVE_INTERVAL_SECS {
-                            // 落库前 flush + fdatasync：DB 记录的偏移是 resume 的信任来源，
-                            // 若只 flush（用户态→页缓存）就落库，掉电后该区间在盘上仍是
-                            // 预分配的 0，resume 却据 DB 跳过 → 永久空洞且能骗过完整性
-                            // 检查（BUG-COORD-FSYNC）。fdatasync 只在 DB_SAVE_INTERVAL(3s)
-                            // 周期触发，开销有界；保证 "DB 偏移 <= 已持久化字节" 不变式。
                             file.flush().await?;
-                            file.get_ref().sync_data().await?;
+                            let snap = seg_downloaded;
+                            let snap_t = Instant::now();
+                            let synced_start = sync_gate.sync_if_stale(file.get_ref()).await?;
+                            if synced_start >= snap_t {
+                                // fsync 起始于本快照之后 → snap 全部已持久化。
+                                durable_offset = snap;
+                                pending_snap = None;
+                            } else {
+                                // 命中一次较早的合并 fsync：snap 尚未被覆盖。先提交上一轮
+                                // 挂起快照（若已被本次 fsync 覆盖），再把本次 snap 记为挂起。
+                                if let Some((off, t)) = pending_snap
+                                    && synced_start >= t
+                                {
+                                    durable_offset = off;
+                                }
+                                pending_snap = Some((snap, snap_t));
+                            }
                             let _ = db
-                                .update_segment_progress(task_id, seg_idx, seg_downloaded)
+                                .update_segment_progress(task_id, seg_idx, durable_offset)
                                 .await;
                             last_db_save = Instant::now();
                         }
@@ -2294,10 +2427,11 @@ fn update_seg_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        LiveSegment, MAX_SEGMENTS, MIN_SPLIT_BYTES, SegState, TAIL_MIN_SPLIT_BYTES, all_done,
-        build_seg_state_vec, dynamic_min_split_bytes, extract_host, find_next_pending_only,
-        find_next_work, is_single_conn_domain, rebuild_seg_states, record_single_conn_domain,
-        single_conn_cache, try_proactive_split, try_split_largest, validate_coverage,
+        FileSyncGate, LiveSegment, MAX_SEGMENTS, MIN_SPLIT_BYTES, MIN_SYNC_GAP, SegState,
+        TAIL_MIN_SPLIT_BYTES, all_done, build_seg_state_vec, dynamic_min_split_bytes, extract_host,
+        find_next_pending_only, find_next_work, is_single_conn_domain, rebuild_seg_states,
+        record_single_conn_domain, single_conn_cache, try_proactive_split, try_split_largest,
+        validate_coverage,
     };
     use crate::downloader::{DownloadError, SegmentProgressInfo, is_server_rejection};
     use std::collections::BTreeMap;
@@ -3093,5 +3227,127 @@ mod tests {
             cache.remove(domain_a);
             cache.remove(domain_b);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // FileSyncGate（fdatasync 合并闸）
+    // -----------------------------------------------------------------------
+
+    /// 在系统临时目录创建一个内容非空、可读写的临时文件，返回其路径与已打开的
+    /// `tokio::fs::File` 句柄。调用方负责在测试结束时
+    /// `let _ = std::fs::remove_file(&path);` 清理（失败无需 panic）。
+    async fn open_sync_gate_test_file() -> (std::path::PathBuf, tokio::fs::File) {
+        let path = std::env::temp_dir().join(format!("fdgate-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"fluxdown-file-sync-gate-test").expect("write temp file content");
+        let file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .await
+            .expect("open temp file for FileSyncGate test");
+        (path, file)
+    }
+
+    // 合并闸的核心契约：MIN_SYNC_GAP 窗口内的重复调用必须复用同一次【已完成】
+    // fsync 的起始时刻，绝不重复触发整盘 fdatasync。若合并逻辑失效（例如
+    // `syncing`/`last_completed_start` 判据被改坏、或误把窗口判定为“已过期”），
+    // 本测试会观察到两次不同的 Instant 而失败——这正是 BUG-COORD-FSYNC 想避免的
+    // “N 段各自整盘刷写”退化路径。
+    #[tokio::test]
+    async fn coalesce_within_gap_reuses_same_sync() {
+        let (path, file) = open_sync_gate_test_file().await;
+        let gate = FileSyncGate::new();
+
+        let s1 = gate
+            .sync_if_stale(&file)
+            .await
+            .expect("first sync_if_stale should succeed");
+        let s2 = gate
+            .sync_if_stale(&file)
+            .await
+            .expect("second sync_if_stale should succeed");
+
+        assert_eq!(
+            s1, s2,
+            "MIN_SYNC_GAP 内的第二次调用必须复用第一次已完成 fsync 的起始时刻；\
+             若返回了不同的 Instant，说明合并逻辑失效，退化成了每次都重新 fdatasync"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // gap 之外必须真正触发新一轮 fsync：验证“新鲜度”判据没有被写反（例如
+    // `elapsed() < MIN_SYNC_GAP` 误写成恒真或恒假）。防两类回归：数据长期得不到
+    // 刷新（S 永不前进），或合并彻底失效。用真实 sleep 而非 tokio 暂停时钟，
+    // 因为 sync_data() 经 spawn_blocking 落到真实阻塞 IO 线程池，与虚拟时钟
+    // 交互不可靠。
+    #[tokio::test]
+    async fn fresh_sync_after_gap_advances() {
+        let (path, file) = open_sync_gate_test_file().await;
+        let gate = FileSyncGate::new();
+
+        let s1 = gate
+            .sync_if_stale(&file)
+            .await
+            .expect("first sync_if_stale should succeed");
+
+        // 略大于 MIN_SYNC_GAP，确保确定性地跨过闸门的新鲜度窗口。
+        tokio::time::sleep(MIN_SYNC_GAP + std::time::Duration::from_millis(100)).await;
+
+        let s2 = gate
+            .sync_if_stale(&file)
+            .await
+            .expect("second sync_if_stale after gap should succeed");
+
+        assert!(
+            s2 > s1,
+            "超过 MIN_SYNC_GAP 后必须触发一次新的 fdatasync，其起始时刻应严格晚于上一次；\
+             s2 <= s1 意味着 gap 判据失效（要么从不刷新，要么被误判为仍然新鲜）"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // 并发突发场景：多个 worker 同时对同一 gate 发起 sync_if_stale，必须全部
+    // 无 panic/无死锁地成功返回，且被合并为极少数几次真实 fsync（理想 1 次）。
+    // 用共享的同一个 `Arc<tokio::fs::File>` 句柄模拟多段 worker 共享同一文件
+    // fd 的真实场景。防两类回归：
+    // 1) notify 的 TOCTOU（通知先于等待者注册而丢失）导致等待者永久阻塞、
+    //    整个测试挂死；
+    // 2) 合并逻辑失效，导致 N 个并发调用各自触发一次整盘 fsync（起始时刻
+    //    彼此不同，distinct 数会显著大于 1~2）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_callers_coalesce_and_complete() {
+        let (path, file) = open_sync_gate_test_file().await;
+        let gate = FileSyncGate::new();
+        let file = Arc::new(file);
+
+        const N: usize = 16;
+        let mut handles = Vec::with_capacity(N);
+        for _ in 0..N {
+            let gate = gate.clone();
+            let file = Arc::clone(&file);
+            handles.push(tokio::spawn(async move { gate.sync_if_stale(&file).await }));
+        }
+
+        let mut starts = Vec::with_capacity(N);
+        for h in handles {
+            // join 失败（子任务 panic 或被取消）本身就是需要暴露的回归，
+            // 不能被吞掉，否则死锁会被误判为“测试通过”。
+            let joined = h
+                .await
+                .expect("sync_if_stale task must not panic or be cancelled");
+            starts.push(joined.expect("sync_if_stale must not return an I/O error"));
+        }
+
+        let distinct: std::collections::BTreeSet<std::time::Instant> = starts.into_iter().collect();
+        assert!(
+            distinct.len() <= 2,
+            "{N} 个并发调用应被合并为至多 2 次真实 fsync（理想 1 次），\
+             实际观察到 {} 种不同起始时刻，说明合并逻辑失效或退化为逐一 fsync",
+            distinct.len()
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }
