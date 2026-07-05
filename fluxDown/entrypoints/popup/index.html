@@ -79,7 +79,6 @@
         <span class="label" data-i18n="settings.interceptMode">Intercept Mode</span>
         <select id="interceptModeSelect">
           <option value="smart" data-i18n="settings.modeSmart">Smart</option>
-          <option value="extension" data-i18n="settings.modeExtension">Extension Only</option>
           <option value="all" data-i18n="settings.modeAll">Intercept All</option>
         </select>
       </div>
@@ -97,28 +96,6 @@
       </div>
       <div class="mode-hint" data-i18n="settings.altClickHint">Alt + Click to bypass interception</div>
     </section>
-
-    <!-- File type management -->
-    <section class="section">
-      <div class="section-header">
-        <span class="section-title" data-i18n="fileType.title">Intercept File Types</span>
-        <button class="icon-btn small" id="addExtBtn" data-i18n-title="fileType.addTitle">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-        </button>
-      </div>
-      <!-- Extension input (hidden by default) -->
-      <div class="ext-input-row hidden" id="extInputRow">
-        <input type="text" id="extInput" data-i18n-placeholder="fileType.placeholder" placeholder="Enter extension, e.g. .pdf" autocomplete="off">
-        <button class="btn-small confirm" id="extConfirmBtn" data-i18n="fileType.add">Add</button>
-        <button class="btn-small cancel" id="extCancelBtn" data-i18n="fileType.cancel">Cancel</button>
-      </div>
-      <div class="tags-container" id="extTagsContainer">
-        <!-- Dynamically generated -->
-      </div>
-    </section>
-
     <!-- Excluded domains -->
     <section class="section">
       <div class="section-header">
@@ -137,8 +114,8 @@
       <!-- Domain input (hidden by default) -->
       <div class="ext-input-row hidden" id="domainInputRow">
         <input type="text" id="domainInput" data-i18n-placeholder="domain.placeholder" placeholder="Enter domain, e.g. example.com" autocomplete="off">
-        <button class="btn-small confirm" id="domainConfirmBtn" data-i18n="fileType.add">Add</button>
-        <button class="btn-small cancel" id="domainCancelBtn" data-i18n="fileType.cancel">Cancel</button>
+        <button class="btn-small confirm" id="domainConfirmBtn" data-i18n="domain.add">Add</button>
+        <button class="btn-small cancel" id="domainCancelBtn" data-i18n="domain.cancel">Cancel</button>
       </div>
       <div class="domain-list" id="domainList">
         <div class="empty-hint" id="domainEmptyHint" data-i18n="domain.empty">No excluded domains</div>

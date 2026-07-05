@@ -19,8 +19,6 @@ export interface FluxDownSettings {
   interceptMode: InterceptMode;
   /** 最小文件大小（字节），小于此值的文件不拦截 */
   minFileSize: number;
-  /** 拦截的文件扩展名列表（为空则拦截所有） */
-  interceptExtensions: string[];
   /** 拦截的 MIME 类型前缀列表（smart 模式下生效） */
   interceptMimeTypes: string[];
   /** 排除的域名列表 */
@@ -38,57 +36,62 @@ export interface FluxDownSettings {
   sniffImages: boolean;
 }
 
+/**
+ * 内置的可拦截文件扩展名列表（用户不可编辑）。
+ * smart 模式作为已知下载类型的正向匹配；extension 模式的唯一来源。
+ */
+const BUILTIN_EXTENSIONS: string[] = [
+  // 压缩文件
+  ".zip",
+  ".rar",
+  ".7z",
+  ".tar",
+  ".gz",
+  ".bz2",
+  ".xz",
+  // 安装程序
+  ".exe",
+  ".msi",
+  ".dmg",
+  ".deb",
+  ".rpm",
+  ".appimage",
+  // 磁盘镜像
+  ".iso",
+  ".img",
+  // 视频
+  ".mp4",
+  ".mkv",
+  ".avi",
+  ".mov",
+  ".wmv",
+  ".flv",
+  ".webm",
+  // 音频
+  ".mp3",
+  ".flac",
+  ".wav",
+  ".aac",
+  ".ogg",
+  // 文档
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  // 其他大文件
+  ".bin",
+  ".apk",
+  ".ipa",
+  ".torrent",
+];
+
 const DEFAULT_SETTINGS: FluxDownSettings = {
   enabled: true,
   interceptMode: "smart",
   minFileSize: 0, // 不限
-  interceptExtensions: [
-    // 压缩文件
-    ".zip",
-    ".rar",
-    ".7z",
-    ".tar",
-    ".gz",
-    ".bz2",
-    ".xz",
-    // 安装程序
-    ".exe",
-    ".msi",
-    ".dmg",
-    ".deb",
-    ".rpm",
-    ".appimage",
-    // 磁盘镜像
-    ".iso",
-    ".img",
-    // 视频
-    ".mp4",
-    ".mkv",
-    ".avi",
-    ".mov",
-    ".wmv",
-    ".flv",
-    ".webm",
-    // 音频
-    ".mp3",
-    ".flac",
-    ".wav",
-    ".aac",
-    ".ogg",
-    // 文档
-    ".pdf",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    // 其他大文件
-    ".bin",
-    ".apk",
-    ".ipa",
-    ".torrent",
-  ],
   interceptMimeTypes: [
     // 通用二进制/下载
     "application/octet-stream",
@@ -140,7 +143,13 @@ const DEFAULT_SETTINGS: FluxDownSettings = {
 export async function loadSettings(): Promise<FluxDownSettings> {
   const result = (await browser.storage.sync.get("settings")) ?? {};
   if (result.settings) {
-    return { ...DEFAULT_SETTINGS, ...result.settings };
+    const merged = { ...DEFAULT_SETTINGS, ...result.settings };
+    // 迁移：旧版"仅扩展名"模式的设置项已移除，归一化为智能模式，
+    // 否则 popup 下拉框（已无该选项）会显示空白、拦截逻辑走废弃分支。
+    if ((merged.interceptMode as string) === "extension") {
+      merged.interceptMode = "smart";
+    }
+    return merged;
   }
   return { ...DEFAULT_SETTINGS };
 }
@@ -213,12 +222,12 @@ export function shouldIntercept(
 
   if (settings.interceptMode === "extension") {
     // "仅扩展名"模式：只看 URL 路径或 filename 的扩展名
-    return matchByExtension(url, filename, settings.interceptExtensions);
+    return matchByExtension(url, filename, BUILTIN_EXTENSIONS);
   }
 
   // === smart 模式（默认）===
   // 1. 先看扩展名匹配（URL 路径或 filename）
-  if (matchByExtension(url, filename, settings.interceptExtensions)) {
+  if (matchByExtension(url, filename, BUILTIN_EXTENSIONS)) {
     return true;
   }
 

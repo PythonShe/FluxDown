@@ -111,7 +111,7 @@ export function getLocale(): string {
  * @returns 翻译后的字符串
  *
  * @example
- * t('fileType.removed', { ext: '.pdf' }) // → "已移除 .pdf"
+ * t('domain.removed', { domain: 'example.com' }) // → "已移除 example.com"
  * t('header.connected') // → "已连接"
  */
 export function t(key: MessageKey, params?: Record<string, string>): string {

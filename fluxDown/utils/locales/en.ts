@@ -26,10 +26,8 @@ const en: Record<MessageKey, string> = {
   "settings.title": "Quick Settings",
   "settings.interceptMode": "Intercept Mode",
   "settings.modeSmart": "Smart",
-  "settings.modeExtension": "Extension Only",
   "settings.modeAll": "Intercept All",
   "settings.hintSmart": "Smart detection based on filename, type, and size",
-  "settings.hintExtension": "Intercept by URL/filename extension only",
   "settings.hintAll": "Intercept all downloads (except excluded domains)",
   "settings.minFileSize": "Min File Size",
   "settings.sizeNoLimit": "No limit",
@@ -37,20 +35,12 @@ const en: Record<MessageKey, string> = {
     "Press Alt+Shift+D to quickly toggle download interception",
   "settings.dotVisible": "Floating Ball",
 
-  // File type management
-  "fileType.title": "Intercept File Types",
-  "fileType.addTitle": "Add extension",
-  "fileType.placeholder": "Enter extension, e.g. .pdf",
-  "fileType.add": "Add",
-  "fileType.cancel": "Cancel",
-  "fileType.removed": "Removed {ext}",
-  "fileType.invalidFormat": "Invalid extension format",
-  "fileType.exists": "{ext} already exists",
-  "fileType.added": "Added {ext}",
 
   // Domain exclusion
   "domain.title": "Excluded Domains",
   "domain.addTitle": "Add domain manually",
+  "domain.add": "Add",
+  "domain.cancel": "Cancel",
   "domain.placeholder": "Enter domain, e.g. example.com",
   "domain.currentSite": "Current Site",
   "domain.empty": "No excluded domains",

@@ -39,14 +39,6 @@ const statSent = $('#statSent')!;
 const statFailed = $('#statFailed')!;
 const resetStatsBtn = $<HTMLButtonElement>('#resetStatsBtn');
 
-// 扩展名管理
-const addExtBtn = $<HTMLButtonElement>('#addExtBtn');
-const extInputRow = $('#extInputRow')!;
-const extInput = $<HTMLInputElement>('#extInput');
-const extConfirmBtn = $<HTMLButtonElement>('#extConfirmBtn');
-const extCancelBtn = $<HTMLButtonElement>('#extCancelBtn');
-const extTagsContainer = $('#extTagsContainer')!;
-
 // 域名管理
 const addDomainManualBtn = $<HTMLButtonElement>('#addDomainManualBtn');
 const addCurrentDomainBtn = $<HTMLButtonElement>('#addCurrentDomainBtn');
@@ -110,60 +102,6 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   toast.textContent = message;
   toast.className = `toast ${type} show`;
   setTimeout(() => toast!.classList.remove('show'), 2000);
-}
-
-// ===== 扩展名 Tag 渲染 =====
-function renderExtTags(extensions: string[]) {
-  extTagsContainer.innerHTML = '';
-  for (const ext of extensions) {
-    const tag = document.createElement('span');
-    tag.className = 'tag';
-    tag.innerHTML = `${ext}<button class="tag-remove" data-ext="${ext}">&times;</button>`;
-    extTagsContainer.appendChild(tag);
-  }
-
-  // 绑定删除事件
-  extTagsContainer.querySelectorAll<HTMLButtonElement>('.tag-remove').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const ext = btn.dataset.ext!;
-      await removeExtension(ext);
-    });
-  });
-}
-
-async function removeExtension(ext: string) {
-  const current = await loadSettings();
-  const exts = current.interceptExtensions.filter((e) => e !== ext);
-  if (exts.length !== current.interceptExtensions.length) {
-    await saveSettings({ interceptExtensions: exts });
-    renderExtTags(exts);
-    showToast(t('fileType.removed', { ext }));
-  }
-}
-
-async function addExtension(ext: string) {
-  // 标准化：确保以 . 开头，转小写
-  ext = ext.trim().toLowerCase();
-  if (!ext.startsWith('.')) ext = '.' + ext;
-
-  // 验证格式
-  if (!/^\.\w+$/.test(ext)) {
-    showToast(t('fileType.invalidFormat'), 'error');
-    return;
-  }
-
-  const current = await loadSettings();
-  const exts = [...current.interceptExtensions];
-
-  if (exts.includes(ext)) {
-    showToast(t('fileType.exists', { ext }), 'error');
-    return;
-  }
-
-  exts.push(ext);
-  await saveSettings({ interceptExtensions: exts });
-  renderExtTags(exts);
-  showToast(t('fileType.added', { ext }));
 }
 
 // ===== 域名管理 =====
@@ -287,7 +225,6 @@ async function init() {
   interceptModeSelect.value = settings.interceptMode || 'smart';
   updateModeHint(settings.interceptMode || 'smart');
   minSizeSelect.value = String(settings.minFileSize);
-  renderExtTags(settings.interceptExtensions || []);
   renderDomainList(settings.excludeDomains || []);
 
   // 悬浮球可见状态（未设置时默认显示）
@@ -302,11 +239,10 @@ function updateEnableHint(enabled: boolean) {
   enableHint.textContent = enabled ? t('switch.enabled') : t('switch.disabled');
 }
 
-type ModeKey = 'settings.hintSmart' | 'settings.hintExtension' | 'settings.hintAll';
+type ModeKey = 'settings.hintSmart' | 'settings.hintAll';
 
 const MODE_HINT_KEYS: Record<string, ModeKey> = {
   smart: 'settings.hintSmart',
-  extension: 'settings.hintExtension',
   all: 'settings.hintAll',
 };
 
@@ -366,35 +302,6 @@ interceptModeSelect.addEventListener('change', async () => {
 minSizeSelect.addEventListener('change', async () => {
   await saveSettings({ minFileSize: parseInt(minSizeSelect.value, 10) });
 });
-
-// 扩展名 - 显示输入框
-addExtBtn.addEventListener('click', () => {
-  extInputRow.classList.remove('hidden');
-  extInput.focus();
-});
-
-// 扩展名 - 确认添加
-extConfirmBtn.addEventListener('click', async () => {
-  const val = extInput.value.trim();
-  if (val) {
-    await addExtension(val);
-    extInput.value = '';
-  }
-  extInputRow.classList.add('hidden');
-});
-
-// 扩展名 - 取消
-extCancelBtn.addEventListener('click', () => {
-  extInput.value = '';
-  extInputRow.classList.add('hidden');
-});
-
-// 扩展名 - Enter 确认
-extInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') extConfirmBtn.click();
-  if (e.key === 'Escape') extCancelBtn.click();
-});
-
 // 域名 - 显示手动输入框
 addDomainManualBtn.addEventListener('click', () => {
   domainInputRow.classList.remove('hidden');
