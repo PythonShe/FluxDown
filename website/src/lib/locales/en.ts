@@ -333,13 +333,9 @@ const en = {
   "dl.dockerCopied": "Copied!",
   "dl.scoopTitle": "Install via Scoop",
   "dl.scoopDesc":
-    "Windows package manager — one command to install and stay up to date. Pick the official bucket or our self-hosted bucket.",
-  "dl.scoopOfficial": "Official bucket",
-  "dl.scoopSelfHosted": "Self-hosted bucket",
-  "dl.scoopOfficialHint":
-    "Installs from Scoop's community-maintained extras bucket. Update anytime with scoop update fluxdown.",
+    "Windows package manager — one command to install and stay up to date.",
   "dl.scoopSelfHostedHint":
-    "Installs straight from the FluxDown repository bucket, always tracking the newest release. Update with scoop update fluxdown.",
+    "Installs straight from the FluxDown repository bucket, always tracking the newest release. Update anytime with scoop update fluxdown.",
   "dl.availableNow": "Available Now",
   "dl.comingSoon": "Coming Soon",
   "dl.downloadBtn": "Download",

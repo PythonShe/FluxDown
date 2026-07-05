@@ -54,9 +54,7 @@ const DOCKER_COMPOSE_YML = `services:
 volumes:
   fluxdown-data:`;
 
-// Scoop 安装命令：官方源（extras bucket）与自托管源（本仓库 bucket）
-const SCOOP_OFFICIAL_CMD = `scoop bucket add extras
-scoop install fluxdown`;
+// Scoop 自托管源安装命令（本仓库 bucket）。官方 extras 源待项目达标后再加。
 
 const SCOOP_SELFHOSTED_CMD = `scoop bucket add fluxdown https://github.com/zerx-lab/FluxDown
 scoop install fluxdown/fluxdown`;
@@ -163,22 +161,17 @@ export default function DownloadSection() {
     }
   }, [dockerTab]);
 
-  const [scoopSource, setScoopSource] = useState<"official" | "selfhosted">(
-    "official",
-  );
   const [scoopCopied, setScoopCopied] = useState(false);
 
   const handleScoopCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(
-        scoopSource === "official" ? SCOOP_OFFICIAL_CMD : SCOOP_SELFHOSTED_CMD,
-      );
+      await navigator.clipboard.writeText(SCOOP_SELFHOSTED_CMD);
       setScoopCopied(true);
       setTimeout(() => setScoopCopied(false), 2000);
     } catch {
       /* clipboard unavailable — ignore */
     }
-  }, [scoopSource]);
+  }, []);
 
   useEffect(() => {
     fetch("/api/release")
@@ -978,29 +971,7 @@ export default function DownloadSection() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-2 mb-3">
-                {/* 源切换：官方 / 自托管 */}
-                <div className="flex items-center gap-1 rounded-lg bg-dark-surface2 p-1">
-                  {(
-                    [
-                      { key: "official", label: t("dl.scoopOfficial") },
-                      { key: "selfhosted", label: t("dl.scoopSelfHosted") },
-                    ] as const
-                  ).map((tab) => (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      onClick={() => setScoopSource(tab.key)}
-                      className={`px-3 py-1 rounded-md text-[11px] font-semibold transition-colors ${
-                        scoopSource === tab.key
-                          ? "bg-brand-blue/20 text-brand-blue"
-                          : "text-dark-text-muted hover:text-dark-text-secondary"
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
+              <div className="flex items-center justify-end mb-3">
                 <button
                   type="button"
                   onClick={handleScoopCopy}
@@ -1020,16 +991,10 @@ export default function DownloadSection() {
                 </button>
               </div>
               <pre className="rounded-lg bg-dark-bg border border-dark-border/60 p-4 text-xs leading-relaxed text-dark-text-secondary overflow-x-auto font-mono">
-                <code>
-                  {scoopSource === "official"
-                    ? SCOOP_OFFICIAL_CMD
-                    : SCOOP_SELFHOSTED_CMD}
-                </code>
+                <code>{SCOOP_SELFHOSTED_CMD}</code>
               </pre>
               <p className="mt-3 text-[11px] text-dark-text-muted">
-                {scoopSource === "official"
-                  ? t("dl.scoopOfficialHint")
-                  : t("dl.scoopSelfHostedHint")}
+                {t("dl.scoopSelfHostedHint")}
               </p>
             </div>
           </motion.div>
