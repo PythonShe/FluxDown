@@ -1,7 +1,7 @@
 # FluxDown 推广渠道提交物料
 
 本目录是各推广/生态渠道的**可提交实物**，已按各平台官方规范核实生成。
-下方每节说明：资格校验结论、怎么提交、**哪些动作必须你本人做**。
+下方每节说明：资格校验结论、当前进展、**哪些动作必须你本人做**。
 
 ## 资格校验（已核实的事实）
 
@@ -34,23 +34,32 @@
 
 ## 2. Unraid Community Applications → `unraid/`
 
-1. 把 `unraid/fluxdown.xml` 和 `ca_profile.xml` 放到一个 GitHub 仓库（本物料已放在
-   `promotion/unraid/`，`TemplateURL` 已指向本仓库 raw 直链，可直接用）。
-2. 到 **https://ca.unraid.net/submit** 填仓库地址，live scan 会自动校验并预览。
-3. 必备项已满足：`Project` + `Support` 链接、`WebUI` 模式、版本化镜像 tag。
+✅ **独立模板仓库已创建并推送**：https://github.com/zerx-lab/unraid-templates
+（`ca_profile.xml` 根目录 + `FluxDown/fluxdown.xml`，已通过 CA live scan 的两处修正）。
 
-## 3. MCP Registry → `mcp/`
+- **两处扫描错误已修**：`ca_profile.xml` 根元素改为 `<Maintainer>`/`<Profile>`；
+  模板迁出主仓库到独立干净仓库，消除 `not_unraid_application` 警告。
+- **你要做**：到 **https://ca.unraid.net/submit** 填仓库地址 `zerx-lab/unraid-templates`
+  重新扫描（应全绿），确认后提交。
+- 非阻塞建议：`<Icon>` 现用 SVG，CA 界面对 SVG 支持不稳，建议改 256×256 PNG。
 
-FluxDown 的 `/mcp` 是**用户自托管的远程端点**（默认仅 127.0.0.1，需在设置里开
-`local_server_mcp_enabled` 并用管理 token 鉴权）。`server.json` 已按 `streamable-http` remote 生成。
+## 3. MCP 生态 → `mcp/`
 
-提交（**需你本人操作**，用 GitHub 身份认证命名空间 `io.github.zerx-lab/...`）：
-```bash
-# 参考 modelcontextprotocol/registry 的 publisher 指南
-mcp-publisher login github       # 用 zerx-lab 账号 OAuth
-mcp-publisher publish            # 在含 server.json 的目录执行
-```
-> 也可改命名空间为 `dev.zerx/fluxdown` 并走 DNS 验证（你持有 zerx.dev 域名）。
+FluxDown 的 `/mcp` 是**用户各自本地自托管的端点**（默认仅 `127.0.0.1:17800`，
+需开 `local_server_mcp_enabled` 并用管理 token 鉴权），不是中心化公网服务。
+
+**官方 MCP Registry 不适用**：其 `remotes` 类型要求公网可达 URL（拒绝 localhost），
+`packages` 类型要求发布可安装包——都不匹配"每个用户连自己本地实例"的模型。
+已用 `mcp-publisher validate` 实测确认 registry 拒收 `127.0.0.1` remote URL。
+
+**改走社区清单**（不要求公网端点，同样获得 AI 客户端曝光）：
+- ✅ **已提交** `punkpeye/awesome-mcp-servers`（90k star）：
+  PR https://github.com/punkpeye/awesome-mcp-servers/pull/9304
+  （该仓库允许 agent PR，标题带 `🤖🤖🤖` 走快速通道）。
+- 可继续提 `appcypher/awesome-mcp-servers`、`wong2/awesome-mcp-servers` 等其他清单。
+
+`mcp/server.json` 保留作 FluxDown 官方 MCP 描述（工具清单 + 本地端点 + 鉴权说明），
+供文档 / AI 客户端配置参考，非 registry 提交物。
 
 ## 4. awesome-selfhosted → `awesome-selfhosted/`
 
@@ -65,17 +74,17 @@ mcp-publisher publish            # 在含 server.json 的目录执行
 
 ---
 
-## 需要你本人完成的动作汇总
+## 进展与待办汇总
 
-| 渠道 | 我已产出 | 你要做 |
-|---|---|---|
-| CasaOS | compose + store-config | 建源仓库 / 提官方 PR + 截图 |
-| Unraid | xml + ca_profile | ca.unraid.net 填仓库地址 |
-| MCP Registry | server.json | `mcp-publisher` 登录发布 |
-| awesome-selfhosted | fluxdown.yml | 手动提 PR（禁 AI 代提） |
+| 渠道 | 我已产出 | 状态 | 你要做 |
+|---|---|---|---|
+| CasaOS | compose + store-config | 物料就绪 | 建源仓库 / 提官方 PR + 截图 |
+| Unraid | 独立仓库 zerx-lab/unraid-templates | ✅ 已推送 | ca.unraid.net 填仓库地址提交 |
+| MCP（awesome-mcp-servers）| PR #9304 | ✅ 已提交 | 等合并（agent PR 快速通道）|
+| awesome-selfhosted | fluxdown.yml | 物料就绪 | 手动提 PR（禁 AI 代提）|
 
-## 后续可加渠道（本轮未做，投入产出比排序）
-- **awesome-mcp-servers**（社区清单，非官方 registry）：直接 PR 加一行。
-- **AriaNg / Motrix 兼容宣传**：验证 `/jsonrpc` 兼容度后在 README 标注「可连 FluxDown」。
+## 后续可加渠道（投入产出比排序）
+- **appcypher / wong2 的 awesome-mcp-servers**：同样 PR 加一行。
+- **AriaNg / Motrix 兼容宣传**：验证 `/jsonrpc` 兼容度后标注「可连 FluxDown」。
 - **winget / Scoop / Homebrew**：桌面版包管理器上架。
 - **yt-dlp `--external-downloader`**：写对接文档，复刻 aria2c 的引流路径。
