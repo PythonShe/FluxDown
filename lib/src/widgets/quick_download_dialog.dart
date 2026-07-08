@@ -34,7 +34,10 @@ void showQuickDownloadDialog(
   var saveDir = defaultSaveDir;
   if (!saveDirFromRequest) {
     final matched =
-        SettingsProvider.globalInstance?.resolveCategorySaveDir(filename) ??
+        SettingsProvider.globalInstance?.resolveCategorySaveDir(
+          filename,
+          url: url,
+        ) ??
         '';
     if (matched.isNotEmpty) saveDir = matched;
   }

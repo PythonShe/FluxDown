@@ -91,7 +91,10 @@ class ExternalDownloadService {
     if (req.audioUrl.isNotEmpty && trackPairSilent) {
       final trackSettings = SettingsProvider.globalInstance ?? settingsProvider;
       final requestedDir = req.saveDir.trim();
-      final matchedDir = trackSettings.resolveCategorySaveDir(req.filename);
+      final matchedDir = trackSettings.resolveCategorySaveDir(
+        req.filename,
+        url: req.url,
+      );
       final saveDir = requestedDir.isNotEmpty
           ? requestedDir
           : (matchedDir.isNotEmpty
@@ -128,7 +131,10 @@ class ExternalDownloadService {
       final entries = parseQuickDownloadEntries(req.url);
       // 请求方显式指定的目录（aria2 dir / 接管 saveDir）优先于分类匹配。
       final requestedDir = req.saveDir.trim();
-      final matchedDir = silentSettings.resolveCategorySaveDir(req.filename);
+      final matchedDir = silentSettings.resolveCategorySaveDir(
+        req.filename,
+        url: req.url,
+      );
       final saveDir = requestedDir.isNotEmpty
           ? requestedDir
           : (matchedDir.isNotEmpty
@@ -193,7 +199,10 @@ class ExternalDownloadService {
     if (!_dialogOpen) {
       final popupSettings = SettingsProvider.globalInstance ?? settingsProvider;
       final requestedDir = req.saveDir.trim();
-      final matchedDir = popupSettings.resolveCategorySaveDir(req.filename);
+      final matchedDir = popupSettings.resolveCategorySaveDir(
+        req.filename,
+        url: req.url,
+      );
       final resolvedDir = requestedDir.isNotEmpty
           ? requestedDir
           : (matchedDir.isNotEmpty
