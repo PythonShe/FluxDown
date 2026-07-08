@@ -3737,6 +3737,8 @@ class _ApiServiceContent extends StatefulWidget {
 class _ApiServiceContentState extends State<_ApiServiceContent> {
   late TextEditingController _portController;
   late FocusNode _portFocusNode;
+  late TextEditingController _tokenController;
+  late FocusNode _tokenFocusNode;
 
   @override
   void initState() {
@@ -3745,6 +3747,10 @@ class _ApiServiceContentState extends State<_ApiServiceContent> {
       text: widget.settingsProvider.localServerPort.toString(),
     );
     _portFocusNode = FocusNode()..addListener(_onPortFocusChange);
+    _tokenController = TextEditingController(
+      text: widget.settingsProvider.localServerToken,
+    );
+    _tokenFocusNode = FocusNode()..addListener(_onTokenFocusChange);
   }
 
   @override
@@ -3752,6 +3758,9 @@ class _ApiServiceContentState extends State<_ApiServiceContent> {
     _portFocusNode.removeListener(_onPortFocusChange);
     _portFocusNode.dispose();
     _portController.dispose();
+    _tokenFocusNode.removeListener(_onTokenFocusChange);
+    _tokenFocusNode.dispose();
+    _tokenController.dispose();
     super.dispose();
   }
 
@@ -3773,6 +3782,18 @@ class _ApiServiceContentState extends State<_ApiServiceContent> {
       return;
     }
     sp.setLocalServerPort(value);
+  }
+
+  void _onTokenFocusChange() {
+    if (!_tokenFocusNode.hasFocus) _commitToken();
+  }
+
+  /// token 失焦提交：允许自定义任意值（含清空），去除首尾空白后持久化。
+  void _commitToken() {
+    final sp = widget.settingsProvider;
+    final value = _tokenController.text.trim();
+    if (value != _tokenController.text) _tokenController.text = value;
+    if (value != sp.localServerToken) sp.setLocalServerToken(value);
   }
 
   /// 生成 32 位随机 hex token
@@ -3858,6 +3879,11 @@ class _ApiServiceContentState extends State<_ApiServiceContent> {
         if (!_portFocusNode.hasFocus &&
             _portController.text != committedPortText) {
           _portController.text = committedPortText;
+        }
+        // token 未获焦时随外部配置变化同步（生成/清空/首次加载配置）
+        if (!_tokenFocusNode.hasFocus &&
+            _tokenController.text != sp.localServerToken) {
+          _tokenController.text = sp.localServerToken;
         }
         // 地址预览随端口输入框实时更新，不等待失焦提交
         final typedPort = _portController.text.trim();
@@ -3975,16 +4001,21 @@ class _ApiServiceContentState extends State<_ApiServiceContent> {
                     spacing: 8,
                     children: [
                       Expanded(
-                        child: _ReadOnlyValueBox(
-                          value: sp.localServerToken,
-                          colors: c,
+                        child: ShadInput(
+                          controller: _tokenController,
+                          focusNode: _tokenFocusNode,
+                          enabled: enabled,
+                          onSubmitted: (_) => _commitToken(),
                         ),
                       ),
                       ShadButton.outline(
                         size: ShadButtonSize.sm,
                         enabled: enabled,
-                        onPressed: () =>
-                            sp.setLocalServerToken(_generateHexToken()),
+                        onPressed: () {
+                          final t = _generateHexToken();
+                          _tokenController.text = t;
+                          sp.setLocalServerToken(t);
+                        },
                         child: Text(s.apiServiceTokenGenerate),
                       ),
                       ShadButton.outline(

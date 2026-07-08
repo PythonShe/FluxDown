@@ -829,8 +829,8 @@ class S {
 
   String get apiServiceToken => _t('访问令牌', 'Access Token');
   String get apiServiceTokenDesc => _t(
-    '用于校验 API 请求的访问令牌；启用管理 API 时强制要求设置',
-    'Access token used to authenticate API requests; required once the management API is enabled',
+    '用于校验 API 请求的访问令牌；可自定义或点「生成」随机生成，启用管理 API 时强制要求设置',
+    'Access token for API requests; type your own or click Generate for a random one. Required once the management API is enabled',
   );
   String get apiServiceTokenGenerate => _t('生成', 'Generate');
   String get apiServiceCopy => _t('复制', 'Copy');
