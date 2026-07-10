@@ -10,6 +10,7 @@ import '../models/download_task.dart';
 import '../models/settings_provider.dart';
 import '../services/external_download_service.dart';
 import '../services/log_service.dart';
+import '../services/kv_store.dart';
 import '../services/notification_service.dart';
 import '../services/power_service.dart';
 import '../services/shutdown_service.dart';
@@ -62,7 +63,9 @@ class _HomePageState extends State<HomePage> {
 
   // Detail panel
   bool _isDetailOpen = false;
-  bool _detailOnRight = false; // false=底部，true=右侧
+  /// false=底部，true=右侧。默认右侧，切换后持久化。
+  bool _detailOnRight =
+      KvStore.instance.getBool('detail_panel_on_right') ?? true;
   double _detailHeight = 280;
   static const double _detailMinHeight = 200;
   static const double _detailMaxHeight = 400;
@@ -317,6 +320,7 @@ class _HomePageState extends State<HomePage> {
 
   void _toggleDetailPosition() {
     setState(() => _detailOnRight = !_detailOnRight);
+    KvStore.instance.setBool('detail_panel_on_right', _detailOnRight);
   }
 
   /// 根据总宽度计算 sidebar 的实际最大值
