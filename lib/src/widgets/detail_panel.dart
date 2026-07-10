@@ -379,7 +379,7 @@ class DetailPanel extends StatelessWidget {
         _buildInfoRow(currentS.infoPath, task.saveDir, c),
         _buildUrlRow(c, task.url),
         if (task.errorMessage.isNotEmpty)
-          _buildInfoRow(currentS.infoError, task.errorMessage, c),
+          _buildErrorRow(c, task.errorMessage),
       ],
     );
   }
@@ -504,7 +504,41 @@ class DetailPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 4),
-          _CopyUrlButton(url: url, color: c.textMuted),
+          _CopyValueButton(value: url, color: c.textMuted),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorRow(AppColors c, String message) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 60,
+            child: Text(
+              currentS.infoError,
+              style: TextStyle(fontSize: 11, color: c.textMuted),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 11,
+                color: c.textSecondary,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          _CopyValueButton(
+            value: message,
+            color: c.textMuted,
+            toastText: currentS.errorCopied,
+          ),
         ],
       ),
     );
@@ -765,26 +799,31 @@ class _SegmentGridPainter extends CustomPainter {
 // 复制按钮（带勾号反馈）
 // =============================================================================
 
-class _CopyUrlButton extends StatefulWidget {
-  final String url;
+class _CopyValueButton extends StatefulWidget {
+  final String value;
   final Color color;
+  final String? toastText;
 
-  const _CopyUrlButton({required this.url, required this.color});
+  const _CopyValueButton({
+    required this.value,
+    required this.color,
+    this.toastText,
+  });
 
   @override
-  State<_CopyUrlButton> createState() => _CopyUrlButtonState();
+  State<_CopyValueButton> createState() => _CopyValueButtonState();
 }
 
-class _CopyUrlButtonState extends State<_CopyUrlButton> {
+class _CopyValueButtonState extends State<_CopyValueButton> {
   bool _copied = false;
 
   Future<void> _onCopy() async {
-    await Clipboard.setData(ClipboardData(text: widget.url));
+    await Clipboard.setData(ClipboardData(text: widget.value));
     if (!mounted) return;
     setState(() => _copied = true);
     ShadSonner.of(context).show(
       ShadToast(
-        title: Text(currentS.urlCopied),
+        title: Text(widget.toastText ?? currentS.urlCopied),
         duration: const Duration(seconds: 2),
       ),
     );

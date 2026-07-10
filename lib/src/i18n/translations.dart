@@ -195,6 +195,7 @@ class S {
   String get openFolder => _t('打开所在文件夹', 'Open Folder');
   String get copyUrl => _t('复制下载地址', 'Copy URL');
   String get urlCopied => _t('已复制下载地址', 'URL Copied');
+  String get errorCopied => _t('已复制错误信息', 'Error message copied');
 
   // ─────────────────────────────────────────────
   // 删除确认对话框
