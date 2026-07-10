@@ -48,6 +48,8 @@ class MainActivity : FlutterActivity() {
                     result.success(getExternalFilesDir("Download")?.absolutePath)
                 // 应用内更新：唤起系统安装器安装下载好的 APK
                 "installApk" -> installApk(call.argument<String>("path"), result)
+                // 用系统默认应用打开已下载文件（无关联时回退系统选择器）
+                "openFile" -> openFile(call.argument<String>("path"), result)
                 else -> result.notImplemented()
             }
         }
@@ -209,6 +211,65 @@ class MainActivity : FlutterActivity() {
             result.success(true)
         } catch (e: Exception) {
             result.error("install_failed", e.message, null)
+        }
+    }
+
+    // ── 打开已下载文件 ──
+
+    /**
+     * 用系统默认应用打开文件：经 FileProvider 暴露 content:// URI + ACTION_VIEW。
+     * targetSdk ≥ 24 禁止把 file:// URI 递出应用，必须走 content://。
+     * 无应用声明处理该 MIME（或系统拒绝）时，放宽为 星/星 并经系统选择器
+     * （Intent.createChooser）让用户自选应用。
+     * 错误码：bad_args / not_found / open_failed / no_handler，Dart 侧据此提示。
+     */
+    private fun openFile(path: String?, result: MethodChannel.Result) {
+        if (path.isNullOrEmpty()) {
+            result.error("bad_args", "path is required", null)
+            return
+        }
+        val file = java.io.File(path)
+        if (!file.exists()) {
+            result.error("not_found", "file not found: $path", null)
+            return
+        }
+        val uri = try {
+            androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                file,
+            )
+        } catch (e: IllegalArgumentException) {
+            // 路径不在 file_provider_paths 声明的根之内（如部分 SD 卡挂载点）
+            result.error("open_failed", e.message, null)
+            return
+        }
+        val mime = android.webkit.MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
+        val view = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivity(view)
+            result.success(true)
+        } catch (_: android.content.ActivityNotFoundException) {
+            // 没有应用能直接处理该 MIME：放宽类型并让用户从选择器挑应用
+            val fallback = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "*/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            try {
+                val chooser = Intent.createChooser(fallback, null).apply {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(chooser)
+                result.success(true)
+            } catch (e: Exception) {
+                result.error("no_handler", e.message, null)
+            }
+        } catch (e: Exception) {
+            result.error("open_failed", e.message, null)
         }
     }
 

@@ -7,6 +7,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../i18n/locale_provider.dart';
 import '../../models/download_controller.dart';
 import '../../models/download_task.dart';
+import '../../services/open_folder.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_metrics.dart';
 import '../mobile_ui.dart';
@@ -176,6 +177,70 @@ class _FileHeaderCard extends StatelessWidget {
 
   const _FileHeaderCard({required this.task, required this.controller});
 
+  void _onFileHeaderLongPress(BuildContext context) {
+    // 仅在任务完成时允许长按打开文件
+    if (task.status != TaskStatus.completed) return;
+
+    final s = LocaleScope.of(context);
+    final filePath = task.filePath;
+
+    showMobileSheet<void>(
+      context,
+      builder: (ctx) {
+        final c = AppColors.of(ctx);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: c.border),
+                ),
+              ),
+              child: Text(
+                task.fileName,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: c.textPrimary,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  MobilePrimaryButton(
+                    icon: LucideIcons.file,
+                    label: s.mobileOpenFile,
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _openFile(context, filePath);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _openFile(BuildContext context, String filePath) async {
+    try {
+      await openFile(filePath);
+    } catch (e) {
+      if (context.mounted) {
+        showMobileToast(context, _openFileErrorText(LocaleScope.of(context), e));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = AppColors.of(context);
@@ -201,86 +266,91 @@ class _FileHeaderCard extends StatelessWidget {
       ),
     };
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: mobileCardDecoration(c, m),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: c.surface2,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: c.border),
+    return GestureDetector(
+      onLongPress: task.status == TaskStatus.completed
+          ? () => _onFileHeaderLongPress(context)
+          : null,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: mobileCardDecoration(c, m),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: c.surface2,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: c.border),
+              ),
+              child: Icon(
+                mobileCategoryIcon(task.fileCategory),
+                size: 24,
+                color: c.textSecondary,
+              ),
             ),
-            child: Icon(
-              mobileCategoryIcon(task.fileCategory),
-              size: 24,
-              color: c.textSecondary,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  task.fileName,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w600,
-                    height: 1.35,
-                    color: c.textPrimary,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    task.fileName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.35,
+                      color: c.textPrimary,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 5),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: pillBg,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        task.statusText,
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w600,
-                          color: pillFg,
+                  const SizedBox(height: 5),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: pillBg,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          task.statusText,
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                            color: pillFg,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      task.sizeText,
-                      style: TextStyle(fontSize: 12, color: c.textSecondary),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      task.protocolLabel,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: c.textSecondary,
-                      ),
-                    ),
-                    if (boosted) ...[
                       const SizedBox(width: 8),
-                      Icon(LucideIcons.zap, size: 12, color: c.statusWarning),
+                      Text(
+                        task.sizeText,
+                        style: TextStyle(fontSize: 12, color: c.textSecondary),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        task.protocolLabel,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: c.textSecondary,
+                        ),
+                      ),
+                      if (boosted) ...[
+                        const SizedBox(width: 8),
+                        Icon(LucideIcons.zap, size: 12, color: c.statusWarning),
+                      ],
                     ],
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -742,13 +812,23 @@ class _Actions extends StatelessWidget {
 
     final children = <Widget>[];
     if (task.status == TaskStatus.completed) {
+      final filePath = task.filePath;
       children.add(
         Row(
           children: [
             Expanded(
               child: MobilePrimaryButton(
+                label: s.mobileOpenFile,
+                icon: LucideIcons.file,
+                onTap: () => _openFileFromActions(context, filePath),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: MobilePrimaryButton(
                 label: s.copyUrl,
                 icon: LucideIcons.copy,
+                filled: false,
                 onTap: () {
                   Clipboard.setData(ClipboardData(text: task.url));
                   showMobileToast(context, s.urlCopied);
@@ -809,4 +889,26 @@ class _Actions extends StatelessWidget {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
   }
+
+  void _openFileFromActions(BuildContext context, String filePath) async {
+    try {
+      await openFile(filePath);
+    } catch (e) {
+      if (context.mounted) {
+        showMobileToast(context, _openFileErrorText(LocaleScope.of(context), e));
+      }
+    }
+  }
+}
+
+/// 移动端"打开文件"失败原因 → i18n 提示文案。
+String _openFileErrorText(S s, Object e) {
+  if (e is OpenFileException) {
+    return switch (e.error) {
+      OpenFileError.notFound => s.mobileFileNotFound,
+      OpenFileError.noHandler => s.mobileNoAppToOpen,
+      OpenFileError.failed => s.mobileOpenFileFailed,
+    };
+  }
+  return s.mobileOpenFileFailed;
 }

@@ -1404,6 +1404,12 @@ class S {
   String get mobileBoostOn => _t('已启用 Boost 优先下载', 'Boost enabled');
   String get mobileBoostOff => _t('已取消 Boost', 'Boost cancelled');
   String get mobileRetry => _t('重试', 'Retry');
+  String get mobileOpenFile => _t('打开文件', 'Open File');
+  String get mobileOpenFileFailed => _t('无法打开文件', 'Failed to open file');
+  String get mobileFileNotFound =>
+      _t('文件不存在，可能已被移动或删除', 'File not found — it may have been moved or deleted');
+  String get mobileNoAppToOpen =>
+      _t('没有应用可以打开此文件', 'No app can open this file');
   String get mobileTaskDeleted => _t('已删除任务', 'Task deleted');
   String get mobileTaskFileDeleted => _t('已删除任务和文件', 'Task & file deleted');
   String get mobilePrivacyPolicy => _t('隐私政策', 'Privacy Policy');
