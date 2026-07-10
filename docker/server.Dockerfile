@@ -1,33 +1,51 @@
 # syntax=docker/dockerfile:1
 # FluxDown headless 服务器镜像：Web SPA（web/）+ fluxdown-server（native/server）。
+# 多架构：linux/amd64 + linux/arm64。编译阶段固定跑在构建机原生架构
+# （--platform=$BUILDPLATFORM）并按 TARGETARCH 交叉编译，避免 QEMU 模拟下的
+# Rust 全量编译（数小时级）；仅最终运行时层按目标架构拉取。
 #
 # 构建上下文 = 仓库根目录（依赖根 .dockerignore 收窄上下文）：
 #   docker build -f docker/server.Dockerfile -t fluxdown-server .
+#   docker buildx build --platform linux/amd64,linux/arm64 -f docker/server.Dockerfile .
 #
 # 运行（首次启动 stderr 会打印管理 token，务必保存）：
 #   docker run -d -p 17800:17800 -v fluxdown-data:/data fluxdown-server
 
-# ── Stage 1: Web 前端（Vite SPA，bun 锁文件）──
-FROM oven/bun:1 AS web
+# ── Stage 1: Web 前端（Vite SPA，bun 锁文件；产物架构无关，跑在构建机架构）──
+FROM --platform=$BUILDPLATFORM oven/bun:1 AS web
 WORKDIR /src/web
 COPY web/package.json web/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY web/ ./
 RUN bun run build
 
-# ── Stage 2: Rust 服务器（workspace 成员，仅编译 fluxdown_server）──
-# Linux 侧全 rustls（无 openssl），SQLite 由 sqlx 捆绑编译，无额外系统依赖。
-FROM rust:1-bookworm AS server
+# ── Stage 2: Rust 服务器（workspace 成员，仅编译 fluxdown_server，按 TARGETARCH 交叉编译）──
+# Linux 侧全 rustls（无 openssl），SQLite 由 sqlx 捆绑编译（cc 交叉工具链），无额外系统依赖。
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS server
+ARG TARGETARCH
 WORKDIR /src
+# aarch64 交叉链接器 / cc（libsqlite3-sys 等 build script 用）
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+    AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
+RUN case "$TARGETARCH" in \
+      amd64) echo x86_64-unknown-linux-gnu > /rust-target ;; \
+      arm64) echo aarch64-unknown-linux-gnu > /rust-target \
+        && rustup target add aarch64-unknown-linux-gnu \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+        && rm -rf /var/lib/apt/lists/* ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac
 COPY Cargo.toml Cargo.lock ./
 COPY native/ native/
 # cache mount：本地重复构建增量编译；registry 缓存避免重复下载
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p fluxdown_server \
-    && cp target/release/fluxdown-server /usr/local/bin/fluxdown-server
+    cargo build --release --locked -p fluxdown_server --target "$(cat /rust-target)" \
+    && cp "target/$(cat /rust-target)/release/fluxdown-server" /usr/local/bin/fluxdown-server
 
-# ── Stage 3: 运行时（debian-slim + ca-certificates，rustls 读系统根证书）──
+# ── Stage 3: 运行时（目标架构 debian-slim + ca-certificates，rustls 读系统根证书）──
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \

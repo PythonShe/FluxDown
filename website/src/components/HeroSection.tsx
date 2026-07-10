@@ -479,6 +479,56 @@ export default function HeroSection() {
     window.__toggleTheme?.();
   }, []);
 
+  // ── 检测访客系统 → 默认下载资产；「更多版本」下拉切换下载区平台 ──
+  const [heroOS, setHeroOS] = useState<
+    "windows" | "macos" | "linux" | "android"
+  >("windows");
+  const [heroAssetUrl, setHeroAssetUrl] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  useEffect(() => {
+    const ua = navigator.userAgent;
+    const os = /Android/i.test(ua)
+      ? ("android" as const)
+      : /Mac|iPhone|iPad/i.test(ua)
+        ? ("macos" as const)
+        : /Linux|X11/i.test(ua)
+          ? ("linux" as const)
+          : ("windows" as const);
+    setHeroOS(os);
+    fetch("/api/release")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        const pick =
+          os === "windows"
+            ? data.assets?.setup
+            : os === "macos"
+              ? (data.assets?.macos_dmg_arm64 ?? data.assets?.macos_dmg_x64)
+              : os === "linux"
+                ? data.assets?.linux_appimage
+                : (data.mobile?.assets?.android_arm64 ??
+                  data.mobile?.assets?.android_universal);
+        if (pick?.download_url) setHeroAssetUrl(pick.download_url);
+      })
+      .catch(() => {});
+  }, []);
+
+  const heroOSLabel = { windows: "Windows", macos: "macOS", linux: "Linux", android: "Android" }[heroOS];
+
+  const selectPlatform = useCallback((key: string) => {
+    setMoreOpen(false);
+    // DownloadSection 为 client:visible 懒水合，事件可能无人监听——先存挂起值兜底
+    (window as { __fluxdownPendingPlatform?: string }).__fluxdownPendingPlatform =
+      key;
+    window.dispatchEvent(
+      new CustomEvent("fluxdown:select-platform", { detail: key }),
+    );
+    document
+      .getElementById("download")
+      ?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
   useEffect(() => {
     const interval = setInterval(() => {
       setAnimOffset((prev) => (prev >= 20 ? 0 : prev + 0.15));
@@ -597,7 +647,7 @@ export default function HeroSection() {
           className="mt-10 flex flex-wrap items-center justify-center gap-3"
         >
           <a
-            href="#download"
+            href={heroAssetUrl ?? "#download"}
             className="group inline-flex items-center gap-2.5 rounded-xl bg-[#3B82F6] px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[#3B82F6]/25 hover:shadow-[#3B82F6]/40 hover:bg-[#3B82F6]/90 transition-all duration-300"
           >
             <svg
@@ -613,8 +663,70 @@ export default function HeroSection() {
               <polyline points="7 10 12 15 17 10" />
               <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
-            {t("hero.cta")}
+            {t("hero.ctaFor", { os: heroOSLabel })}
           </a>
+
+          {/* 更多版本下拉 */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setMoreOpen((v) => !v)}
+              aria-expanded={moreOpen}
+              className="group inline-flex items-center gap-2 rounded-xl border border-dark-border bg-dark-surface1/60 px-6 py-3.5 text-sm font-semibold text-dark-text backdrop-blur-sm hover:border-dark-text-muted/50 hover:bg-dark-surface2 transition-all duration-300"
+            >
+              {t("hero.moreVersions")}
+              <svg
+                className={`h-3.5 w-3.5 text-dark-text-secondary transition-transform duration-200 ${moreOpen ? "rotate-180" : ""}`}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            <AnimatePresence>
+              {moreOpen && (
+                <>
+                  {/* 点击外部关闭 */}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setMoreOpen(false)}
+                  />
+                  <motion.div
+                    initial={{ opacity: 0, y: -6, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -6, scale: 0.97 }}
+                    transition={{ duration: 0.15, ease: "easeOut" }}
+                    className="absolute left-0 top-full mt-2 z-50 w-44 rounded-xl border border-dark-border bg-dark-surface1/95 backdrop-blur-md shadow-xl shadow-black/30 p-1.5"
+                  >
+                    {(
+                      [
+                        { key: "windows", label: t("dl.windows") },
+                        { key: "macos", label: t("dl.macos") },
+                        { key: "linux", label: t("dl.linux") },
+                        { key: "docker", label: t("dl.docker") },
+                        { key: "web", label: t("dl.web") },
+                        { key: "mobile", label: t("dl.mobile") },
+                        { key: "cli", label: t("dl.cli") },
+                      ] as const
+                    ).map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => selectPlatform(item.key)}
+                        className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-medium text-dark-text-secondary hover:bg-dark-surface2 hover:text-dark-text transition-colors"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
           <a
             href={GITHUB_REPO_URL}
             target="_blank"

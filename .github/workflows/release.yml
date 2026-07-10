@@ -1357,8 +1357,9 @@ jobs:
           name: cli-bin-${{ matrix.platform }}
           path: release-assets/*
 
-  # ── 并行 Job 5c: Docker 镜像（linux/amd64，推 ghcr.io）──
+  # ── 并行 Job 5c: Docker 镜像（linux/amd64 + linux/arm64，推 ghcr.io）──
   # linux 二进制 tarball 已由 build-server-binaries（musl 静态链接）产出，此处只推镜像。
+  # Rust 编译在 Dockerfile 内按 TARGETARCH 交叉编译（不走 QEMU）；QEMU 仅用于 arm64 运行时层的 apt。
   build-server-docker:
     name: Build Server (Docker)
     runs-on: ubuntu-latest
@@ -1372,6 +1373,11 @@ jobs:
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU (arm64 runtime layer)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1398,6 +1404,7 @@ jobs:
         with:
           context: .
           file: docker/server.Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -1749,7 +1756,7 @@ jobs:
           解压后直接运行 \`fluxdown-server\`（Windows 为 \`fluxdown-server.exe\`），浏览器访问 \`http://127.0.0.1:17800\`。
           首次启动会在终端打印管理 token，务必保存。文件校验见 \`SHA256SUMS.txt\`。
 
-          ## 🐳 Docker
+          ## 🐳 Docker（linux/amd64 · linux/arm64）
 
           \`\`\`bash
           docker pull ghcr.io/${{ github.repository_owner }}/fluxdown-server:${VERSION}

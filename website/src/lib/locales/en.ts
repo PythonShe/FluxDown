@@ -232,6 +232,8 @@ const en = {
   "hero.subtitle":
     "A Rust-powered download manager with HTTP, FTP, BitTorrent and HLS/DASH streaming support. Smart multi-threaded acceleration, seamless browser integration, beautiful interface — free forever, zero ads.",
   "hero.cta": "Download",
+  "hero.ctaFor": "Download for {os}",
+  "hero.moreVersions": "More Versions",
   "hero.github": "Star on GitHub",
   "hero.stat1.value": "10x",
   "hero.stat1.label": "Faster Downloads",
@@ -386,7 +388,10 @@ const en = {
   "dl.cliGuide": "View CLI Docs",
   "dl.mobile": "Mobile",
   "dl.docker": "Docker",
-  "dl.dockerArch": "Self-hosted Web UI",
+  "dl.dockerArch": "Self-hosted Web UI · amd64 / arm64",
+  "dl.platformLabel": "Platform",
+  "dl.archLabel": "CPU Architecture",
+  "dl.downloadNow": "Download Now",
   "dl.dockerDeploy": "Deploy with Docker",
   "dl.dockerHint":
     "Then open http://localhost:17800 — the admin token is printed to the logs on first start (visible only once).",

@@ -4,7 +4,6 @@ import {
   Download,
   Check,
   Loader2,
-  ChevronDown,
   Puzzle,
   TrendingUp,
   Bell,
@@ -143,9 +142,8 @@ export default function DownloadSection() {
   const { t, locale } = useLocale();
   const [release, setRelease] = useState<ReleaseInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showPortable, setShowPortable] = useState<string | null>(null);
   const [selectedArch, setSelectedArch] = useState<Record<string, string>>({});
-  const [showDocker, setShowDocker] = useState(false);
+  const [activePlatform, setActivePlatform] = useState("windows");
   const [dockerTab, setDockerTab] = useState<"run" | "compose">("run");
   const [dockerCopied, setDockerCopied] = useState(false);
 
@@ -182,6 +180,27 @@ export default function DownloadSection() {
       .then((data: ReleaseInfo) => setRelease(data))
       .catch((err) => console.error("Failed to fetch release info:", err))
       .finally(() => setLoading(false));
+  }, []);
+
+  // Hero「更多版本」下拉选中平台后跳转到本区并切换面板。
+  // 本组件 client:visible 懒水合，事件可能先于监听器发出——挂载时消费挂起值兜底。
+  useEffect(() => {
+    const KEYS = ["windows", "macos", "linux", "docker", "web", "mobile", "cli"];
+    const apply = (key: unknown) => {
+      if (typeof key === "string" && KEYS.includes(key))
+        setActivePlatform(key);
+    };
+    const w = window as { __fluxdownPendingPlatform?: string };
+    apply(w.__fluxdownPendingPlatform);
+    delete w.__fluxdownPendingPlatform;
+    const handler = (e: Event) => {
+      apply((e as CustomEvent<string>).detail);
+      (window as { __fluxdownPendingPlatform?: string }).__fluxdownPendingPlatform =
+        undefined;
+    };
+    window.addEventListener("fluxdown:select-platform", handler);
+    return () =>
+      window.removeEventListener("fluxdown:select-platform", handler);
   }, []);
 
   const [subscribeTarget, setSubscribeTarget] = useState<string | null>(null);
@@ -269,6 +288,7 @@ export default function DownloadSection() {
     arch: string;
     available: boolean;
     primary: boolean;
+    badge: string;
     /** 独立图标背景样式（覆盖 primary/非 primary 默认背景），如 Docker/Web 版品牌色 */
     iconBg?: string;
     /** 平台独立版本号（如 FluxDown Server），缺省时用桌面客户端版本 */
@@ -524,430 +544,469 @@ export default function DownloadSection() {
             </p>
           </motion.div>
 
-          {/* Platform cards */}
+          {/* Platform selector panel（左侧平台列表 + 右侧详情面板） */}
           <motion.div
-            className="flex flex-wrap justify-center gap-5 max-w-4xl mx-auto mb-16"
+            className="max-w-4xl mx-auto mb-16"
             initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ duration: 0.6, delay: 0.1 }}
           >
-            {platforms.map((p, i) => {
-              const Icon = p.icon;
-              const currentArchLabel =
-                selectedArch[p.key] ?? p.archVariants?.[0]?.label;
-              const activeVariant = p.archVariants?.find(
-                (v) => v.label === currentArchLabel,
-              );
-              const effectiveSetup = activeVariant?.setup ?? p.setup;
-              const effectivePortable = activeVariant?.portable ?? p.portable;
-              return (
-                <motion.div
-                  key={p.key}
-                  initial={{ opacity: 0, y: 20 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ delay: 0.1 * i, duration: 0.5 }}
-                  className={`relative group rounded-xl border p-6 text-center w-full sm:w-[calc(33.333%-14px)] ${
-                    p.primary
-                      ? "border-brand-blue/30 bg-gradient-to-b from-dark-surface1 to-dark-surface2 hover:border-brand-blue/50 transition-colors duration-300"
-                      : "border-dark-border/60 bg-dark-surface1 hover:-translate-y-1 hover:border-dark-text-muted/20 hover:shadow-lg hover:shadow-black/20 transition-all duration-300 ease-out"
-                  }`}
-                >
-                  {p.available ? (
-                    <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-brand-blue text-[10px] font-semibold text-white flex items-center gap-1 whitespace-nowrap">
-                      <Check className="w-3 h-3" />
-                      {p.badge}
-                    </div>
-                  ) : (
-                    <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full border border-dashed border-dark-text-muted/30 bg-dark-surface1 text-[10px] font-medium text-dark-text-muted flex items-center gap-1 whitespace-nowrap">
-                      {p.badge}
-                    </div>
-                  )}
-                  <div
-                    className={`w-14 h-14 rounded-xl flex items-center justify-center mx-auto mb-4 transition-all duration-300 ${
-                      p.iconBg
-                        ? p.iconBg
-                        : p.primary
-                          ? "bg-gradient-to-br from-brand-sky to-brand-cyan"
-                          : "bg-dark-surface2 border border-dark-border/50 group-hover:border-brand-blue/20 group-hover:bg-gradient-to-br group-hover:from-brand-blue/10 group-hover:to-brand-cyan/5"
-                    }`}
-                  >
-                    <Icon
-                      className={`w-7 h-7 transition-colors duration-300 ${
-                        p.iconBg || p.primary
-                          ? "text-white"
-                          : "text-dark-text-muted group-hover:text-brand-blue/70"
-                      }`}
-                      color="currentColor"
-                    />
-                  </div>
-                  <h3 className="text-base font-semibold text-dark-text">
-                    {p.name}
-                  </h3>
-
-                  {/* Arch display: segmented toggle for multi-arch, plain text for single */}
-                  {p.archVariants && p.archVariants.length > 1 ? (
-                    <div className="flex items-center justify-center gap-1 mt-2">
-                      {p.archVariants.map((v) => (
-                        <button
-                          key={v.label}
-                          type="button"
-                          onClick={() => {
-                            setSelectedArch((prev) => ({
-                              ...prev,
-                              [p.key]: v.label,
-                            }));
-                            setShowPortable(null);
-                          }}
-                          className={`px-2.5 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                            currentArchLabel === v.label
-                              ? "bg-brand-blue/20 text-brand-blue border border-brand-blue/30"
-                              : "text-dark-text-muted hover:text-dark-text-secondary border border-dark-border/60"
-                          }`}
-                        >
-                          {v.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-dark-text-muted mt-1">
-                      {p.arch}
-                    </p>
-                  )}
-
-                  {/* 版本号 */}
-                  {p.available && release && p.key !== "docker" && (
-                    <p className="text-[10px] text-dark-text-muted mt-1">
-                      {t("dl.version", {
-                        version: p.version ?? release.version,
-                      })}
-                      {effectiveSetup && (
-                        <span className="ml-1.5">
-                          ({formatSize(effectiveSetup.size)})
-                        </span>
-                      )}
-                    </p>
-                  )}
-
-                  {/* 系统要求提示 */}
-                  {p.key === "windows" && (
-                    <p className="text-[10px] text-dark-text-muted/60 mt-0.5">
-                      {t("dl.sysReq.windows")}
-                    </p>
-                  )}
-
-                  {p.key === "docker" ? (
-                    <div className="mt-4 flex flex-col gap-2">
+            <div className="flex flex-col md:flex-row rounded-2xl border border-dark-border/60 bg-dark-surface1 overflow-hidden md:min-h-[400px]">
+              {/* 平台侧栏（移动端为顶部横向滚动条） */}
+              <aside className="md:w-52 shrink-0 border-b md:border-b-0 md:border-r border-dark-border/60 bg-dark-surface2/40 p-2.5 md:p-3">
+                <p className="hidden md:block px-3 pt-1 pb-2 text-[10px] font-semibold uppercase tracking-widest text-dark-text-muted">
+                  {t("dl.platformLabel")}
+                </p>
+                <nav className="flex md:flex-col gap-1 overflow-x-auto md:overflow-visible">
+                  {platforms.map((p) => {
+                    const Icon = p.icon;
+                    const isActive = activePlatform === p.key;
+                    return (
                       <button
+                        key={p.key}
                         type="button"
-                        onClick={() => setShowDocker((v) => !v)}
-                        className="inline-flex items-center justify-center gap-2 w-full rounded-lg bg-brand-blue px-5 py-2.5 text-xs font-semibold text-white hover:bg-brand-blue/90 transition-colors shadow-lg shadow-brand-blue/20"
+                        onClick={() => setActivePlatform(p.key)}
+                        className={`relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-xs font-semibold whitespace-nowrap transition-colors duration-200 ${
+                          isActive
+                            ? "text-dark-text"
+                            : "text-dark-text-muted hover:text-dark-text-secondary hover:bg-dark-surface2/80"
+                        }`}
                       >
-                        <SiDocker className="w-3.5 h-3.5" color="currentColor" />
-                        {t("dl.dockerDeploy")}
-                        <ChevronDown
-                          className={`w-3.5 h-3.5 transition-transform ${showDocker ? "rotate-180" : ""}`}
-                        />
-                      </button>
-                    </div>
-                  ) : p.available ? (
-                    <div className="mt-4 flex flex-col gap-2">
-                      {/* 主下载按钮（安装包） */}
-                      {loading ? (
-                        <div className="inline-flex items-center justify-center gap-2 w-full rounded-lg bg-brand-blue/50 px-5 py-2.5 text-xs font-semibold text-white/70 cursor-wait">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          {t("dl.loading")}
-                        </div>
-                      ) : effectiveSetup ? (
-                        <a
-                          href={effectiveSetup.download_url}
-                          className="inline-flex items-center justify-center gap-2 w-full rounded-lg bg-brand-blue px-5 py-2.5 text-xs font-semibold text-white hover:bg-brand-blue/90 transition-colors shadow-lg shadow-brand-blue/20"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          {t("dl.downloadBtn")} —{" "}
-                          {p.setupLabel ?? t("dl.installPkg")}
-                        </a>
-                      ) : (
-                        <a
-                          href="#"
-                          className="inline-flex items-center justify-center gap-2 w-full rounded-lg bg-brand-blue px-5 py-2.5 text-xs font-semibold text-white hover:bg-brand-blue/90 transition-colors shadow-lg shadow-brand-blue/20"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          {t("dl.downloadBtn")}
-                        </a>
-                      )}
-
-                      {/* 多格式下载折叠（Linux 等平台） */}
-                      {p.packages && p.packages.some((pkg) => pkg.asset) && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setShowPortable(
-                                showPortable === p.key ? null : p.key,
-                              )
-                            }
-                            className="inline-flex items-center justify-center gap-1 text-[10px] text-dark-text-muted hover:text-dark-text-secondary transition-colors"
-                          >
-                            {t("dl.moreFormats")}
-                            <ChevronDown
-                              className={`w-3 h-3 transition-transform ${showPortable === p.key ? "rotate-180" : ""}`}
-                            />
-                          </button>
-                          {showPortable === p.key && (
-                            <div className="flex flex-col gap-1.5 w-full">
-                              {p.packages
-                                .filter((pkg) => pkg.asset)
-                                .map((pkg) => (
-                                  <a
-                                    key={pkg.label}
-                                    href={pkg.asset!.download_url}
-                                    className="inline-flex items-center justify-center gap-2 w-full rounded-lg border border-dark-border px-5 py-2 text-[10px] font-medium text-dark-text-secondary hover:bg-dark-surface3 transition-colors"
-                                  >
-                                    <Download className="w-3 h-3" />
-                                    {pkg.label} ({formatSize(pkg.asset!.size)})
-                                  </a>
-                                ))}
-                            </div>
-                          )}
-                        </>
-                      )}
-
-                      {/* 便携版下载折叠（Windows 等单一便携格式平台） */}
-                      {!p.packages && effectivePortable && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setShowPortable(
-                                showPortable === p.key ? null : p.key,
-                              )
-                            }
-                            className="inline-flex items-center justify-center gap-1 text-[10px] text-dark-text-muted hover:text-dark-text-secondary transition-colors"
-                          >
-                            {p.portableLabel ?? t("dl.portablePkg")}
-                            <ChevronDown
-                              className={`w-3 h-3 transition-transform ${showPortable === p.key ? "rotate-180" : ""}`}
-                            />
-                          </button>
-                          {showPortable === p.key && (
-                            <a
-                              href={effectivePortable.download_url}
-                              className="inline-flex items-center justify-center gap-2 w-full rounded-lg border border-dark-border px-5 py-2 text-[10px] font-medium text-dark-text-secondary hover:bg-dark-surface3 transition-colors"
-                            >
-                              <Download className="w-3 h-3" />
-                              {p.portableLabel ?? t("dl.portablePkg")} (
-                              {formatSize(effectivePortable.size)})
-                            </a>
-                          )}
-                        </>
-                      )}
-
-                      {/* macOS 「已损坏」提示 */}
-                      {p.key === "macos" && (
-                        <a
-                          href="/macos-gatekeeper"
-                          className="inline-flex items-center justify-center gap-1.5 mt-1 rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-[10px] text-dark-text hover:bg-amber-500/25 hover:border-amber-500/70 transition-colors"
-                        >
-                          <AlertTriangle className="w-3 h-3 flex-shrink-0 text-amber-500 shrink-0" />
-                          {t("dl.macosWarning")}
-                          <span className="text-amber-600 underline underline-offset-2 font-semibold">
-                            {t("dl.macosWarningLink")}
-                          </span>
-                        </a>
-                      )}
-
-                      {/* Web 版（FluxDown Server）部署指南 */}
-                      {p.key === "web" && (
-                        <a
-                          href={`/docs/${locale}/headless-server/setup/`}
-                          className="inline-flex items-center justify-center gap-1 mt-1 text-[10px] text-dark-text-muted hover:text-brand-blue underline underline-offset-2 transition-colors"
-                        >
-                          {t("dl.webGuide")}
-                        </a>
-                      )}
-
-                      {/* CLI 文档链接 */}
-                      {p.key === "cli" && (
-                        <a
-                          href={`/docs/${locale}/api/cli/`}
-                          className="inline-flex items-center justify-center gap-1 mt-1 text-[10px] text-dark-text-muted hover:text-brand-blue underline underline-offset-2 transition-colors"
-                        >
-                          {t("dl.cliGuide")}
-                        </a>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="mt-4 flex flex-col gap-2 w-full">
-                      <AnimatePresence mode="wait">
-                        {subscribeTarget === p.key ? (
-                          <motion.div
-                            key="subscribe-form"
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: "auto" }}
-                            exit={{ opacity: 0, height: 0 }}
-                            transition={{ duration: 0.2 }}
-                            className="flex flex-col gap-2"
-                          >
-                            {subscribeStatus === "success" ? (
-                              <div className="flex items-center justify-center gap-1.5 rounded-lg border border-success/30 bg-success/10 px-4 py-2.5 text-xs font-medium text-success">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                {t("dl.subscribed")}
-                              </div>
-                            ) : subscribeStatus === "duplicate" ? (
-                              <div className="flex items-center justify-center gap-1.5 rounded-lg border border-brand-blue/30 bg-brand-blue/10 px-4 py-2.5 text-xs font-medium text-brand-blue">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                {t("dl.alreadySubscribed")}
-                              </div>
-                            ) : (
-                              <>
-                                <div className="flex gap-1.5">
-                                  <input
-                                    type="email"
-                                    value={subscribeEmail}
-                                    onChange={(e) =>
-                                      setSubscribeEmail(e.target.value)
-                                    }
-                                    onKeyDown={(e) =>
-                                      e.key === "Enter" &&
-                                      handleSubscribe(p.key)
-                                    }
-                                    placeholder={t("dl.emailPlaceholder")}
-                                    disabled={subscribeStatus === "loading"}
-                                    className="flex-1 min-w-0 rounded-lg border border-dark-border bg-dark-surface2 px-3 py-2 text-xs text-dark-text placeholder:text-dark-text-muted/50 focus:outline-none focus:border-brand-blue/50 disabled:opacity-50 transition-colors"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSubscribe(p.key)}
-                                    disabled={
-                                      subscribeStatus === "loading" ||
-                                      !subscribeEmail.trim()
-                                    }
-                                    className="flex-shrink-0 rounded-lg bg-brand-blue px-3 py-2 text-xs font-semibold text-white hover:bg-brand-blue/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                  >
-                                    {subscribeStatus === "loading" ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    ) : (
-                                      <Bell className="w-3.5 h-3.5" />
-                                    )}
-                                  </button>
-                                </div>
-                                {subscribeStatus === "error" && (
-                                  <div className="flex items-center justify-center gap-1 text-[10px] text-red-400">
-                                    <AlertCircle className="w-3 h-3" />
-                                    {t("dl.subscribeError")}
-                                  </div>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSubscribeTarget(null);
-                                    setSubscribeStatus("idle");
-                                  }}
-                                  className="text-[10px] text-dark-text-muted hover:text-dark-text-secondary transition-colors"
-                                >
-                                  {t("dl.comingSoon")}
-                                </button>
-                              </>
-                            )}
-                          </motion.div>
-                        ) : (
-                          <motion.button
-                            key="notify-btn"
-                            type="button"
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => {
-                              setSubscribeTarget(p.key);
-                              setSubscribeStatus("idle");
-                              setSubscribeEmail("");
+                        {isActive && (
+                          <motion.span
+                            layoutId="dlActivePlatform"
+                            className="absolute inset-0 rounded-lg bg-dark-surface3 border border-dark-border/80 shadow-sm"
+                            transition={{
+                              type: "spring",
+                              stiffness: 500,
+                              damping: 38,
                             }}
-                            className="inline-flex items-center justify-center gap-2 w-full rounded-lg border border-dashed border-dark-text-muted/30 px-5 py-2.5 text-xs font-medium text-dark-text-muted hover:border-brand-blue/40 hover:text-brand-blue/80 transition-colors duration-200"
-                          >
-                            <Bell className="w-3.5 h-3.5" />
-                            {t("dl.notifyMe")}
-                          </motion.button>
+                          />
                         )}
-                      </AnimatePresence>
-                    </div>
-                  )}
-                </motion.div>
-              );
-            })}
-          </motion.div>
+                        <span className="relative z-10 flex items-center gap-2.5">
+                          <Icon
+                            className={`w-4 h-4 transition-colors ${isActive ? "text-brand-blue" : ""}`}
+                            color="currentColor"
+                          />
+                          {p.name}
+                          {!p.available && (
+                            <span
+                              className="w-1.5 h-1.5 rounded-full bg-dark-text-muted/40"
+                              aria-hidden
+                            />
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </nav>
+              </aside>
 
-          {/* Docker 部署面板（点击 Docker 卡片展开） */}
-          <AnimatePresence>
-            {showDocker && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.25 }}
-                className="max-w-4xl mx-auto -mt-10 mb-16 overflow-hidden"
-              >
-                <div className="rounded-xl border border-dark-border/60 bg-dark-surface1 p-5">
-                  <div className="flex items-center justify-between gap-2 mb-3">
-                    {/* Tab 切换 */}
-                    <div className="flex items-center gap-1 rounded-lg bg-dark-surface2 p-1">
-                      {(
-                        [
-                          { key: "run", label: "docker run" },
-                          { key: "compose", label: "docker-compose.yml" },
-                        ] as const
-                      ).map((tab) => (
-                        <button
-                          key={tab.key}
-                          type="button"
-                          onClick={() => setDockerTab(tab.key)}
-                          className={`px-3 py-1 rounded-md text-[11px] font-semibold font-mono transition-colors ${
-                            dockerTab === tab.key
-                              ? "bg-brand-blue/20 text-brand-blue"
-                              : "text-dark-text-muted hover:text-dark-text-secondary"
-                          }`}
-                        >
-                          {tab.label}
-                        </button>
-                      ))}
-                    </div>
-                    {/* 复制按钮 */}
-                    <button
-                      type="button"
-                      onClick={handleDockerCopy}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-dark-border px-3 py-1.5 text-[11px] font-medium text-dark-text-secondary hover:bg-dark-surface3 transition-colors"
-                    >
-                      {dockerCopied ? (
-                        <>
-                          <Check className="w-3 h-3 text-success" />
-                          {t("dl.dockerCopied")}
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3" />
-                          {t("dl.dockerCopy")}
-                        </>
-                      )}
-                    </button>
-                  </div>
-                  <pre className="rounded-lg bg-dark-bg border border-dark-border/60 p-4 text-xs leading-relaxed text-dark-text-secondary overflow-x-auto font-mono">
-                    <code>
-                      {dockerTab === "run" ? DOCKER_RUN_CMD : DOCKER_COMPOSE_YML}
-                    </code>
-                  </pre>
-                  {dockerTab === "compose" && (
-                    <pre className="mt-2 rounded-lg bg-dark-bg border border-dark-border/60 p-4 text-xs leading-relaxed text-dark-text-secondary overflow-x-auto font-mono">
-                      <code>docker compose up -d</code>
-                    </pre>
-                  )}
-                  <p className="mt-3 text-[11px] text-dark-text-muted">
-                    {t("dl.dockerHint")}
-                  </p>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              {/* 详情面板 */}
+              <div className="flex-1 min-w-0 p-5 sm:p-7">
+                <AnimatePresence mode="wait">
+                  {(() => {
+                    const p =
+                      platforms.find((x) => x.key === activePlatform) ??
+                      platforms[0];
+                    const Icon = p.icon;
+                    const currentArchLabel =
+                      selectedArch[p.key] ?? p.archVariants?.[0]?.label;
+                    const activeVariant = p.archVariants?.find(
+                      (v) => v.label === currentArchLabel,
+                    );
+                    const effectiveSetup = activeVariant?.setup ?? p.setup;
+                    const effectivePortable =
+                      activeVariant?.portable ?? p.portable;
+                    const formats: Array<{
+                      label: string;
+                      asset: ReleaseAsset;
+                    }> = [];
+                    if (effectivePortable)
+                      formats.push({
+                        label: p.portableLabel ?? t("dl.portablePkg"),
+                        asset: effectivePortable,
+                      });
+                    for (const pkg of p.packages ?? [])
+                      if (pkg.asset)
+                        formats.push({ label: pkg.label, asset: pkg.asset });
+                    return (
+                      <motion.div
+                        key={p.key}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                        transition={{ duration: 0.18, ease: "easeOut" }}
+                      >
+                        {/* 头部：图标 + 名称 + 徽标 + 版本 */}
+                        <div className="flex items-start gap-4">
+                          <div
+                            className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+                              p.iconBg ??
+                              "bg-gradient-to-br from-brand-sky to-brand-cyan"
+                            }`}
+                          >
+                            <Icon
+                              className="w-6 h-6 text-white"
+                              color="currentColor"
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-base font-semibold text-dark-text">
+                                {p.name}
+                              </h3>
+                              {p.available ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-blue/15 text-[10px] font-semibold text-brand-blue">
+                                  <Check className="w-3 h-3" />
+                                  {p.badge}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full border border-dashed border-dark-text-muted/30 text-[10px] font-medium text-dark-text-muted">
+                                  {p.badge}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-dark-text-muted mt-0.5">
+                              {p.arch}
+                            </p>
+                            {p.available && release && p.key !== "docker" && (
+                              <p className="text-[10px] text-dark-text-muted mt-0.5">
+                                {t("dl.version", {
+                                  version: p.version ?? release.version,
+                                })}
+                                {effectiveSetup && (
+                                  <span className="ml-1.5">
+                                    ({formatSize(effectiveSetup.size)})
+                                  </span>
+                                )}
+                              </p>
+                            )}
+                            {p.key === "windows" && (
+                              <p className="text-[10px] text-dark-text-muted/60 mt-0.5">
+                                {t("dl.sysReq.windows")}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-5 h-px bg-dark-border/60" />
+
+                        {p.key === "docker" ? (
+                          <div className="mt-5">
+                            <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+                              {/* Tab 切换 */}
+                              <div className="flex items-center gap-1 rounded-lg bg-dark-surface2 p-1">
+                                {(
+                                  [
+                                    { key: "run", label: "docker run" },
+                                    {
+                                      key: "compose",
+                                      label: "docker-compose.yml",
+                                    },
+                                  ] as const
+                                ).map((tab) => (
+                                  <button
+                                    key={tab.key}
+                                    type="button"
+                                    onClick={() => setDockerTab(tab.key)}
+                                    className={`relative px-3 py-1 rounded-md text-[11px] font-semibold font-mono transition-colors ${
+                                      dockerTab === tab.key
+                                        ? "text-brand-blue"
+                                        : "text-dark-text-muted hover:text-dark-text-secondary"
+                                    }`}
+                                  >
+                                    {dockerTab === tab.key && (
+                                      <motion.span
+                                        layoutId="dlDockerTab"
+                                        className="absolute inset-0 rounded-md bg-brand-blue/20"
+                                        transition={{
+                                          type: "spring",
+                                          stiffness: 500,
+                                          damping: 38,
+                                        }}
+                                      />
+                                    )}
+                                    <span className="relative z-10">
+                                      {tab.label}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                              {/* 复制按钮 */}
+                              <button
+                                type="button"
+                                onClick={handleDockerCopy}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-dark-border px-3 py-1.5 text-[11px] font-medium text-dark-text-secondary hover:bg-dark-surface3 transition-colors"
+                              >
+                                {dockerCopied ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-success" />
+                                    {t("dl.dockerCopied")}
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    {t("dl.dockerCopy")}
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                            <AnimatePresence mode="wait">
+                              <motion.pre
+                                key={dockerTab}
+                                initial={{ opacity: 0, y: 4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -4 }}
+                                transition={{ duration: 0.15 }}
+                                className="rounded-lg bg-dark-bg border border-dark-border/60 p-4 text-xs leading-relaxed text-dark-text-secondary overflow-x-auto font-mono"
+                              >
+                                <code>
+                                  {dockerTab === "run"
+                                    ? DOCKER_RUN_CMD
+                                    : DOCKER_COMPOSE_YML}
+                                </code>
+                              </motion.pre>
+                            </AnimatePresence>
+                            {dockerTab === "compose" && (
+                              <pre className="mt-2 rounded-lg bg-dark-bg border border-dark-border/60 p-4 text-xs leading-relaxed text-dark-text-secondary overflow-x-auto font-mono">
+                                <code>docker compose up -d</code>
+                              </pre>
+                            )}
+                            <p className="mt-3 text-[11px] text-dark-text-muted">
+                              {t("dl.dockerHint")}
+                            </p>
+                          </div>
+                        ) : p.available ? (
+                          <div className="mt-5 flex flex-col gap-4">
+                            {/* CPU 架构切换 */}
+                            {p.archVariants && p.archVariants.length > 1 && (
+                              <div>
+                                <p className="text-[10px] font-semibold uppercase tracking-widest text-dark-text-muted mb-2">
+                                  {t("dl.archLabel")}
+                                </p>
+                                <div className="inline-flex items-center gap-1 rounded-lg bg-dark-surface2 p-1">
+                                  {p.archVariants.map((v) => (
+                                    <button
+                                      key={v.label}
+                                      type="button"
+                                      onClick={() =>
+                                        setSelectedArch((prev) => ({
+                                          ...prev,
+                                          [p.key]: v.label,
+                                        }))
+                                      }
+                                      className={`relative px-3 py-1.5 rounded-md text-[11px] font-semibold transition-colors ${
+                                        currentArchLabel === v.label
+                                          ? "text-brand-blue"
+                                          : "text-dark-text-muted hover:text-dark-text-secondary"
+                                      }`}
+                                    >
+                                      {currentArchLabel === v.label && (
+                                        <motion.span
+                                          layoutId={`dlArch-${p.key}`}
+                                          className="absolute inset-0 rounded-md bg-brand-blue/20"
+                                          transition={{
+                                            type: "spring",
+                                            stiffness: 500,
+                                            damping: 38,
+                                          }}
+                                        />
+                                      )}
+                                      <span className="relative z-10">
+                                        {v.label}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 主下载按钮 */}
+                            {loading ? (
+                              <div className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-blue/50 px-6 py-3 text-sm font-semibold text-white/70 cursor-wait sm:self-start">
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                {t("dl.loading")}
+                              </div>
+                            ) : effectiveSetup ? (
+                              <a
+                                href={effectiveSetup.download_url}
+                                className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-blue px-6 py-3 text-sm font-semibold text-white hover:bg-brand-blue/90 transition-colors shadow-lg shadow-brand-blue/20 sm:self-start"
+                              >
+                                <Download className="w-4 h-4" />
+                                {t("dl.downloadNow")} —{" "}
+                                {p.setupLabel ?? t("dl.installPkg")}
+                                <span className="text-white/70 font-normal">
+                                  ({formatSize(effectiveSetup.size)})
+                                </span>
+                              </a>
+                            ) : null}
+
+                            {/* 其他格式 */}
+                            {formats.length > 0 && (
+                              <div>
+                                <p className="text-[10px] font-semibold uppercase tracking-widest text-dark-text-muted mb-2">
+                                  {t("dl.moreFormats")}
+                                </p>
+                                <div className="grid sm:grid-cols-2 gap-2">
+                                  {formats.map((f) => (
+                                    <a
+                                      key={f.label}
+                                      href={f.asset.download_url}
+                                      className="inline-flex items-center gap-2 rounded-lg border border-dark-border px-4 py-2.5 text-[11px] font-medium text-dark-text-secondary hover:bg-dark-surface3 hover:border-dark-text-muted/30 transition-colors"
+                                    >
+                                      <Download className="w-3 h-3 shrink-0" />
+                                      <span className="truncate">
+                                        {f.label}
+                                      </span>
+                                      <span className="ml-auto text-dark-text-muted shrink-0">
+                                        {formatSize(f.asset.size)}
+                                      </span>
+                                    </a>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* macOS 「已损坏」提示 */}
+                            {p.key === "macos" && (
+                              <a
+                                href="/macos-gatekeeper"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-[10px] text-dark-text hover:bg-amber-500/25 hover:border-amber-500/70 transition-colors self-start"
+                              >
+                                <AlertTriangle className="w-3 h-3 flex-shrink-0 text-amber-500 shrink-0" />
+                                {t("dl.macosWarning")}
+                                <span className="text-amber-600 underline underline-offset-2 font-semibold">
+                                  {t("dl.macosWarningLink")}
+                                </span>
+                              </a>
+                            )}
+
+                            {/* Web 版（FluxDown Server）部署指南 */}
+                            {p.key === "web" && (
+                              <a
+                                href={`/docs/${locale}/headless-server/setup/`}
+                                className="inline-flex items-center gap-1 text-[10px] text-dark-text-muted hover:text-brand-blue underline underline-offset-2 transition-colors self-start"
+                              >
+                                {t("dl.webGuide")}
+                              </a>
+                            )}
+
+                            {/* CLI 文档链接 */}
+                            {p.key === "cli" && (
+                              <a
+                                href={`/docs/${locale}/api/cli/`}
+                                className="inline-flex items-center gap-1 text-[10px] text-dark-text-muted hover:text-brand-blue underline underline-offset-2 transition-colors self-start"
+                              >
+                                {t("dl.cliGuide")}
+                              </a>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="mt-5 max-w-sm flex flex-col gap-2">
+                            <AnimatePresence mode="wait">
+                              {subscribeTarget === p.key ? (
+                                <motion.div
+                                  key="subscribe-form"
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: "auto" }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="flex flex-col gap-2"
+                                >
+                                  {subscribeStatus === "success" ? (
+                                    <div className="flex items-center justify-center gap-1.5 rounded-lg border border-success/30 bg-success/10 px-4 py-2.5 text-xs font-medium text-success">
+                                      <CheckCircle2 className="w-3.5 h-3.5" />
+                                      {t("dl.subscribed")}
+                                    </div>
+                                  ) : subscribeStatus === "duplicate" ? (
+                                    <div className="flex items-center justify-center gap-1.5 rounded-lg border border-brand-blue/30 bg-brand-blue/10 px-4 py-2.5 text-xs font-medium text-brand-blue">
+                                      <CheckCircle2 className="w-3.5 h-3.5" />
+                                      {t("dl.alreadySubscribed")}
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <div className="flex gap-1.5">
+                                        <input
+                                          type="email"
+                                          value={subscribeEmail}
+                                          onChange={(e) =>
+                                            setSubscribeEmail(e.target.value)
+                                          }
+                                          onKeyDown={(e) =>
+                                            e.key === "Enter" &&
+                                            handleSubscribe(p.key)
+                                          }
+                                          placeholder={t("dl.emailPlaceholder")}
+                                          disabled={
+                                            subscribeStatus === "loading"
+                                          }
+                                          className="flex-1 min-w-0 rounded-lg border border-dark-border bg-dark-surface2 px-3 py-2 text-xs text-dark-text placeholder:text-dark-text-muted/50 focus:outline-none focus:border-brand-blue/50 disabled:opacity-50 transition-colors"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleSubscribe(p.key)}
+                                          disabled={
+                                            subscribeStatus === "loading" ||
+                                            !subscribeEmail.trim()
+                                          }
+                                          className="flex-shrink-0 rounded-lg bg-brand-blue px-3 py-2 text-xs font-semibold text-white hover:bg-brand-blue/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                          {subscribeStatus === "loading" ? (
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                          ) : (
+                                            <Bell className="w-3.5 h-3.5" />
+                                          )}
+                                        </button>
+                                      </div>
+                                      {subscribeStatus === "error" && (
+                                        <div className="flex items-center justify-center gap-1 text-[10px] text-red-400">
+                                          <AlertCircle className="w-3 h-3" />
+                                          {t("dl.subscribeError")}
+                                        </div>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSubscribeTarget(null);
+                                          setSubscribeStatus("idle");
+                                        }}
+                                        className="text-[10px] text-dark-text-muted hover:text-dark-text-secondary transition-colors"
+                                      >
+                                        {t("dl.comingSoon")}
+                                      </button>
+                                    </>
+                                  )}
+                                </motion.div>
+                              ) : (
+                                <motion.button
+                                  key="notify-btn"
+                                  type="button"
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: 1 }}
+                                  exit={{ opacity: 0 }}
+                                  onClick={() => {
+                                    setSubscribeTarget(p.key);
+                                    setSubscribeStatus("idle");
+                                    setSubscribeEmail("");
+                                  }}
+                                  className="inline-flex items-center justify-center gap-2 w-full rounded-lg border border-dashed border-dark-text-muted/30 px-5 py-2.5 text-xs font-medium text-dark-text-muted hover:border-brand-blue/40 hover:text-brand-blue/80 transition-colors duration-200"
+                                >
+                                  <Bell className="w-3.5 h-3.5" />
+                                  {t("dl.notifyMe")}
+                                </motion.button>
+                              )}
+                            </AnimatePresence>
+                          </div>
+                        )}
+                      </motion.div>
+                    );
+                  })()}
+                </AnimatePresence>
+              </div>
+            </div>
+          </motion.div>
 
           {/* Scoop 安装（Windows 包管理器）*/}
           <motion.div

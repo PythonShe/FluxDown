@@ -225,6 +225,8 @@ const zhCN: Messages = {
   "hero.subtitle":
     "Rust 驱动的多协议下载管理器，支持 HTTP/FTP/BitTorrent 磁力链接及 HLS/DASH 流媒体，智能多线程加速与浏览器无缝集成。精美界面，极致性能，永久免费，零广告。",
   "hero.cta": "下载",
+  "hero.ctaFor": "下载 {os} 版",
+  "hero.moreVersions": "更多版本",
   "hero.github": "GitHub 开源",
   "hero.stat1.value": "10x",
   "hero.stat1.label": "极速下载",
@@ -377,7 +379,10 @@ const zhCN: Messages = {
   "dl.cliGuide": "查看 CLI 文档",
   "dl.mobile": "移动端",
   "dl.docker": "Docker",
-  "dl.dockerArch": "自托管 Web 版",
+  "dl.dockerArch": "自托管 Web 版 · amd64 / arm64",
+  "dl.platformLabel": "平台",
+  "dl.archLabel": "CPU 架构",
+  "dl.downloadNow": "立即下载",
   "dl.dockerDeploy": "Docker 一键部署",
   "dl.dockerHint":
     "启动后访问 http://localhost:17800，管理 token 在首次启动日志中打印（仅显示一次）。",
