@@ -993,19 +993,6 @@ class S {
   String get mobileGoGrant => _r('mobileGoGrant');
 
   // ─────────────────────────────────────────────
-  // 前台服务（移动端后台下载通知）
-  // ─────────────────────────────────────────────
-  String get fgServiceChannelName => _r('fgServiceChannelName');
-  String get fgServiceChannelDesc => _r('fgServiceChannelDesc');
-  String fgServiceActiveTitle(int count) => count == 1
-      ? _r('fgServiceActiveTitleOne', {'count': count})
-      : _r('fgServiceActiveTitleOther', {'count': count});
-  String fgServiceActiveText(String speed) =>
-      _r('fgServiceActiveText', {'speed': speed});
-  String get fgServiceIdleTitle => _r('fgServiceIdleTitle');
-  String get fgServiceIdleText => _r('fgServiceIdleText');
-
-  // ─────────────────────────────────────────────
   // 插件系统 — 已安装管理
   // ─────────────────────────────────────────────
   String get settingsCatPlugins => _r('settingsCatPlugins');

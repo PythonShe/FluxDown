@@ -12,7 +12,6 @@ import '../services/kv_store.dart';
 import '../services/update_service.dart';
 import 'screens/mobile_settings_screen.dart';
 import 'services/mobile_storage_service.dart';
-import '../services/foreground_service.dart';
 import 'screens/mobile_tasks_screen.dart';
 import 'services/share_intent_service.dart';
 import 'mobile_ui.dart';
@@ -55,22 +54,12 @@ class _MobileShellState extends State<MobileShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _settings.requestConfig();
     _ensureAndroidSaveDir();
-    // 前台服务：切换应用时保活进程、持续下载，任务栏常驻进度通知（仅移动端生效）
-    ForegroundServiceManager.instance.start(
-      _controller,
-      widget.localeNotifier.s,
-    );
-    widget.localeNotifier.addListener(_onLocaleChanged);
     // 系统分享 / URL scheme 接入：收到链接切到下载页并弹新建下载弹层
     ShareIntentService.init(_onShared);
     // 启动自动检查更新：等配置加载完成后按 autoCheckUpdate 决定
     _settings.addListener(_maybeScheduleUpdateCheck);
     UpdateService.instance.addListener(_onUpdateChanged);
     _maybeScheduleUpdateCheck();
-  }
-
-  void _onLocaleChanged() {
-    ForegroundServiceManager.instance.updateStrings(widget.localeNotifier.s);
   }
 
   /// 配置加载完成且开启了自动检查 → 延迟数秒触发一次版本检查
@@ -206,10 +195,8 @@ class _MobileShellState extends State<MobileShell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     ShareIntentService.shutdown();
-    widget.localeNotifier.removeListener(_onLocaleChanged);
     _settings.removeListener(_maybeScheduleUpdateCheck);
     UpdateService.instance.removeListener(_onUpdateChanged);
-    ForegroundServiceManager.instance.stop();
     _controller.dispose();
     _settings.dispose();
     super.dispose();
