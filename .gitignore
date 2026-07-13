@@ -116,3 +116,5 @@ website/.vscode/launch.json
 design/
 .promo/
 assets/screenshot/
+.zed/
+.worktrees/

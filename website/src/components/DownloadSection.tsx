@@ -1038,10 +1038,16 @@ export default function DownloadSection() {
                               </a>
                             )}
 
-                            {/* Web 版（FluxDown Server）部署指南 */}
-                            {["web", "openwrt", "qnap"].includes(p.key) && (
+                            {/* 部署指南（Server 系平台；群晖走 Docker 与 NAS 篇的 .spk 章节） */}
+                            {["web", "openwrt", "qnap", "synology"].includes(
+                              p.key,
+                            ) && (
                               <a
-                                href={`/docs/${locale}/headless-server/setup/`}
+                                href={
+                                  p.key === "synology"
+                                    ? `/docs/${locale}/headless-server/docker/`
+                                    : `/docs/${locale}/headless-server/setup/`
+                                }
                                 className="inline-flex items-center gap-1 text-[10px] text-dark-text-muted hover:text-brand-blue underline underline-offset-2 transition-colors self-start"
                               >
                                 {t("dl.webGuide")}
