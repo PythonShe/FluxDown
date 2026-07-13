@@ -139,7 +139,7 @@ const zhCN = {
   // Resource sniffer & panel
   "sniffer.title": "资源嗅探",
   "sniffer.resourceSniffing": "资源嗅探",
-  "sniffer.resourceSniffingHint": "自动检测网页中的可下载资源",
+  "sniffer.resourceSniffingHint": "自动检测网页中的可下载资源（关闭可减少重资源页面的性能开销，更改后刷新页面生效）",
   "sniffer.showFloatingButton": "视频浮动按钮",
   "sniffer.showFloatingButtonHint": "在视频元素上显示快速下载按钮",
   "sniffer.showResourcePanel": "资源面板",

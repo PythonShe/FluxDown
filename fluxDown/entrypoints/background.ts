@@ -694,8 +694,12 @@ export default defineBackground(() => {
         setTimeout(() => responseDownloadCache.delete(details.url), 60_000);
 
         // 同时将 main_frame 下载资源加入嗅探面板
-        // （资源嗅探层只监听 media/xhr/object/other，main_frame 会绕过它）
-        if (details.tabId >= 0) {
+        // （资源嗅探层只监听 media/xhr/object/other，main_frame 会绕过它；
+        //  responseDownloadCache 服务于下载拦截，不受嗅探开关影响，仅面板入口受控）
+        if (
+          details.tabId >= 0 &&
+          !(_settingsCache && !_settingsCache.resourceSniffing)
+        ) {
           // 从 requestHeaderCache 提取该请求的认证信息，随资源一起持久存储
           const { cookies: mainCookies, headers: mainHeaders } =
             extractAuthFromCache(details.url);
@@ -735,6 +739,9 @@ export default defineBackground(() => {
       (details) => {
         // 跳过无效或非 tab 请求
         if (details.tabId < 0 || !details.responseHeaders) return;
+
+        // 资源嗅探开关：关闭时丢弃（缓存冷启动为 null 时放行，避免同步路径丢事件）
+        if (_settingsCache && !_settingsCache.resourceSniffing) return;
 
         // 跳过非成功响应（重定向、客户端/服务器错误）
         if (details.statusCode < 200 || details.statusCode >= 400) return;
@@ -2830,6 +2837,10 @@ export default defineBackground(() => {
 
         if (payloads.length === 0) return { success: true, added: 0 };
 
+        // 资源嗅探开关：关闭时丢弃上报（旧页面的 content script 可能仍在运行）
+        const rdSettings = await getCachedSettings();
+        if (!rdSettings.resourceSniffing) return { success: true, added: 0 };
+
         const added = addResources(tabId, pageUrl, payloads);
         if (added > 0) {
           await updateBadgeForTab(tabId);
@@ -2842,6 +2853,10 @@ export default defineBackground(() => {
       case "dashManifestDetected": {
         const tabId = sender.tab?.id;
         if (!tabId || tabId < 0) return { success: false };
+
+        // 资源嗅探开关：关闭时丢弃（旧页面的 fetch 拦截脚本可能仍在运行）
+        const dmSettings = await getCachedSettings();
+        if (!dmSettings.resourceSniffing) return { success: false };
         const manifest = message.manifest as DashManifest | undefined;
         if (!manifest || (!manifest.video?.length && !manifest.audio?.length)) {
           return { success: false };

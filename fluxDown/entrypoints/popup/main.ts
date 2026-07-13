@@ -44,6 +44,7 @@ const enableHint = $('#enableHint')!;
 const protocolToggle = $<HTMLInputElement>('#protocolToggle');
 const protocolHint = $('#protocolHint')!;
 const dotVisibleToggle = $<HTMLInputElement>('#dotVisibleToggle');
+const sniffToggle = $<HTMLInputElement>('#sniffToggle');
 const notifyLocalToggle = $<HTMLInputElement>('#notifyLocalToggle');
 const notifyRemoteToggle = $<HTMLInputElement>('#notifyRemoteToggle');
 const remoteModeSelect = $<HTMLSelectElement>('#remoteModeSelect');
@@ -1107,6 +1108,7 @@ async function init() {
   protocolToggle.checked = settings.enableFluxdownProtocol === true;
   updateProtocolHint(settings.enableFluxdownProtocol === true);
   dotVisibleToggle.checked = localState?.['fluxdown_dot_visible'] !== false;
+  sniffToggle.checked = settings.resourceSniffing !== false;
 
   // 任务发送通知开关 + 远程投递模式（与 options 页同一 settings 源，双入口镜像）
   notifyLocalToggle.checked = settings.notifyLocalTask !== false;
@@ -1204,6 +1206,11 @@ themeBtn.addEventListener('click', toggleTheme);
 // 悬浮球显示/隐藏
 dotVisibleToggle.addEventListener('change', async () => {
   await browser.storage.local.set({ fluxdown_dot_visible: dotVisibleToggle.checked });
+});
+
+// 资源嗅探开关（更改后新加载的页面生效；background 侧即时生效）
+sniffToggle.addEventListener('change', async () => {
+  await saveSettings({ resourceSniffing: sniffToggle.checked });
 });
 
 // fluxdown:// 自定义协议开关

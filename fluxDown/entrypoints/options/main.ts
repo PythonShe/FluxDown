@@ -49,6 +49,7 @@ const versionLabel = $('#versionLabel')!;
 const notifyLocalToggle = $<HTMLInputElement>('#notifyLocalToggle');
 const notifyRemoteToggle = $<HTMLInputElement>('#notifyRemoteToggle');
 const protocolToggle = $<HTMLInputElement>('#protocolToggle');
+const sniffToggle = $<HTMLInputElement>('#sniffToggle');
 
 // 拦截规则
 const extInput = $<HTMLInputElement>('#extInput');
@@ -298,6 +299,11 @@ protocolToggle.addEventListener('change', async () => {
   await saveSettings({ enableFluxdownProtocol: protocolToggle.checked });
 });
 
+// ===== 资源嗅探开关（更改后新加载的页面生效；background 侧即时生效） =====
+sniffToggle.addEventListener('change', async () => {
+  await saveSettings({ resourceSniffing: sniffToggle.checked });
+});
+
 // ===== 今日统计重置 =====
 resetStatsBtn.addEventListener('click', async () => {
   const today = new Date().toDateString();
@@ -512,6 +518,9 @@ async function init() {
 
   // fluxdown:// 自定义协议开关
   protocolToggle.checked = settings.enableFluxdownProtocol === true;
+
+  // 资源嗅探开关
+  sniffToggle.checked = settings.resourceSniffing !== false;
 
   // 拦截模式 / 最小文件大小
   interceptModeSelect.value = settings.interceptMode || 'smart';

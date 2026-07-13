@@ -12,6 +12,7 @@
 
 import { browser } from 'wxt/browser';
 import { defineContentScript } from 'wxt/utils/define-content-script';
+import { loadSettings } from "@/utils/settings";
 import type {
   ResourceMessagePayload,
   FetchInterceptDetail,
@@ -25,13 +26,26 @@ export default defineContentScript({
   runAt: "document_idle",
 
   async main(ctx) {
+    // ===== 0. 资源嗅探开关 =====
+    // 关闭后跳过 DOM 扫描 / MutationObserver / Main World fetch 拦截注入，
+    // 消除重资源页面（如 B 站首页）的嗅探性能开销；更改后新加载的页面生效。
+    // 磁力链接点击接管不属于嗅探，始终保留。
+    let sniffingEnabled = true;
+    try {
+      sniffingEnabled = (await loadSettings()).resourceSniffing !== false;
+    } catch {
+      // 设置读取失败时按默认开启处理
+    }
+
     /** 已报告的 URL 集合（防止重复上报） */
     const reportedUrls = new Set<string>();
 
     // ===== 1. 初始 DOM 扫描 =====
-    const initialResources = scanPageResources();
-    if (initialResources.length > 0) {
-      reportResources(initialResources);
+    if (sniffingEnabled) {
+      const initialResources = scanPageResources();
+      if (initialResources.length > 0) {
+        reportResources(initialResources);
+      }
     }
 
     // ===== 2. MutationObserver 持续监听 =====
@@ -66,21 +80,25 @@ export default defineContentScript({
       }
     });
 
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["src", "href", "data"],
-    });
+    if (sniffingEnabled) {
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["src", "href", "data"],
+      });
 
-    // 扩展失效时断开观察
-    ctx.onInvalidated(() => observer.disconnect());
+      // 扩展失效时断开观察
+      ctx.onInvalidated(() => observer.disconnect());
+    }
 
     // ===== 3. 注入 Main World 拦截脚本 =====
-    try {
-      await injectScript("/fetch-interceptor.js", { keepInDom: true });
-    } catch (e) {
-      console.warn("[FluxDown] Failed to inject fetch interceptor:", e);
+    if (sniffingEnabled) {
+      try {
+        await injectScript("/fetch-interceptor.js", { keepInDom: true });
+      } catch (e) {
+        console.warn("[FluxDown] Failed to inject fetch interceptor:", e);
+      }
     }
 
     // ===== 4. 监听 Main World 的 CustomEvent =====

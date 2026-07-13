@@ -151,7 +151,7 @@ const en: Record<MessageKey, string> = {
   "sniffer.title": "Resource Sniffer",
   "sniffer.resourceSniffing": "Resource Sniffing",
   "sniffer.resourceSniffingHint":
-    "Auto-detect downloadable resources on web pages",
+    "Auto-detect downloadable resources on web pages (turn off to reduce overhead on heavy pages; reload pages to apply)",
   "sniffer.showFloatingButton": "Video Float Button",
   "sniffer.showFloatingButtonHint":
     "Show quick download button on video elements",
