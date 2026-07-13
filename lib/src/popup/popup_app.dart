@@ -29,8 +29,10 @@ import 'popup_payload.dart';
 const _popupChannel = MethodChannel('fluxdown/popup_child');
 
 /// 弹窗引擎入口 — 由 main() 在检测到 `--quick-popup` 参数时调用。
-void runQuickPopupApp() {
+/// rootBundle 资产读取不经插件通道，不违反零插件契约。
+Future<void> runQuickPopupApp() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await I18nStore.load();
   runApp(const QuickPopupApp());
 }
 

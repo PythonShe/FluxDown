@@ -4,13 +4,14 @@ import type { ThemeMode } from '../../lib/theme'
 import { cn } from '../../lib/cn'
 import { LANGUAGE_CONFIG_KEY, useI18n } from '../../lib/i18n'
 import type { Locale } from '../../lib/i18n'
+import { LOCALES } from '../../lib/locales'
 import { SetRow, SetSelect } from './controls'
 import { useConfigMutation } from './useConfig'
 
-const LANGUAGE_OPTIONS: { value: Locale; label: string }[] = [
-  { value: 'en', label: 'English' },
-  { value: 'zh', label: '简体中文' },
-]
+const LANGUAGE_OPTIONS: { value: Locale; label: string }[] = LOCALES.map(({ code, name }) => ({
+  value: code,
+  label: name,
+}))
 
 export function AppearanceSettings() {
   const { mode, setMode, accent, setAccent } = useTheme()

@@ -64,7 +64,7 @@ Future<void> main(List<String> args) async {
   // 该引擎零插件注册、不初始化 Rust，所有环境数据经 fluxdown/popup_child
   // 通道注入（见 lib/src/popup/popup_app.dart）。必须在任何插件调用之前分发。
   if (args.contains('--quick-popup')) {
-    runQuickPopupApp();
+    await runQuickPopupApp();
     return;
   }
 
@@ -81,6 +81,7 @@ Future<void> main(List<String> args) async {
   await _runStartupStep('kv store init', () => KvStore.instance.init());
 
   // 初始化 i18n — 创建 LocaleNotifier 并从 SharedPreferences 恢复语言偏好
+  await _runStartupStep('i18n load', I18nStore.load);
   localeNotifier = LocaleNotifier();
   await _runStartupStep('locale init', () => localeNotifier.init());
 
@@ -100,12 +101,15 @@ Future<void> main(List<String> args) async {
 
   // 提取启动参数中的 fluxdown:// 协议 URL（Windows 注册表协议处理器：
   // 浏览器扩展协议模式 / 网页 <a href="fluxdown://..."> 唤起本 exe）。
-  final protocolRequests = args.map(_parseFluxdownProtocolArg).nonNulls.toList();
+  final protocolRequests = args
+      .map(_parseFluxdownProtocolArg)
+      .nonNulls
+      .toList();
 
   logInfo(
     'main',
     'FluxDown starting, args=$args, torrentFiles=${torrentFilePaths.length}, '
-    'protocolRequests=${protocolRequests.length}',
+        'protocolRequests=${protocolRequests.length}',
   );
 
   // 设置全局异常捕获 — Flutter 框架异常
@@ -419,7 +423,7 @@ class _FluxDownAppState extends State<FluxDownApp>
       logInfo(
         'FluxDownApp',
         'will process ${widget.initialTorrentFiles.length} torrent file(s) and '
-        '${widget.initialProtocolRequests.length} protocol request(s) after config loads',
+            '${widget.initialProtocolRequests.length} protocol request(s) after config loads',
       );
       _waitForConfigAndHandleTorrentFiles();
     }

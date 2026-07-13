@@ -79,9 +79,8 @@ class MobileSettingsScreen extends StatelessWidget {
                         _Row(
                           label: s.language,
                           value: switch (localeNotifier.preference) {
-                            'zh' => s.languageChinese,
-                            'en' => s.languageEnglish,
-                            _ => s.languageSystem,
+                            kLocaleSystem => s.languageSystem,
+                            final code => I18nStore.nativeName(code),
                           },
                           onTap: () => _selectLanguage(context),
                         ),
@@ -299,10 +298,7 @@ class MobileSettingsScreen extends StatelessWidget {
         s.newVersionFound(svc.checkResult?.latestVersion ?? ''),
         svc.downloadUpdate,
       ),
-      UpdateStatus.downloading => (
-        _downloadPercent(svc.progress),
-        null,
-      ),
+      UpdateStatus.downloading => (_downloadPercent(svc.progress), null),
       UpdateStatus.readyToInstall => (s.installAndRestart, svc.installUpdate),
       UpdateStatus.upToDate => (s.upToDate, svc.checkForUpdate),
       UpdateStatus.error => (svc.errorMessage, svc.checkForUpdate),
@@ -332,8 +328,8 @@ class MobileSettingsScreen extends StatelessWidget {
       current: localeNotifier.preference,
       options: [
         (kLocaleSystem, s.languageSystem),
-        (kLocaleZh, s.languageChinese),
-        (kLocaleEn, s.languageEnglish),
+        for (final code in I18nStore.available)
+          (code, I18nStore.nativeName(code)),
       ],
       onSelect: localeNotifier.setLocale,
     );

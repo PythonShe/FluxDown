@@ -91,9 +91,10 @@ x_down/
 │       ├── pages/                     # 页面
 │       │   ├── home_page.dart         # 主页面（三栏布局：侧边栏+列表+详情）
 │       │   └── settings_page.dart     # 设置页面（6个分类：通用/外观/下载/BT/代理/关于）
-│       ├── i18n/                      # 国际化
-│       │   ├── locale_provider.dart   # 语言切换与持久化
-│       │   └── translations.dart      # 中英双语翻译字符串
+│       ├── i18n/                      # 国际化（Weblate 管理，assets/i18n/*.json 为翻译源）
+│       │   ├── locale_provider.dart   # 语言切换与持久化（偏好 'system' 或任意已发现语言代码）
+│       │   ├── i18n_store.dart        # 翻译表加载 + 语言自动发现（AssetManifest 扫 assets/i18n/*.json）
+│       │   └── translations.dart      # S 类：成员签名即调用点契约，经 _r(key) 查表 + {name} 占位插值
 │       ├── services/                  # 服务层
 │       │   ├── external_download_service.dart  # 监听浏览器扩展/RPC/API 请求（Rinf 信号），首选独立小窗，回退主窗口内对话框
 │       │   ├── popup_window_service.dart       # 独立快速下载小窗（主引擎侧：fluxdown/popup_host 通道 + 载荷组装 + 结果回填）

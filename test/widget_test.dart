@@ -11,6 +11,10 @@ import 'package:flux_down/src/i18n/locale_provider.dart';
 import 'package:flux_down/src/theme/theme_provider.dart';
 
 void main() {
+  // I18nStore 从资产加载翻译表（assets/i18n/*.json），需要测试绑定。
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(I18nStore.load);
+
   // ─────────────────────────────────────────────
   // ThemeProvider 初始状态
   // ─────────────────────────────────────────────
@@ -56,8 +60,14 @@ void main() {
 
     test('locale 常量值正确', () {
       expect(kLocaleSystem, equals('system'));
-      expect(kLocaleZh, equals('zh'));
-      expect(kLocaleEn, equals('en'));
+    });
+
+    test('I18nStore 自动发现内置语言', () {
+      expect(I18nStore.available, containsAll(['zh', 'en']));
+      expect(I18nStore.available.first, equals('en'));
+      expect(I18nStore.resolve('zh_CN'), equals('zh'));
+      expect(I18nStore.resolve('ko'), equals('en'));
+      expect(I18nStore.nativeName('zh'), equals('简体中文'));
     });
   });
 

@@ -81,6 +81,7 @@ flutter:
 
   assets:
     - assets/logo/
+    - assets/i18n/
     - userscript/fluxdown.user.js
 
   # An image asset can refer to one or more resolution-specific "variants", see

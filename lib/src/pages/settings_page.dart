@@ -913,8 +913,7 @@ class _SettingsContentState extends State<_SettingsContent> {
   void didUpdateWidget(covariant _SettingsContent oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 切换分类时回到顶部，避免沿用上一分类的滚动位置
-    if (widget.category != oldWidget.category &&
-        _scrollController.hasClients) {
+    if (widget.category != oldWidget.category && _scrollController.hasClients) {
       _scrollController.jumpTo(0);
     }
   }
@@ -1168,9 +1167,7 @@ class _SettingCardState extends State<_SettingCard> with _HighlightConsumer {
         color: _flashing ? m.subtle(c.accent) : c.surface1,
         borderRadius: m.brDialog,
         border: Border.all(
-          color: _flashing
-              ? m.emphasis(c.accent)
-              : m.borderMedium(c.border),
+          color: _flashing ? m.emphasis(c.accent) : m.borderMedium(c.border),
           width: 1,
         ),
       ),
@@ -1286,8 +1283,7 @@ class _GeneralContent extends StatelessWidget {
               description: LocaleScope.of(context).startMinimizedToTrayDesc,
               child: ShadSwitch(
                 value: settingsProvider.startMinimizedToTray,
-                onChanged: (v) =>
-                    settingsProvider.setStartMinimizedToTray(v),
+                onChanged: (v) => settingsProvider.setStartMinimizedToTray(v),
               ),
             ),
             const SizedBox(height: 10),
@@ -1307,8 +1303,7 @@ class _GeneralContent extends StatelessWidget {
               const SizedBox(height: 10),
               _SettingCard(
                 label: LocaleScope.of(context).floatingBallActiveOnly,
-                description:
-                    LocaleScope.of(context).floatingBallActiveOnlyDesc,
+                description: LocaleScope.of(context).floatingBallActiveOnlyDesc,
                 child: ShadSwitch(
                   value: settingsProvider.floatingBallActiveOnly,
                   onChanged: (v) {
@@ -1931,9 +1926,7 @@ class _TileActionState extends State<_TileAction> {
           width: 22,
           height: 22,
           decoration: BoxDecoration(
-            color: _hover
-                ? m.soft(widget.color)
-                : Colors.transparent,
+            color: _hover ? m.soft(widget.color) : Colors.transparent,
             borderRadius: m.brSm,
           ),
           child: Icon(widget.icon, size: 12, color: widget.color),
@@ -2461,9 +2454,7 @@ class _DownloadContent extends StatelessWidget {
               label: s.revealFileCmdLabel,
               description: s.revealFileCmdDesc,
               vertical: true,
-              child: _FileManagerCmdInput(
-                settingsProvider: settingsProvider,
-              ),
+              child: _FileManagerCmdInput(settingsProvider: settingsProvider),
             ),
             if (queues.isNotEmpty) ...[
               const SizedBox(height: 10),
@@ -3174,9 +3165,7 @@ class _UserAgentEditorState extends State<_UserAgentEditor> {
 class _FileManagerCmdInput extends StatefulWidget {
   final SettingsProvider settingsProvider;
 
-  const _FileManagerCmdInput({
-    required this.settingsProvider,
-  });
+  const _FileManagerCmdInput({required this.settingsProvider});
 
   @override
   State<_FileManagerCmdInput> createState() => _FileManagerCmdInputState();
@@ -4057,10 +4046,7 @@ class _ApiServiceContentState extends State<_ApiServiceContent> {
               decoration: BoxDecoration(
                 color: c.surface1,
                 borderRadius: m.brDialog,
-                border: Border.all(
-                  color: m.borderMedium(c.border),
-                  width: 1,
-                ),
+                border: Border.all(color: m.borderMedium(c.border), width: 1),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -5733,7 +5719,7 @@ class _Ed2kServerSubEditorState extends State<_Ed2kServerSubEditor> {
 }
 
 // ─────────────────────────────────────────────
-// 语言选择器（跟随系统 / 中文 / English）
+// 语言选择器（跟随系统 + I18nStore 自动发现的全部语言）
 // ─────────────────────────────────────────────
 
 class _LanguageSelector extends StatelessWidget {
@@ -5747,8 +5733,12 @@ class _LanguageSelector extends StatelessWidget {
 
     final options = [
       (pref: kLocaleSystem, label: s.languageSystem, icon: LucideIcons.monitor),
-      (pref: kLocaleZh, label: s.languageChinese, icon: LucideIcons.languages),
-      (pref: kLocaleEn, label: s.languageEnglish, icon: LucideIcons.languages),
+      for (final code in I18nStore.available)
+        (
+          pref: code,
+          label: I18nStore.nativeName(code),
+          icon: LucideIcons.languages,
+        ),
     ];
 
     return Wrap(
@@ -5978,8 +5968,7 @@ class _ThemeActions extends StatelessWidget {
           icon: LucideIcons.globe,
           label: s.themeMore,
           colors: c,
-          onTap: () =>
-              launchUrl(Uri.parse('https://fluxdown.zerx.dev/themes')),
+          onTap: () => launchUrl(Uri.parse('https://fluxdown.zerx.dev/themes')),
         ),
       ],
     );
@@ -6194,9 +6183,7 @@ class _CustomThemeCardState extends State<_CustomThemeCard> {
                   decoration: BoxDecoration(
                     color: tokens.background,
                     borderRadius: tm.brMd,
-                    border: Border.all(
-                      color: tm.borderFade(tokens.border),
-                    ),
+                    border: Border.all(color: tm.borderFade(tokens.border)),
                   ),
                   child: Row(
                     children: [
@@ -6417,9 +6404,7 @@ class _ThemePreviewCardState extends State<_ThemePreviewCard> {
                   decoration: BoxDecoration(
                     color: tokens.background,
                     borderRadius: tm.brMd,
-                    border: Border.all(
-                      color: tm.borderFade(tokens.border),
-                    ),
+                    border: Border.all(color: tm.borderFade(tokens.border)),
                   ),
                   child: Row(
                     children: [
@@ -7518,18 +7503,11 @@ class _AboutContent extends StatelessWidget {
             ),
             const Spacer(),
             if (segments > 1) ...[
-              Icon(
-                LucideIcons.layers,
-                size: 11,
-                color: m.emphasis(c.accent),
-              ),
+              Icon(LucideIcons.layers, size: 11, color: m.emphasis(c.accent)),
               const SizedBox(width: 3),
               Text(
                 s.segmentsDownloading(activeSegments, segments),
-                style: TextStyle(
-                  fontSize: 11,
-                  color: m.emphasis(c.accent),
-                ),
+                style: TextStyle(fontSize: 11, color: m.emphasis(c.accent)),
               ),
               const SizedBox(width: 10),
             ],
@@ -7575,7 +7553,11 @@ class _DonateCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            s.donateBody(_firstDateText(s), statsReleaseCount, statsCommitCount),
+            s.donateBody(
+              _firstDateText(s),
+              statsReleaseCount,
+              statsCommitCount,
+            ),
             style: TextStyle(fontSize: 12, height: 1.6, color: c.textSecondary),
           ),
           const SizedBox(height: 12),

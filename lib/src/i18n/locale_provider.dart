@@ -3,30 +3,26 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import '../services/kv_store.dart';
 import '../services/log_service.dart';
+export 'i18n_store.dart';
 export 'translations.dart';
+import 'i18n_store.dart';
 import 'translations.dart';
 
 /// KvStore key
 const _kAppLocale = 'app_locale';
 
-/// 语言偏好值: 'system' | 'zh' | 'en'
+/// 语言偏好值: 'system' 或任意已发现的 locale 代码（'zh'、'en'、'ja'…）
 const kLocaleSystem = 'system';
-const kLocaleZh = 'zh';
-const kLocaleEn = 'en';
 
-/// 获取系统语言并决定使用的 locale。
-/// 支持 zh（中文）和 en（英文），其他语言默认使用英文。
-String _resolveSystemLocale() {
-  final locale = Platform.localeName; // e.g. "zh_CN", "en_US", "ja_JP"
-  if (locale.startsWith('zh')) return 'zh';
-  return 'en';
-}
+/// 获取系统语言并解析为已发现的可用语言（精确 → 前缀 → en）。
+String _resolveSystemLocale() =>
+    I18nStore.resolve(Platform.localeName); // e.g. "zh_CN", "en_US", "ja_JP"
 
 /// 全局 locale 实例 — 供无 context 场景使用（models, services, tray 等）。
 /// 随 [LocaleNotifier] 变更自动更新。
 S currentS = S.of(_resolveSystemLocale());
 
-/// 当前实际 locale code ('zh' or 'en')
+/// 当前实际 locale code（'zh'、'en'、'ja'…）
 String currentLocale = _resolveSystemLocale();
 
 /// 全局 LocaleNotifier 单例 — 在 main() 中创建并初始化
@@ -37,7 +33,7 @@ late final LocaleNotifier localeNotifier;
 /// 支持三种模式: 跟随系统 / 中文 / 英文。
 /// 持久化到 [KvStore]，变更时 notifyListeners 触发 UI 重建。
 class LocaleNotifier extends ChangeNotifier {
-  /// 用户选择的语言偏好: 'system', 'zh', 'en'
+  /// 用户选择的语言偏好: 'system' 或 locale 代码
   String _preference = kLocaleSystem;
 
   String get preference => _preference;
@@ -48,9 +44,7 @@ class LocaleNotifier extends ChangeNotifier {
     try {
       final saved = KvStore.instance.getString(_kAppLocale);
       if (saved != null &&
-          (saved == kLocaleSystem ||
-              saved == kLocaleZh ||
-              saved == kLocaleEn)) {
+          (saved == kLocaleSystem || I18nStore.available.contains(saved))) {
         _preference = saved;
       }
     } catch (e, stack) {
@@ -74,7 +68,7 @@ class LocaleNotifier extends ChangeNotifier {
     if (_preference == kLocaleSystem) {
       currentLocale = _resolveSystemLocale();
     } else {
-      currentLocale = _preference;
+      currentLocale = I18nStore.resolve(_preference);
     }
     currentS = S.of(currentLocale);
   }
