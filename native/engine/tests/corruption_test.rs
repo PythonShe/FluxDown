@@ -200,6 +200,8 @@ async fn run_one_real_download(
         &sink,
         etag,
         last_modified,
+        fluxdown_engine::segment_coordinator::ReportScope::whole_task(),
+        0,
     )
     .await;
 

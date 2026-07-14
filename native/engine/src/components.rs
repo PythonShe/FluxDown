@@ -64,6 +64,11 @@ pub struct FfmpegStatus {
     pub managed_version: String,
     /// 系统 PATH 中探测到的 ffmpeg 路径（无论是否生效，供 UI 展示；空 = 无）。
     pub system_path: String,
+    /// 当前平台是否提供托管安装（BtbN 构建）。`false` = macOS 等无官方静态
+    /// 构建的平台——UI 应隐藏托管安装入口，只引导系统 PATH / 手动指定，
+    /// 避免反复弹「不支持安装」。仅按 OS+架构判定（不含 musl 运行时差异，
+    /// 后者在安装探测阶段兜底）。
+    pub managed_supported: bool,
 }
 
 /// 托管 ffmpeg 的目标路径：`<data_dir>/bin/ffmpeg[.exe]`。
@@ -77,6 +82,27 @@ fn ffmpeg_binary_name() -> &'static str {
     } else {
         "ffmpeg"
     }
+}
+
+/// 当前平台是否提供 ffmpeg 托管安装（BtbN/FFmpeg-Builds 官方静态构建）。
+///
+/// BtbN 仅发布 win64/winarm64/linux64/linuxarm64 构建，无 macOS 构建。仅按
+/// 编译期 OS + 架构判定，供状态探测在**不触网**的前提下让 UI 决定是否展示
+/// 托管安装入口——避免在 macOS 等平台上每次打开组件页都发起注定失败的版本
+/// 拉取并弹错。
+///
+/// 注意：不判定 musl/glibc。Linux 服务器二进制多为 musl 静态链接，但宿主
+/// 通常带 glibc、能运行下载来的 glibc 构建，故这里仍返回 `true`；真正 musl
+/// 用户态（Alpine/OpenWrt）无法运行的情况由 [`install`] 的安装后 `-version`
+/// 探测兜底（返回 [`ComponentError::Verify`] 并给出改用系统包管理器的提示）。
+pub fn managed_install_supported() -> bool {
+    cfg!(all(
+        target_os = "windows",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )) || cfg!(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))
 }
 
 /// 扫描系统 PATH 寻找 ffmpeg 可执行文件。
@@ -177,6 +203,7 @@ pub async fn ffmpeg_status(db: &Db, data_dir: &Path) -> FfmpegStatus {
         system_path: system
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
+        managed_supported: managed_install_supported(),
     }
 }
 
@@ -377,7 +404,10 @@ mod install {
         if probed.is_none() {
             let _ = tokio::fs::remove_file(&target).await;
             return Err(ComponentError::Verify(
-                "ffmpeg -version failed after install".to_string(),
+                "downloaded ffmpeg failed to run; this system may use musl libc \
+                 (e.g. Alpine/OpenWrt) which cannot run the official glibc build — \
+                 install ffmpeg via your system package manager and set a manual path"
+                    .to_string(),
             ));
         }
         db.set_config(CONFIG_FFMPEG_MANAGED_VERSION, &chosen_ver)

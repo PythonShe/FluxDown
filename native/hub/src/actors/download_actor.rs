@@ -1603,6 +1603,7 @@ fn ffmpeg_status_report(
         version: status.version,
         managed_version: status.managed_version,
         system_path: status.system_path,
+        managed_supported: status.managed_supported,
     }
 }
 

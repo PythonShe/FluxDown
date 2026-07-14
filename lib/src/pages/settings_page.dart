@@ -4521,6 +4521,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
   String? _selectedVersion;
   int _lastInstallResultSeq = -1;
   String _pendingOp = '';
+  bool _versionsRequested = false;
 
   @override
   void initState() {
@@ -4531,7 +4532,12 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     _pathFocusNode = FocusNode();
     _provider.addListener(_onProviderChanged);
     _provider.requestStatus();
-    _provider.requestVersions();
+    // 版本列表懒加载：仅在状态回流确认本平台支持托管安装后再拉取，
+    // 避免 macOS 等不支持平台每次进页都发起注定失败的请求并弹错。
+    if (_provider.status != null && _provider.managedSupported) {
+      _versionsRequested = true;
+      _provider.requestVersions();
+    }
   }
 
   @override
@@ -4553,6 +4559,13 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     }
     if (_selectedVersion == null && _provider.latestStable.isNotEmpty) {
       _selectedVersion = _provider.latestStable;
+    }
+    // 状态回流后若确认平台支持托管安装且尚未拉过版本列表，懒拉一次。
+    if (!_versionsRequested &&
+        _provider.status != null &&
+        _provider.managedSupported) {
+      _versionsRequested = true;
+      _provider.requestVersions();
     }
     final seq = _provider.installResultSeq;
     if (seq != _lastInstallResultSeq) {
@@ -4701,7 +4714,9 @@ class _ComponentsContentState extends State<_ComponentsContent> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              s.componentsStatusNotFound,
+              _provider.managedSupported
+                  ? s.componentsStatusNotFound
+                  : s.componentsStatusNotFoundUnsupported,
               style: TextStyle(fontSize: 12, color: c.textPrimary),
             ),
           ),
@@ -4828,8 +4843,25 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     S s,
     bool hasManaged,
   ) {
-    final m = AppMetrics.of(context);
     final p = _provider;
+    // 平台不支持托管安装（macOS 等）：不展示版本选择/安装按钮，只给一条
+    // 静态引导，避免反复弹「不支持安装」。手动指定路径区块仍在上方可用。
+    if (!p.managedSupported) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(LucideIcons.info, size: 13, color: c.textMuted),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              s.componentsManagedUnsupported,
+              style: TextStyle(fontSize: 11.5, color: c.textSecondary),
+            ),
+          ),
+        ],
+      );
+    }
+    final m = AppMetrics.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

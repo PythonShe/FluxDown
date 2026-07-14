@@ -72,7 +72,8 @@ export function ComponentsSettings() {
   const { data: config, isLoading: configLoading } = useConfigQuery()
   const configMut = useConfigMutation()
   const { data: status, isLoading: statusLoading, isError: statusError } = useFfmpegStatusQuery()
-  const versionsQuery = useFfmpegVersionsQuery(true)
+  // 版本列表仅在状态确认本平台支持托管安装后拉取，避免 macOS 等平台反复失败弹错。
+  const versionsQuery = useFfmpegVersionsQuery(status?.managedSupported === true)
   const installMut = useInstallFfmpegMutation()
   const uninstallMut = useUninstallFfmpegMutation()
   const [selectedVersion, setSelectedVersion] = useState('')
@@ -96,7 +97,15 @@ export function ComponentsSettings() {
     progress && progress.totalBytes > 0 ? Math.round((progress.downloadedBytes / progress.totalBytes) * 100) : null
 
   let versionsBody: ReactNode
-  if (versionsQuery.isLoading) {
+  if (status && !status.managedSupported) {
+    // 平台不支持托管安装（macOS 等）：静态引导，不展示版本选择/安装按钮，
+    // 也不发起版本拉取，避免反复弹「不支持安装」。
+    versionsBody = (
+      <SetRow title={t('components.install')} align="start">
+        <p className="text-[12px] text-text3">{t('components.managedUnsupported')}</p>
+      </SetRow>
+    )
+  } else if (versionsQuery.isLoading) {
     versionsBody = (
       <SetRow title={t('components.install')}>
         <span className="set-value">{t('common.loading')}</span>

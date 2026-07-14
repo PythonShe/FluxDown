@@ -1032,6 +1032,11 @@ pub struct FfmpegStatusReport {
     pub version: String,
     pub managed_version: String,
     pub system_path: String,
+    /// Whether managed install is available on this platform (mirrors
+    /// `fluxdown_engine::components::FfmpegStatus::managed_supported`). `false`
+    /// on macOS etc. — the settings page hides the managed-install section and
+    /// only guides system PATH / manual path, avoiding repeated failure prompts.
+    pub managed_supported: bool,
 }
 
 /// Installable ffmpeg version list result (Rust → Dart), sent after

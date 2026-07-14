@@ -765,6 +765,8 @@
     "componentsFfmpegDesc": "Open-source audio/video toolkit. FluxDown uses it to merge separate audio and video tracks from DASH and similar streaming downloads.",
     "componentsStatusLoading": "Detecting…",
     "componentsStatusNotFound": "FFmpeg not found. Install it below or specify a path manually.",
+    "componentsStatusNotFoundUnsupported": "FFmpeg not found. Add it to your system PATH or specify a path manually below.",
+    "componentsManagedUnsupported": "Managed install isn't available on this platform. Use an FFmpeg from your system PATH, or set a manual path above (on macOS: brew install ffmpeg).",
     "componentsSourceManual": "Manual",
     "componentsSourceManaged": "Managed",
     "componentsSourceSystem": "System PATH",

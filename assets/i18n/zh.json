@@ -765,6 +765,8 @@
     "componentsFfmpegDesc": "开源音视频处理工具，FluxDown 用它合并 DASH 等流媒体下载产生的独立音视频轨",
     "componentsStatusLoading": "探测中…",
     "componentsStatusNotFound": "未找到 FFmpeg，请在下方安装或手动指定路径",
+    "componentsStatusNotFoundUnsupported": "未找到 FFmpeg，请将其加入系统 PATH 或在下方手动指定路径",
+    "componentsManagedUnsupported": "当前平台不提供托管安装，请使用系统 PATH 中的 FFmpeg 或在上方手动指定路径（macOS 可用 Homebrew 安装：brew install ffmpeg）",
     "componentsSourceManual": "手动指定",
     "componentsSourceManaged": "组件安装",
     "componentsSourceSystem": "系统 PATH",

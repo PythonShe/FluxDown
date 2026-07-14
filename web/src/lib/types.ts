@@ -198,6 +198,8 @@ export type FfmpegSource = 'manual' | 'managed' | 'system' | 'none'
 
 export interface ComponentFfmpegStatus {
   source: FfmpegSource
+  /** 当前平台是否提供托管安装（macOS 等为 false）。 */
+  managedSupported: boolean
   path: string
   version: string
   managedVersion: string

@@ -81,6 +81,10 @@ class ComponentsProvider extends ChangeNotifier {
   FfmpegStatusReport? get status => _status;
   bool get statusLoading => _statusLoading;
 
+  /// 当前平台是否提供托管安装（BtbN 构建；macOS 等为 false）。状态回流前
+  /// 默认 `true`，避免首帧误隐藏托管安装区；真正判定在 [status] 到达后。
+  bool get managedSupported => _status?.managedSupported ?? true;
+
   /// 用户当前保存的手动路径（空 = 未设置）。与 [status] 的生效路径独立——
   /// 手动路径失效（文件不存在）时生效来源会回退，但此值仍展示用户的原始输入。
   String get manualPath => _manualPath;

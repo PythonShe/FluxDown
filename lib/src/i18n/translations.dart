@@ -1098,6 +1098,10 @@ class S {
   String get componentsFfmpegDesc => _r('componentsFfmpegDesc');
   String get componentsStatusLoading => _r('componentsStatusLoading');
   String get componentsStatusNotFound => _r('componentsStatusNotFound');
+  String get componentsStatusNotFoundUnsupported =>
+      _r('componentsStatusNotFoundUnsupported');
+  String get componentsManagedUnsupported =>
+      _r('componentsManagedUnsupported');
   String get componentsSourceManual => _r('componentsSourceManual');
   String get componentsSourceManaged => _r('componentsSourceManaged');
   String get componentsSourceSystem => _r('componentsSourceSystem');

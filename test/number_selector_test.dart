@@ -9,6 +9,7 @@
 // ShadTheme + WidgetsApp），额外套 LocaleScope 提供 i18n。
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flux_down/src/i18n/i18n_store.dart';
 import 'package:flux_down/src/i18n/locale_provider.dart';
 import 'package:flux_down/src/theme/app_theme.dart';
 import 'package:flux_down/src/theme/flux_theme_tokens.dart';
@@ -49,6 +50,11 @@ Widget _wrap(Widget child) {
 }
 
 void main() {
+  // NumberSelector 的「自定义」项经 LocaleScope→S.of('zh')→I18nStore 查表，
+  // 需先加载翻译表（assets/i18n/*.json），否则文案回退致 find.text 落空。
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(I18nStore.load);
+
   testWidgets('点选预设值上报该值', (tester) async {
     int? reported;
     await tester.pumpWidget(
