@@ -758,12 +758,12 @@
     "pluginAutoDisabledToast": "插件「{name}」已因连续失败被自动禁用，可在「设置 → 插件」中重新启用",
 
     "settingsCatComponents": "组件",
-    "settingsCatComponentsDesc": "管理可选的外部工具（ffmpeg）",
+    "settingsCatComponentsDesc": "管理可选的外部工具",
 
-    "componentsFfmpegTitle": "ffmpeg",
-    "componentsFfmpegDesc": "合并音视频轨（DASH / 轨对任务）",
+    "componentsFfmpegTitle": "FFmpeg",
+    "componentsFfmpegDesc": "开源音视频处理工具，FluxDown 用它合并 DASH 等流媒体下载产生的独立音视频轨",
     "componentsStatusLoading": "探测中…",
-    "componentsStatusNotFound": "未找到 ffmpeg，请在下方安装或手动指定路径",
+    "componentsStatusNotFound": "未找到 FFmpeg，请在下方安装或手动指定路径",
     "componentsSourceManual": "手动指定",
     "componentsSourceManaged": "组件安装",
     "componentsSourceSystem": "系统 PATH",
@@ -771,7 +771,7 @@
     "componentsSystemPathNotFound": "未找到",
 
     "componentsManualPathLabel": "手动指定路径",
-    "componentsManualPathDesc": "直接指定 ffmpeg 可执行文件路径，优先级高于组件安装与系统 PATH",
+    "componentsManualPathDesc": "直接指定 FFmpeg 可执行文件路径，优先级高于组件安装与系统 PATH",
     "componentsManualPathHint": "例如 C:\\tools\\ffmpeg\\ffmpeg.exe",
     "componentsManualPathSave": "保存",
     "componentsManualPathClear": "清除",
@@ -788,10 +788,10 @@
     "componentsUninstallButton": "卸载",
     "componentsInstalling": "安装中…",
     "componentsInstallUnknownSize": "大小未知",
-    "componentsInstallSuccess": "ffmpeg 安装成功",
+    "componentsInstallSuccess": "FFmpeg 安装成功",
     "componentsInstallFailed": "安装失败：{message}",
-    "componentsUninstallSuccess": "ffmpeg 已卸载",
+    "componentsUninstallSuccess": "FFmpeg 已卸载",
     "componentsUninstallFailed": "卸载失败：{message}",
-    "componentsUninstallConfirmTitle": "卸载 ffmpeg",
-    "componentsUninstallConfirmMsg": "这将删除托管安装的 ffmpeg，手动指定路径与系统 PATH 中的 ffmpeg 不受影响"
+    "componentsUninstallConfirmTitle": "卸载 FFmpeg",
+    "componentsUninstallConfirmMsg": "这将删除托管安装的 FFmpeg，手动指定路径与系统 PATH 中的 FFmpeg 不受影响"
 }

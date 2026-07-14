@@ -758,12 +758,12 @@
     "pluginAutoDisabledToast": "Plugin \"{name}\" was auto-disabled after repeated failures. Re-enable it from Settings → Plugins.",
 
     "settingsCatComponents": "Components",
-    "settingsCatComponentsDesc": "Manage optional external tools (ffmpeg)",
+    "settingsCatComponentsDesc": "Manage optional external tools",
 
-    "componentsFfmpegTitle": "ffmpeg",
-    "componentsFfmpegDesc": "Merges audio/video tracks for DASH and paired-track downloads",
+    "componentsFfmpegTitle": "FFmpeg",
+    "componentsFfmpegDesc": "Open-source audio/video toolkit. FluxDown uses it to merge separate audio and video tracks from DASH and similar streaming downloads.",
     "componentsStatusLoading": "Detecting…",
-    "componentsStatusNotFound": "ffmpeg not found. Install it below or specify a path manually.",
+    "componentsStatusNotFound": "FFmpeg not found. Install it below or specify a path manually.",
     "componentsSourceManual": "Manual",
     "componentsSourceManaged": "Managed",
     "componentsSourceSystem": "System PATH",
@@ -771,13 +771,13 @@
     "componentsSystemPathNotFound": "not found",
 
     "componentsManualPathLabel": "Manual path",
-    "componentsManualPathDesc": "Point directly to an ffmpeg executable; takes priority over the managed install and system PATH.",
+    "componentsManualPathDesc": "Point directly to an FFmpeg executable; takes priority over the managed install and system PATH.",
     "componentsManualPathHint": "e.g. C:\\tools\\ffmpeg\\ffmpeg.exe",
     "componentsManualPathSave": "Save",
     "componentsManualPathClear": "Clear",
 
     "componentsInstallSectionTitle": "Managed install",
-    "componentsInstallSectionDesc": "Downloads a static ffmpeg build from the official BtbN/FFmpeg-Builds release on demand — not bundled with the installer.",
+    "componentsInstallSectionDesc": "Downloads a static FFmpeg build from the official BtbN/FFmpeg-Builds release on demand — not bundled with the installer.",
     "componentsFetchVersionsButton": "Refresh version list",
     "componentsVersionsLoading": "Loading versions…",
     "componentsVersionsLoadFailed": "Failed to load versions: {message}",
@@ -788,10 +788,10 @@
     "componentsUninstallButton": "Uninstall",
     "componentsInstalling": "Installing…",
     "componentsInstallUnknownSize": "size unknown",
-    "componentsInstallSuccess": "ffmpeg installed",
+    "componentsInstallSuccess": "FFmpeg installed",
     "componentsInstallFailed": "Install failed: {message}",
-    "componentsUninstallSuccess": "ffmpeg uninstalled",
+    "componentsUninstallSuccess": "FFmpeg uninstalled",
     "componentsUninstallFailed": "Uninstall failed: {message}",
-    "componentsUninstallConfirmTitle": "Uninstall ffmpeg",
-    "componentsUninstallConfirmMsg": "This removes the managed ffmpeg build. Manual and system-PATH ffmpeg are not affected."
+    "componentsUninstallConfirmTitle": "Uninstall FFmpeg",
+    "componentsUninstallConfirmMsg": "This removes the managed FFmpeg build. Manual and system-PATH FFmpeg are not affected."
 }
