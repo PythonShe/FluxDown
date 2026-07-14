@@ -113,6 +113,21 @@ void WindowClassRegistrar::UnregisterWindowClass() {
   class_registered_ = false;
 }
 
+namespace {
+
+// CreateWindow 会为 overlapped（非 popup/child）窗口强制补回 WS_CAPTION，
+// 仅在创建参数里去掉无效；创建后显式移除并 SWP_FRAMECHANGED 生效。
+// 保留 WS_THICKFRAME → 四边原生边框/缩放带/DWM 阴影/Snap 均在。
+void RemoveCaption(HWND window) {
+  const LONG_PTR style = GetWindowLongPtr(window, GWL_STYLE);
+  SetWindowLongPtr(window, GWL_STYLE, style & ~WS_CAPTION);
+  SetWindowPos(window, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
+}
+
+}  // namespace
+
 Win32Window::Win32Window() {
   ++g_active_window_count;
 }
@@ -136,8 +151,10 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
+  // 无标题栏但保留系统标准框架：去掉 WS_CAPTION（DWM 不再绘制标题栏与
+  // 原生按钮），保留 WS_THICKFRAME → 四边原生边框/缩放带/阴影/Snap 均在。
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+      window_class, title.c_str(), WS_OVERLAPPEDWINDOW & ~WS_CAPTION,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
@@ -146,6 +163,7 @@ bool Win32Window::Create(const std::wstring& title,
     return false;
   }
 
+  RemoveCaption(window);
   UpdateTheme(window);
 
   return OnCreate();
@@ -176,8 +194,9 @@ bool Win32Window::CreateCentered(const std::wstring& title,
   int pos_x = work_area.left + (work_w - scaled_width) / 2;
   int pos_y = work_area.top + (work_h - scaled_height) / 2;
 
+  // 同 Create()：无标题栏、保留系统标准框架（详见上方注释）。
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+      window_class, title.c_str(), WS_OVERLAPPEDWINDOW & ~WS_CAPTION,
       pos_x, pos_y, scaled_width, scaled_height,
       nullptr, nullptr, GetModuleHandle(nullptr), this);
 
@@ -185,6 +204,7 @@ bool Win32Window::CreateCentered(const std::wstring& title,
     return false;
   }
 
+  RemoveCaption(window);
   UpdateTheme(window);
 
   return OnCreate();
