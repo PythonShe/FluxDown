@@ -294,7 +294,7 @@ notifyRemoteToggle.addEventListener('change', async () => {
   await saveSettings({ notifyRemoteTask: notifyRemoteToggle.checked });
 });
 
-// ===== fluxdown:// 自定义协议开关（仅 Android 生效，与 popup 双入口镜像） =====
+// ===== fluxdown:// 自定义协议开关（Android 与桌面均生效，与 popup 双入口镜像） =====
 protocolToggle.addEventListener('change', async () => {
   await saveSettings({ enableFluxdownProtocol: protocolToggle.checked });
 });

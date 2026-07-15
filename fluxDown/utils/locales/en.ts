@@ -251,11 +251,11 @@ const en: Record<MessageKey, string> = {
   "options.rules.minFileSizeDesc": "Files smaller than this are not intercepted",
   "options.rules.domainDesc": "Downloads from these domains are never intercepted",
 
-  // Custom protocol (fluxdown://, Android only)
-  "options.protocol.label": "FluxDown Protocol (Android only)",
+  // Custom protocol (fluxdown://)
+  "options.protocol.label": "FluxDown Protocol",
   "options.protocol.enabled": "On — launch app via fluxdown://",
   "options.protocol.disabled": "Off (default)",
-  "options.protocol.desc": "Android only: launch the FluxDown app via the fluxdown:// protocol when intercepting downloads. Cookies and auth headers cannot be carried, and paired video+audio downloads fall back to the browser; desktop browsers ignore this switch and keep using the native channel.",
+  "options.protocol.desc": "Launch the FluxDown app via the fluxdown:// protocol when intercepting downloads — supported on Android and desktop. On Android this is the only available channel; on desktop the native channel is more capable (it carries cookies and auth headers), so keep this off unless the native channel is unavailable. Protocol mode carries no credentials, and paired video+audio downloads fall back to the browser.",
 
   // Task completion notification (task panel)
   "notify.taskCompletedTitle": "Download Complete",

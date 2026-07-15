@@ -237,11 +237,11 @@ const zhCN = {
   "options.rules.minFileSizeDesc": "小于该大小的文件不会被拦截",
   "options.rules.domainDesc": "这些域名下的下载将不会被拦截",
 
-  // 自定义协议（fluxdown://，仅 Android 生效）
-  "options.protocol.label": "FluxDown 自定义协议（仅 Android）",
+  // 自定义协议（fluxdown://）
+  "options.protocol.label": "FluxDown 自定义协议",
   "options.protocol.enabled": "已启用，经 fluxdown:// 唤起应用",
   "options.protocol.disabled": "关闭（默认）",
-  "options.protocol.desc": "仅 Android：拦截下载时经 fluxdown:// 协议唤起 FluxDown 应用。不携带 Cookie 等认证信息，音视频分轨下载会回退浏览器；桌面浏览器忽略此开关，仍走本机通道。",
+  "options.protocol.desc": "拦截下载时经 fluxdown:// 协议唤起 FluxDown 应用，Android 与桌面客户端均支持。Android 上这是唯一可用通道；桌面端本机通道功能更全（可携带 Cookie 等认证信息），建议仅在本机通道不可用时开启。协议模式不携带认证信息，音视频分轨下载会回退浏览器。",
 
   // 任务完成通知（任务面板）
   "notify.taskCompletedTitle": "下载完成",

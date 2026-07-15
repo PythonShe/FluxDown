@@ -46,4 +46,65 @@ class AppDelegate: FlutterAppDelegate, UNUserNotificationCenterDelegate {
   override func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
     return true
   }
+
+  // MARK: - fluxdown:// URL scheme
+
+  /// 冷启动时暂存的协议 URL：URL open 事件可能早于 Dart 侧
+  /// `com.fluxdown/single_instance` 的 handler 注册，先缓冲再重试投递。
+  private var pendingUrls: [String] = []
+  private var deliverRetryCount = 0
+
+  /// 系统派发 `fluxdown://` URL（CFBundleURLTypes 注册）：与 Windows 的
+  /// WM_COPYDATA / Linux 的 GApplication::open 同构 —— 把 URL 字符串按
+  /// `onSecondInstance` 参数格式转发给 Dart（main.dart 复用同一条
+  /// 启动参数解析链），并把主窗口带到前台。
+  override func application(_ application: NSApplication, open urls: [URL]) {
+    let args = urls.map { $0.absoluteString }.filter { !$0.isEmpty }
+    guard !args.isEmpty else { return }
+    pendingUrls.append(contentsOf: args)
+    deliverRetryCount = 0
+    deliverPendingUrls()
+    restoreMainWindow()
+  }
+
+  /// 投递缓冲的 URL；Dart handler 尚未注册（冷启动竞态）时按 0.5s 间隔
+  /// 重试，最多 20 次（10s 覆盖首帧 + initState 的最坏情况）。
+  private func deliverPendingUrls() {
+    guard !pendingUrls.isEmpty else { return }
+    guard
+      let controller = mainFlutterWindow?.contentViewController
+        as? FlutterViewController
+    else {
+      scheduleDeliverRetry()
+      return
+    }
+    let channel = FlutterMethodChannel(
+      name: "com.fluxdown/single_instance",
+      binaryMessenger: controller.engine.binaryMessenger
+    )
+    let args = pendingUrls
+    channel.invokeMethod("onSecondInstance", arguments: args) { [weak self] result in
+      guard let self else { return }
+      let notImplemented =
+        (result as? NSObject) === FlutterMethodNotImplemented
+      if result is FlutterError || notImplemented {
+        // handler 未注册（冷启动竞态）或出错：保留缓冲重试
+        self.scheduleDeliverRetry()
+      } else {
+        // 成功（Dart handler 返回 null → nil/NSNull，同样算成功）
+        self.pendingUrls.removeAll()
+      }
+    }
+  }
+
+  private func scheduleDeliverRetry() {
+    guard deliverRetryCount < 20 else {
+      pendingUrls.removeAll()
+      return
+    }
+    deliverRetryCount += 1
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+      self?.deliverPendingUrls()
+    }
+  }
 }

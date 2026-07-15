@@ -3,7 +3,7 @@ title: API 总览
 description: FluxDown 的 HTTP API——五组路由、鉴权方式,以及它与 headless 服务器的关系。
 section: api
 order: 1
-sourceHash: "52607d459b46"
+sourceHash: "5e21d110ba29"
 ---
 
 FluxDown 内置一套小型 HTTP API,供浏览器扩展、油猴脚本、aria2 客户端与自动化工具使用,存在于两个地方:
@@ -131,6 +131,32 @@ curl -X POST http://<host>:17800/mcp \
        "params":{"name":"download_add",
                  "arguments":{"url":"https://example.com/file.zip","segments":8}}}'
 ```
+
+## fluxdown:// URL 协议
+
+在 HTTP API 之外,FluxDown 还注册了一个自定义 URL 协议,任何网页、脚本或第三方应用都可以用它转交下载——不需要发起本机 HTTP 调用:
+
+```text
+fluxdown://download?url=<percent 编码的 URL>&filename=<可选文件名>
+```
+
+- `url`——必填。要下载的地址,需 percent 编码(`http`/`https`/`ftp` 直链或 `magnet:` 链接)。缺少或为空 `url` 参数的 `fluxdown://` URL 会被静默忽略。
+- `filename`——可选。建议文件名,会预填给用户保留或修改。当真实文件名只存在于接收方永远看不到的 `Content-Disposition` 响应头里时特别有用。
+
+由谁响应取决于平台:
+
+- **桌面端(Windows、macOS、Linux)**——客户端注册系统协议处理器(Windows 每次启动写注册表;macOS 经 `CFBundleURLTypes` 声明;Linux 经 `.desktop` 文件的 `x-scheme-handler` 条目)。打开 `fluxdown://` URL 会启动客户端(或转发给已在运行的实例),并把请求路由进与浏览器扩展请求相同的外部下载流程:默认弹快速下载确认框,用户开启免打扰下载后则静默建任务。在 Android 以及受限的桌面环境中,浏览器扩展本身也可以经此协议投递——见 [fluxdown:// 协议模式](/docs/zh/browser-extension/usage/)。
+- **Android**——应用为该 scheme 声明了 VIEW intent-filter。打开 URL 会唤起应用并显示新建下载弹层,`url` 与 `filename` 已预填;用户确认后才开始下载。弹层打开期间陆续到达的协议 URL 会作为新行合入其中(浏览器扩展在 Android 上就是这样投递批量下载的)。
+
+一个普通的 HTML 链接就能完成集成:
+
+```html
+<a href="fluxdown://download?url=https%3A%2F%2Fexample.com%2Ffile.zip&filename=file.zip">
+  用 FluxDown 下载
+</a>
+```
+
+注意该协议不携带任何 Cookie、请求头或凭据——接收方会从零发起对该 URL 的请求。需要认证的下载请改用上面的脚本接管或管理 API 端点,它们的请求体接受 `cookies` 与 `headers`。
 
 ## 交互式文档
 

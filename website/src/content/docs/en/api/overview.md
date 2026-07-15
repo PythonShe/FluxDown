@@ -131,6 +131,32 @@ curl -X POST http://<host>:17800/mcp \
                  "arguments":{"url":"https://example.com/file.zip","segments":8}}}'
 ```
 
+## The fluxdown:// URL protocol
+
+Alongside the HTTP API, FluxDown registers a custom URL protocol that any web page, script, or third-party app can use to hand a download off — no local HTTP call required:
+
+```text
+fluxdown://download?url=<percent-encoded URL>&filename=<optional name>
+```
+
+- `url` — required. The address to download, percent-encoded (`http`/`https`/`ftp` direct links or a `magnet:` link). A `fluxdown://` URL with a missing or empty `url` parameter is silently ignored.
+- `filename` — optional. A suggested file name, pre-filled for the user to keep or change. Useful when the real name only exists in a `Content-Disposition` header the receiving app will never see.
+
+Who answers it depends on the platform:
+
+- **Desktop (Windows, macOS, Linux)** — the app registers the protocol handler (Windows registry on every startup; a `CFBundleURLTypes` declaration on macOS; an `x-scheme-handler` entry in the `.desktop` file on Linux). Opening a `fluxdown://` URL launches the app (or forwards to the already-running instance) and routes the request into the same external-download flow as browser-extension requests: a quick-download confirmation by default, silent task creation if the user enabled no-prompt downloads. On Android and in restricted desktop environments, the browser extension itself can deliver through this protocol — see [the fluxdown:// protocol mode](/docs/en/browser-extension/usage/).
+- **Android** — the app declares a VIEW intent-filter for the scheme. Opening the URL wakes the app and shows the new-download sheet with `url` and `filename` pre-filled; the user confirms before anything downloads. Successive protocol URLs arriving while the sheet is open are merged into it as additional lines (this is how the browser extension delivers batch downloads on Android).
+
+A plain HTML link is enough to integrate:
+
+```html
+<a href="fluxdown://download?url=https%3A%2F%2Fexample.com%2Ffile.zip&filename=file.zip">
+  Download with FluxDown
+</a>
+```
+
+Note the protocol carries no cookies, headers, or credentials — the receiving app fetches the URL from scratch. For authenticated downloads, use the script-takeover or management endpoints above, which accept `cookies` and `headers` in the request body.
+
 ## Interactive documentation
 
 - [`/api-docs`](/api-docs) on this site renders the full OpenAPI 3.1 spec (generated from the actual route handlers) with a try-it-out UI, for the routes common to both hosts.

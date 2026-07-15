@@ -41,6 +41,22 @@ You don't need to open the popup to flip it: press **Alt+Shift+D** anywhere in t
 
 The toolbar icon itself reflects the current state too (it dims when interception is off), so you can tell at a glance without opening the popup.
 
+## The fluxdown:// protocol mode
+
+Normally the extension hands downloads to the FluxDown app over Native Messaging. The **FluxDown Protocol** toggle in the popup's Quick Settings and on the options page (off by default) switches to a different channel: an intercepted download navigates to a `fluxdown://download?url=...&filename=...` URL, and the operating system wakes whatever app is registered for that protocol — the FluxDown desktop or Android app.
+
+Where you'd use it depends on the platform:
+
+- **Android** — this is the *only* channel. Android browsers that support extensions (Edge, Firefox, Kiwi, and other Chromium forks) have no Native Messaging at all, so the toggle must be on for interception to reach the app. The protocol URL fires a system VIEW intent that wakes the FluxDown Android app and opens its new-download sheet with the URL — and the suggested filename, when the page provided one — already filled in; you confirm the folder and thread count and start the download there. Batch downloads (for example a multi-select from the resource panel) are delivered one link at a time, a moment apart, and merge into the same open sheet as extra lines, so a batch becomes one form with all the URLs in it.
+- **Desktop (Windows, macOS, Linux)** — the toggle works here too: with it on, downloads reach the app through the protocol handler instead of Native Messaging, landing in the same external-download flow (quick-download confirmation, or silent task creation if you enabled no-prompt downloads). Native Messaging remains the better channel — it carries cookies, headers, request method, and body, which the protocol cannot — so keep the toggle off on desktop unless Native Messaging is unavailable, for example under a browser policy that blocks it or a portable setup where the host was never registered.
+
+Two limitations apply on every platform:
+
+- **No credentials travel with the link.** The protocol URL carries only the address and a filename hint — cookies, `Authorization` headers, request method, and body all stay behind in the browser. Downloads that need a logged-in session will come out as an error page or a permission denial; the protocol mode is for publicly reachable files.
+- **Paired video+audio downloads fall back to the browser.** A protocol URL can express only one address, so sniffed media that needs a separate audio track merged in can't be handed off this way — rather than produce a silent video, the extension lets the browser download it normally.
+
+It goes without saying that the [FluxDown app](/#download) must be installed on the device — without it, nothing is registered to answer the `fluxdown://` URL and the navigation fizzles.
+
 ## Send links, images, and media to FluxDown from the right-click menu
 
 Right-clicking exposes FluxDown entries independent of the Download Intercept toggle — they work even while interception is off:
