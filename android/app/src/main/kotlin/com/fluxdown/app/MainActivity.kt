@@ -27,8 +27,8 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var pendingResult: MethodChannel.Result? = null
     private var shareChannel: MethodChannel? = null
-    /** 冷启动时暂存的分享内容，等 Dart 侧首次 getInitialShare 时取走。 */
-    private var pendingShare: String? = null
+    /** 冷启动时暂存的分享内容（url + filename），等 Dart 侧首次 getInitialShare 时取走。 */
+    private var pendingShare: HashMap<String, String>? = null
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
@@ -283,39 +283,52 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * 从 intent 提取可下载的 URL / magnet。
+     * 从 intent 提取可下载的 URL / magnet，连同可选文件名打包为
+     * `{"url": ..., "filename": ...}`（filename 仅 fluxdown:// 协议携带，
+     * 其余场景为空串，Dart 侧据此预填重命名）。
      * - ACTION_SEND / ACTION_SEND_MULTIPLE：取 EXTRA_TEXT（浏览器"分享链接"、
      *   Via 等外部下载器切换协议），缺失时回退 ClipData 文本（通配 mimeType
      *   的分享可能不带 EXTRA_TEXT）
-     * - ACTION_VIEW：取 data（magnet: 直链等；fluxdown:// 则解析 url 参数）
+     * - ACTION_VIEW：取 data（magnet: 直链等；fluxdown:// 则解析 url/filename 参数）
      * 返回 null 表示无可用内容（如首页 LAUNCHER 启动）。
      */
-    private fun extractShared(intent: Intent?): String? {
+    private fun extractShared(intent: Intent?): HashMap<String, String>? {
         if (intent == null) return null
         return when (intent.action) {
-            Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE ->
-                intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.ifEmpty { null }
+            Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
+                val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.ifEmpty { null }
                     ?: extractClipText(intent)
+                text?.let { sharePayload(it) }
+            }
             Intent.ACTION_VIEW -> {
                 val data = intent.dataString?.trim()?.ifEmpty { null } ?: return null
                 if (data.startsWith("fluxdown://", ignoreCase = true)) {
                     // fluxdown://download?url=<encoded-url>&filename=<name>
-                    // 解析 url 参数提取真实下载地址，忽略 filename（引擎自动推断）。
+                    // 解析 url 参数提取真实下载地址，filename 一并携带
+                    // （协议模式不带 Cookie，Content-Disposition 场景引擎推断
+                    // 不出正确文件名，扩展传来的 filename 是唯一可靠来源）。
                     // 解析失败/缺 url 参数 → 返回 null 当作普通启动忽略；
                     // 决不能把 fluxdown:// 原始串交给 Dart，否则会创建必然失败的垃圾任务。
                     try {
                         val uri = Uri.parse(data)
-                        uri.getQueryParameter("url")?.trim()?.ifEmpty { null }
+                        val url = uri.getQueryParameter("url")?.trim()?.ifEmpty { null }
+                            ?: return null
+                        val filename = uri.getQueryParameter("filename")?.trim() ?: ""
+                        sharePayload(url, filename)
                     } catch (_: Exception) {
                         null
                     }
                 } else {
-                    data
+                    sharePayload(data)
                 }
             }
             else -> null
         }
     }
+
+    /** 组装跨 channel 的分享载荷（StandardMethodCodec 可编码的 HashMap）。 */
+    private fun sharePayload(url: String, filename: String = ""): HashMap<String, String> =
+        hashMapOf("url" to url, "filename" to filename)
 
     /** 遍历 ClipData 取首个非空文本项（分享 intent 缺 EXTRA_TEXT 时的兜底）。 */
     private fun extractClipText(intent: Intent): String? {

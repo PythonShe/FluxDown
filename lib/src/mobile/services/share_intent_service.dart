@@ -14,6 +14,9 @@ const _tag = 'ShareIntent';
 /// - Dart 侧 invoke `getInitialShare`（冷启动，首帧就绪后主动拉取暂存内容，
 ///   取走即清空，避免重复触发）。
 ///
+/// 载荷双形态兼容：Android 传 `{url, filename}` Map（filename 仅
+/// fluxdown:// 协议携带，其余为空串）；iOS 仍传纯 String（无协议模式）。
+///
 /// 分享内容可能夹带描述文字（如“看看这个 https://x/f.zip”），[extractUrl]
 /// 从中提取首个可下载的 URL / magnet。
 class ShareIntentService {
@@ -24,17 +27,20 @@ class ShareIntentService {
   /// 当前平台是否支持系统分享接入
   static bool get supported => Platform.isAndroid || Platform.isIOS;
 
-  static void Function(String url)? _onShared;
+  static void Function(String url, String filename)? _onShared;
 
   /// 注册分享回调，并立即拉取冷启动时暂存的分享内容。
   ///
-  /// [onShared] 收到的是已提取的 URL / magnet；提取失败则不回调。
-  static Future<void> init(void Function(String url) onShared) async {
+  /// [onShared] 收到的是已提取的 URL / magnet 与可选的建议文件名
+  /// （仅 fluxdown:// 协议携带，其余场景为空串）；提取失败则不回调。
+  static Future<void> init(
+    void Function(String url, String filename) onShared,
+  ) async {
     if (!supported) return;
     _onShared = onShared;
     _channel.setMethodCallHandler(_handle);
     try {
-      final initial = await _channel.invokeMethod<String>('getInitialShare');
+      final initial = await _channel.invokeMethod<Object>('getInitialShare');
       _dispatch(initial);
     } catch (e, st) {
       logError(_tag, 'getInitialShare failed', e, st);
@@ -48,20 +54,28 @@ class ShareIntentService {
 
   static Future<void> _handle(MethodCall call) async {
     if (call.method == 'onShare') {
-      _dispatch(call.arguments as String?);
+      _dispatch(call.arguments);
     }
   }
 
-  static void _dispatch(String? raw) {
-    final url = extractUrl(raw);
+  static void _dispatch(Object? raw) {
+    final String? text;
+    var filename = '';
+    if (raw is Map) {
+      text = raw['url'] as String?;
+      filename = (raw['filename'] as String?)?.trim() ?? '';
+    } else {
+      text = raw as String?;
+    }
+    final url = extractUrl(text);
     if (url == null) {
-      if (raw != null && raw.isNotEmpty) {
+      if (text != null && text.isNotEmpty) {
         logInfo(_tag, 'shared text has no usable url');
       }
       return;
     }
     logInfo(_tag, 'shared url received');
-    _onShared?.call(url);
+    _onShared?.call(url, filename);
   }
 
   /// 从分享文本中提取首个可下载链接。

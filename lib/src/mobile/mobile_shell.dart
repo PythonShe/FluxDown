@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:shadcn_ui/shadcn_ui.dart' show LucideIcons;
 
@@ -36,6 +38,12 @@ class _MobileShellState extends State<MobileShell> with WidgetsBindingObserver {
   final _controller = DownloadController();
   final _settings = SettingsProvider(enableFileAssoc: false);
   bool _sheetOpen = false;
+
+  /// 新建下载弹层是否正在展示（区别于更新提示等其他弹层）。
+  /// 弹层可见期间到达的分享 / 协议 URL 经 [_shareAppendCtrl] 合入表单，
+  /// 支撑扩展批量协议唤起（逐条 VIEW intent，间隔 800ms）。
+  bool _downloadSheetOpen = false;
+  final _shareAppendCtrl = StreamController<String>.broadcast();
 
   /// 自动更新检查只触发一次（等配置加载完成后）。
   bool _updateCheckScheduled = false;
@@ -160,21 +168,32 @@ class _MobileShellState extends State<MobileShell> with WidgetsBindingObserver {
   }
 
   /// 收到系统分享 / URL scheme 唤起的链接：切到下载页，弹新建下载弹层
-  /// 并预填 URL。已有弹层打开时忽略，避免叠层。
-  Future<void> _onShared(String url) async {
-    if (!mounted || _sheetOpen) return;
+  /// 并预填 URL（fluxdown:// 协议携带的建议文件名一并预填）。
+  /// 新建下载弹层已打开时把 URL 追加进现有表单（批量协议唤起逐条到达）；
+  /// 其他弹层（更新提示等）打开时忽略，避免叠层。
+  Future<void> _onShared(String url, String filename) async {
+    if (!mounted) return;
+    if (_downloadSheetOpen) {
+      _shareAppendCtrl.add(url);
+      return;
+    }
+    if (_sheetOpen) return;
     // 若正在设置页，先回到任务列表
     Navigator.of(context).popUntil((r) => r.isFirst);
     _sheetOpen = true;
+    _downloadSheetOpen = true;
     try {
       await showMobileNewDownloadSheet(
         context,
         controller: _controller,
         settings: _settings,
         initialUrl: url,
+        initialFileName: filename,
+        appendUrls: _shareAppendCtrl.stream,
       );
     } finally {
       _sheetOpen = false;
+      _downloadSheetOpen = false;
     }
   }
 
@@ -195,6 +214,7 @@ class _MobileShellState extends State<MobileShell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     ShareIntentService.shutdown();
+    _shareAppendCtrl.close();
     _settings.removeListener(_maybeScheduleUpdateCheck);
     UpdateService.instance.removeListener(_onUpdateChanged);
     _controller.dispose();

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
@@ -29,6 +31,8 @@ Future<void> showMobileNewDownloadSheet(
   required DownloadController controller,
   required SettingsProvider settings,
   String initialUrl = '',
+  String initialFileName = '',
+  Stream<String>? appendUrls,
 }) {
   return showMobileSheet<void>(
     context,
@@ -36,6 +40,8 @@ Future<void> showMobileNewDownloadSheet(
       controller: controller,
       settings: settings,
       initialUrl: initialUrl,
+      initialFileName: initialFileName,
+      appendUrls: appendUrls,
       rootContext: context,
     ),
   );
@@ -46,6 +52,15 @@ class _NewDownloadSheet extends StatefulWidget {
   final SettingsProvider settings;
   final String initialUrl;
 
+  /// fluxdown:// 协议携带的建议文件名（协议模式不带 Cookie，
+  /// Content-Disposition 场景引擎推断不出正确文件名）。
+  /// 仅当用户未改动预填 URL 时随任务提交。
+  final String initialFileName;
+
+  /// 弹层可见期间追加到 URL 输入框的后续分享 / 协议 URL
+  /// （扩展批量协议唤起逐条 VIEW intent 到达，合入现有表单）。
+  final Stream<String>? appendUrls;
+
   /// 弹层关闭后仍存活的外层 context（用于 Toast）
   final BuildContext rootContext;
 
@@ -53,6 +68,8 @@ class _NewDownloadSheet extends StatefulWidget {
     required this.controller,
     required this.settings,
     required this.initialUrl,
+    required this.initialFileName,
+    this.appendUrls,
     required this.rootContext,
   });
 
@@ -73,6 +90,7 @@ class _NewDownloadSheetState extends State<_NewDownloadSheet> {
   late String _queueId;
   String _uaPreset = 'default';
   bool _advancedOpen = false;
+  StreamSubscription<String>? _appendSub;
 
   @override
   void initState() {
@@ -91,10 +109,25 @@ class _NewDownloadSheetState extends State<_NewDownloadSheet> {
         !widget.controller.queues.any((q) => q.queueId == _queueId)) {
       _queueId = '';
     }
+    // 弹层可见期间逐条到达的批量协议 URL：追加为新行（去重）
+    _appendSub = widget.appendUrls?.listen(_appendUrl);
+  }
+
+  void _appendUrl(String url) {
+    if (!mounted || url.isEmpty) return;
+    final lines = _urlController.text
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    if (lines.contains(url)) return;
+    lines.add(url);
+    _urlController.text = lines.join('\n');
   }
 
   @override
   void dispose() {
+    _appendSub?.cancel();
     _urlController.dispose();
     _dirController.dispose();
     _cookieController.dispose();
@@ -156,10 +189,18 @@ class _NewDownloadSheetState extends State<_NewDownloadSheet> {
       extraHeaders[key] = row.valueController.text.trim();
     }
 
+    // 协议唤起携带的建议文件名：仅当 URL 仍是预填的那条时生效
+    // （用户改成别的地址后沿用旧文件名会张冠李戴）。
+    final fileName =
+        (urls.length == 1 && urls.first == widget.initialUrl.trim())
+        ? widget.initialFileName
+        : '';
+
     if (urls.length == 1) {
       widget.controller.createTask(
         url: urls.first,
         saveDir: saveDir,
+        fileName: fileName,
         segments: segments,
         cookies: cookies,
         userAgent: userAgent,
