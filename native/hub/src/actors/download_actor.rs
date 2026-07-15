@@ -1,11 +1,14 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+#[cfg(hub_plugins)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use fluxdown_engine::bt_downloader::BtConfig;
 use fluxdown_engine::db::Db;
 use fluxdown_engine::download_manager::{self, TaskDone};
 use fluxdown_engine::events::EventSink;
+#[cfg(hub_plugins)]
 use fluxdown_engine::plugin::{PluginError, PluginManager};
 use fluxdown_engine::proxy_config::ProxyConfig;
 use fluxdown_engine::selection::HostSelection;
@@ -26,19 +29,21 @@ use crate::signals::{
     DeleteQueue, DetectSystemProxy, DownloadUpdate, Ed2kServerSubscriptionResult,
     ExternalDownloadRequest, FfmpegInstallProgress, FfmpegInstallResult, FfmpegStatusReport,
     FfmpegVersionList, FileAssociationStatus, IgnorePluginRetry, InstallFfmpeg,
-    InstallMarketPlugin, InstallPlugin, InstallUpdate, InstallYtdlp, MarketEntrySignal,
-    MarketIndexLoaded, MoveTaskToQueue, OpenFile, PluginList, PluginOpResult, ProbeTorrentMeta,
-    ProxyTestResult, RequestAllQueues, RequestAllTasks, RequestConfig, RequestFfmpegStatus,
-    RequestFfmpegVersions, RequestMarketIndex, RequestPlugins, RequestUpdateFailureMarker,
-    RequestYtdlpStatus, RequestYtdlpVersions, RescanFiles, RevealFile, SaveConfig,
-    SavePluginSettings, SelectBtFiles, SelectHlsQuality, SelectResolveVariant, SetFileAssociation,
-    SetPluginEnabled, SetPriorityTask, SetUrlProtocol, SystemProxyInfo, TestProxyConnection,
-    TaskSegmentsUpdated, TrackerSubscriptionResult, UninstallFfmpeg, UninstallPlugin,
-    UninstallYtdlp, UpdateCheckResult, UpdateEd2kServerSubscription, UpdateFailureMarker,
-    UpdateQueue, UpdateTaskSegments, UpdateTrackerSubscription,
+    InstallMarketPlugin, InstallPlugin, InstallUpdate, InstallYtdlp, MoveTaskToQueue, OpenFile,
+    ProbeTorrentMeta, ProxyTestResult, RequestAllQueues, RequestAllTasks, RequestConfig,
+    RequestFfmpegStatus, RequestFfmpegVersions, RequestMarketIndex, RequestPlugins,
+    RequestUpdateFailureMarker, RequestYtdlpStatus, RequestYtdlpVersions, RescanFiles, RevealFile,
+    SaveConfig, SavePluginSettings, SelectBtFiles, SelectHlsQuality, SelectResolveVariant,
+    SetFileAssociation, SetPluginEnabled, SetPriorityTask, SetUrlProtocol, SystemProxyInfo,
+    TaskSegmentsUpdated, TestProxyConnection, TrackerSubscriptionResult, UninstallFfmpeg,
+    UninstallPlugin, UninstallYtdlp, UpdateCheckResult, UpdateEd2kServerSubscription,
+    UpdateFailureMarker, UpdateQueue, UpdateTaskSegments, UpdateTrackerSubscription,
     UrlProtocolStatus, YtdlpInstallProgress, YtdlpInstallResult, YtdlpStatusReport,
     YtdlpVersionList,
 };
+// 插件「分支体专用」信号（仅在 hub_plugins 分支体内构造）：mobile 不引入。
+#[cfg(hub_plugins)]
+use crate::signals::{MarketEntrySignal, MarketIndexLoaded, PluginList, PluginOpResult};
 use crate::updater;
 use fluxdown_api::server::{ApiServerConfig, ApiServerHandle, spawn_api_server};
 use fluxdown_api::service::TaskEvent;
@@ -443,14 +448,19 @@ pub async fn run(db_dir: PathBuf) {
     // `on_resolve_ready`；onError 重试意图经 `plugin_retry_rx` 回流调用
     // `plugin_request_retry`。不接线会导致该宿主下 off-actor resolve 永不
     // 完成（下载卡死）。
-    let mut resolve_rx: mpsc::UnboundedReceiver<fluxdown_engine::download_manager::ResolveOutcome> =
-        match engine.manager.take_resolve_rx() {
-            Some(rx) => rx,
-            None => {
-                let (_tx, rx) = mpsc::unbounded_channel();
-                rx
-            }
-        };
+    #[cfg(hub_plugins)]
+    let mut resolve_rx: mpsc::UnboundedReceiver<
+        fluxdown_engine::download_manager::ResolveOutcome,
+    > = match engine.manager.take_resolve_rx() {
+        Some(rx) => rx,
+        None => {
+            let (_tx, rx) = mpsc::unbounded_channel();
+            rx
+        }
+    };
+    #[cfg(not(hub_plugins))]
+    let (_resolve_dummy_tx, mut resolve_rx) = mpsc::unbounded_channel::<()>();
+    #[cfg(hub_plugins)]
     let mut plugin_retry_rx: mpsc::UnboundedReceiver<(String, u64)> =
         match engine.manager.take_plugin_retry_rx() {
             Some(rx) => rx,
@@ -459,6 +469,8 @@ pub async fn run(db_dir: PathBuf) {
                 rx
             }
         };
+    #[cfg(not(hub_plugins))]
+    let (_plugin_retry_dummy_tx, mut plugin_retry_rx) = mpsc::unbounded_channel::<(String, u64)>();
 
     let create_recv = CreateTask::get_dart_signal_receiver();
     let batch_create_recv = BatchCreateTask::get_dart_signal_receiver();
@@ -627,8 +639,10 @@ pub async fn run(db_dir: PathBuf) {
     // 插件管理器共享句柄：读/写方法均只碰 Db + 插件表(不碰 active_tasks)，
     // 可安全在 `HubApiHost`(HTTP 侧)与本循环两处并发持有同一个 `Arc` 直接
     // `.await` 调用，无需经 `ApiCommand` 往返(见插件系统契约 hub 节 5)。
+    #[cfg(hub_plugins)]
     let plugin_manager = engine.manager.plugin_manager();
     let (api_cmd_tx, mut api_cmd_rx) = mpsc::channel::<ApiCommand>(32);
+    #[cfg(hub_plugins)]
     let api_host: Arc<dyn fluxdown_api::service::ApiHost> = Arc::new(HubApiHost::new(
         engine.db.clone(),
         api_cmd_tx,
@@ -636,6 +650,15 @@ pub async fn run(db_dir: PathBuf) {
         live_speeds,
         task_events_tx,
         plugin_manager.clone(),
+        engine.data_dir.clone(),
+    ));
+    #[cfg(not(hub_plugins))]
+    let api_host: Arc<dyn fluxdown_api::service::ApiHost> = Arc::new(HubApiHost::new(
+        engine.db.clone(),
+        api_cmd_tx,
+        ext_dl_tx.clone(),
+        live_speeds,
+        task_events_tx,
         engine.data_dir.clone(),
     ));
 
@@ -1308,78 +1331,106 @@ pub async fn run(db_dir: PathBuf) {
             }
             // --- Plugin system (see plugin-system contract §hub 3) ---
             Some(_) = req_plugins_recv.recv() => {
-                if let Some(pm) = engine.manager.plugin_manager() {
-                    send_plugin_list(&pm).await;
-                } else {
-                    PluginList { plugins: Vec::new() }.send_signal_to_dart();
+                #[cfg(hub_plugins)]
+                {
+                    if let Some(pm) = engine.manager.plugin_manager() {
+                        send_plugin_list(&pm).await;
+                    } else {
+                        PluginList { plugins: Vec::new() }.send_signal_to_dart();
+                    }
                 }
             }
             Some(signal) = install_plugin_recv.recv() => {
-                let msg = signal.message;
-                if let Some(pm) = engine.manager.plugin_manager() {
-                    // 分发规则：dev_mode → install_dev；否则优先 zip 字节，
-                    // 再退回目录路径；三者皆空 → 直接失败。
-                    let result: Result<String, PluginError> = if msg.dev_mode {
-                        pm.install_dev(Path::new(&msg.dir_path)).await
-                    } else if !msg.zip_bytes.is_empty() {
-                        pm.install_from_zip(msg.zip_bytes).await
-                    } else if !msg.dir_path.is_empty() {
-                        pm.install_from_dir(Path::new(&msg.dir_path)).await
-                    } else {
-                        Err(PluginError::ManifestInvalid(
-                            "未提供插件 zip 字节或目录路径".to_string(),
-                        ))
-                    };
-                    match result {
-                        Ok(identity) => {
-                            let missing = plugin_missing_components(&pm, &engine.db, &engine.data_dir, &identity).await;
-                            finish_plugin_op(&pm, "install", &identity, Ok(()), missing).await;
+                #[cfg(not(hub_plugins))]
+                let _ = &signal;
+                #[cfg(hub_plugins)]
+                {
+                    let msg = signal.message;
+                    if let Some(pm) = engine.manager.plugin_manager() {
+                        // 分发规则：dev_mode → install_dev；否则优先 zip 字节，
+                        // 再退回目录路径；三者皆空 → 直接失败。
+                        let result: Result<String, PluginError> = if msg.dev_mode {
+                            pm.install_dev(Path::new(&msg.dir_path)).await
+                        } else if !msg.zip_bytes.is_empty() {
+                            pm.install_from_zip(msg.zip_bytes).await
+                        } else if !msg.dir_path.is_empty() {
+                            pm.install_from_dir(Path::new(&msg.dir_path)).await
+                        } else {
+                            Err(PluginError::ManifestInvalid(
+                                "未提供插件 zip 字节或目录路径".to_string(),
+                            ))
+                        };
+                        match result {
+                            Ok(identity) => {
+                                let missing = plugin_missing_components(&pm, &engine.db, &engine.data_dir, &identity).await;
+                                finish_plugin_op(&pm, "install", &identity, Ok(()), missing).await;
+                            }
+                            Err(e) => finish_plugin_op(&pm, "install", "", Err(e), Vec::new()).await,
                         }
-                        Err(e) => finish_plugin_op(&pm, "install", "", Err(e), Vec::new()).await,
+                    } else {
+                        notify_plugin_manager_unavailable("install", "").await;
                     }
-                } else {
-                    notify_plugin_manager_unavailable("install", "").await;
                 }
             }
             Some(signal) = uninstall_plugin_recv.recv() => {
-                let msg = signal.message;
-                if let Some(pm) = engine.manager.plugin_manager() {
-                    let result = pm.uninstall(&msg.identity).await;
-                    finish_plugin_op(&pm, "uninstall", &msg.identity, result, Vec::new()).await;
-                } else {
-                    notify_plugin_manager_unavailable("uninstall", &msg.identity).await;
+                #[cfg(not(hub_plugins))]
+                let _ = &signal;
+                #[cfg(hub_plugins)]
+                {
+                    let msg = signal.message;
+                    if let Some(pm) = engine.manager.plugin_manager() {
+                        let result = pm.uninstall(&msg.identity).await;
+                        finish_plugin_op(&pm, "uninstall", &msg.identity, result, Vec::new()).await;
+                    } else {
+                        notify_plugin_manager_unavailable("uninstall", &msg.identity).await;
+                    }
                 }
             }
             Some(signal) = set_plugin_enabled_recv.recv() => {
-                let msg = signal.message;
-                if let Some(pm) = engine.manager.plugin_manager() {
-                    let result = pm.set_enabled(&msg.identity, msg.enabled).await;
-                    finish_plugin_op(&pm, "set_enabled", &msg.identity, result, Vec::new()).await;
-                } else {
-                    notify_plugin_manager_unavailable("set_enabled", &msg.identity).await;
+                #[cfg(not(hub_plugins))]
+                let _ = &signal;
+                #[cfg(hub_plugins)]
+                {
+                    let msg = signal.message;
+                    if let Some(pm) = engine.manager.plugin_manager() {
+                        let result = pm.set_enabled(&msg.identity, msg.enabled).await;
+                        finish_plugin_op(&pm, "set_enabled", &msg.identity, result, Vec::new()).await;
+                    } else {
+                        notify_plugin_manager_unavailable("set_enabled", &msg.identity).await;
+                    }
                 }
             }
             Some(signal) = save_plugin_settings_recv.recv() => {
-                let msg = signal.message;
-                if let Some(pm) = engine.manager.plugin_manager() {
-                    let entries: Vec<(String, String)> = msg
-                        .entries
-                        .into_iter()
-                        .map(|e| (e.key, e.value))
-                        .collect();
-                    let result = pm.update_settings(&msg.identity, &entries).await;
-                    finish_plugin_op(&pm, "save_settings", &msg.identity, result, Vec::new()).await;
-                } else {
-                    notify_plugin_manager_unavailable("save_settings", &msg.identity).await;
+                #[cfg(not(hub_plugins))]
+                let _ = &signal;
+                #[cfg(hub_plugins)]
+                {
+                    let msg = signal.message;
+                    if let Some(pm) = engine.manager.plugin_manager() {
+                        let entries: Vec<(String, String)> = msg
+                            .entries
+                            .into_iter()
+                            .map(|e| (e.key, e.value))
+                            .collect();
+                        let result = pm.update_settings(&msg.identity, &entries).await;
+                        finish_plugin_op(&pm, "save_settings", &msg.identity, result, Vec::new()).await;
+                    } else {
+                        notify_plugin_manager_unavailable("save_settings", &msg.identity).await;
+                    }
                 }
             }
             // --- 逃生舱：清任务 resolver 绑定 + 按原始链接恢复(见插件系统契约一) ---
             Some(signal) = ignore_plugin_retry_recv.recv() => {
-                let msg = signal.message;
-                if let Some(pm) = engine.manager.plugin_manager() {
-                    pm.clear_task_resolver(&msg.task_id).await;
+                #[cfg(not(hub_plugins))]
+                let _ = &signal;
+                #[cfg(hub_plugins)]
+                {
+                    let msg = signal.message;
+                    if let Some(pm) = engine.manager.plugin_manager() {
+                        pm.clear_task_resolver(&msg.task_id).await;
+                    }
+                    engine.manager.resume_task(&msg.task_id).await;
                 }
-                engine.manager.resume_task(&msg.task_id).await;
             }
             // --- 去中心化插件市场（见市场契约）：fetch/install 是网络 I/O
             // （单源最长 20s），严禁在本 select! 分支内 await —— 会冻结整条
@@ -1387,84 +1438,92 @@ pub async fn run(db_dir: PathBuf) {
             // 的网络请求丢进 off-actor tokio::spawn，完成后直接在该任务里
             // send_signal_to_dart()（RustSignal 可从任意任务发送）。---
             Some(_) = request_market_index_recv.recv() => {
-                match engine.manager.market_client().await {
-                    Some(client) => {
-                        tokio::spawn(async move {
-                            match client.fetch_index().await {
-                                Ok(idx) => {
-                                    let entries = idx
-                                        .entries
-                                        .into_iter()
-                                        .map(MarketEntrySignal::from)
-                                        .collect();
-                                    MarketIndexLoaded {
-                                        ok: true,
-                                        message: String::new(),
-                                        entries,
+                #[cfg(hub_plugins)]
+                {
+                    match engine.manager.market_client().await {
+                        Some(client) => {
+                            tokio::spawn(async move {
+                                match client.fetch_index().await {
+                                    Ok(idx) => {
+                                        let entries = idx
+                                            .entries
+                                            .into_iter()
+                                            .map(MarketEntrySignal::from)
+                                            .collect();
+                                        MarketIndexLoaded {
+                                            ok: true,
+                                            message: String::new(),
+                                            entries,
+                                        }
+                                        .send_signal_to_dart();
                                     }
-                                    .send_signal_to_dart();
-                                }
-                                Err(e) => {
-                                    MarketIndexLoaded {
-                                        ok: false,
-                                        message: e.to_string(),
-                                        entries: Vec::new(),
+                                    Err(e) => {
+                                        MarketIndexLoaded {
+                                            ok: false,
+                                            message: e.to_string(),
+                                            entries: Vec::new(),
+                                        }
+                                        .send_signal_to_dart();
                                     }
-                                    .send_signal_to_dart();
                                 }
-                            }
-                        });
-                    }
-                    None => {
-                        MarketIndexLoaded {
-                            ok: false,
-                            message: "插件系统未启用".to_string(),
-                            entries: Vec::new(),
+                            });
                         }
-                        .send_signal_to_dart();
+                        None => {
+                            MarketIndexLoaded {
+                                ok: false,
+                                message: "插件系统未启用".to_string(),
+                                entries: Vec::new(),
+                            }
+                            .send_signal_to_dart();
+                        }
                     }
                 }
             }
             Some(signal) = install_market_plugin_recv.recv() => {
-                let plugin_id = signal.message.plugin_id;
-                match engine.manager.market_client().await {
-                    Some(client) => {
-                        let plugin_manager = engine.manager.plugin_manager();
-                        let db = engine.db.clone();
-                        let data_dir = engine.data_dir.clone();
-                        tokio::spawn(async move {
-                            let result = client.install_latest(&plugin_id).await;
-                            // identity 字段回填 plugin_id 供失败时 Dart 按市场条目
-                            // 定位；成功时用引擎分配的真实本地 identity（供后续
-                            // 启停/卸载/设置操作使用)。
-                            let (ok, identity, message) = match result {
-                                Ok(identity) => (true, identity, String::new()),
-                                Err(e) => (false, plugin_id.clone(), e.to_string()),
-                            };
-                            // 安装成功后按声明权限探测缺失的基础组件（提醒式）。
-                            let missing = match plugin_manager.as_ref() {
-                                Some(pm) if ok => {
-                                    plugin_missing_components(pm, &db, &data_dir, &identity).await
+                #[cfg(not(hub_plugins))]
+                let _ = &signal;
+                #[cfg(hub_plugins)]
+                {
+                    let plugin_id = signal.message.plugin_id;
+                    match engine.manager.market_client().await {
+                        Some(client) => {
+                            let plugin_manager = engine.manager.plugin_manager();
+                            let db = engine.db.clone();
+                            let data_dir = engine.data_dir.clone();
+                            tokio::spawn(async move {
+                                let result = client.install_latest(&plugin_id).await;
+                                // identity 字段回填 plugin_id 供失败时 Dart 按市场条目
+                                // 定位；成功时用引擎分配的真实本地 identity（供后续
+                                // 启停/卸载/设置操作使用)。
+                                let (ok, identity, message) = match result {
+                                    Ok(identity) => (true, identity, String::new()),
+                                    Err(e) => (false, plugin_id.clone(), e.to_string()),
+                                };
+                                // 安装成功后按声明权限探测缺失的基础组件（提醒式）。
+                                let missing = match plugin_manager.as_ref() {
+                                    Some(pm) if ok => {
+                                        plugin_missing_components(pm, &db, &data_dir, &identity).await
+                                    }
+                                    _ => Vec::new(),
+                                };
+                                PluginOpResult {
+                                    op: "market_install".to_string(),
+                                    identity,
+                                    ok,
+                                    message,
+                                    failed_key: String::new(),
+                                    missing_components: missing,
                                 }
-                                _ => Vec::new(),
-                            };
-                            PluginOpResult {
-                                op: "market_install".to_string(),
-                                identity,
-                                ok,
-                                message,
-                                failed_key: String::new(),
-                                missing_components: missing,
-                            }
-                            .send_signal_to_dart();
-                            match plugin_manager {
-                                Some(pm) => send_plugin_list(&pm).await,
-                                None => PluginList { plugins: Vec::new() }.send_signal_to_dart(),
-                            }
-                        });
-                    }
-                    None => {
-                        notify_plugin_manager_unavailable("market_install", &plugin_id).await;
+                                .send_signal_to_dart();
+                                match plugin_manager {
+                                    Some(pm) => send_plugin_list(&pm).await,
+                                    None => PluginList { plugins: Vec::new() }.send_signal_to_dart(),
+                                }
+                            });
+                        }
+                        None => {
+                            notify_plugin_manager_unavailable("market_install", &plugin_id).await;
+                        }
                     }
                 }
             }
@@ -1702,15 +1761,22 @@ pub async fn run(db_dir: PathBuf) {
             // --- Off-actor plugin resolve 回流(见插件系统契约一，关键：不接线
             // 会导致该宿主下 off-actor resolve 永不完成，下载卡死) ---
             Some(out) = resolve_rx.recv() => {
+                #[cfg(hub_plugins)]
                 engine.manager.on_resolve_ready(out).await;
+                #[cfg(not(hub_plugins))]
+                let _ = out;
             }
             Some((tid, delay)) = plugin_retry_rx.recv() => {
+                #[cfg(hub_plugins)]
                 engine.manager.plugin_request_retry(&tid, delay).await;
+                #[cfg(not(hub_plugins))]
+                let _ = (tid, delay);
             }
         }
     }
 }
 
+#[cfg(hub_plugins)]
 /// 刷新插件列表并回发 `PluginList`（安装/卸载/开关/存设置后统一调用）。
 async fn send_plugin_list(plugin_manager: &PluginManager) {
     let plugins = plugin_manager
@@ -1722,6 +1788,7 @@ async fn send_plugin_list(plugin_manager: &PluginManager) {
     PluginList { plugins }.send_signal_to_dart();
 }
 
+#[cfg(hub_plugins)]
 /// 插件写操作统一收尾：回发 `PluginOpResult` + 刷新后的 `PluginList`
 /// （见插件系统契约 hub 节 3：「每次操作后回发 PluginList + PluginOpResult」）。
 /// `failed_key` 恒为空——`fluxdown_engine::plugin::PluginError` 未暴露结构化
@@ -1749,6 +1816,7 @@ async fn finish_plugin_op(
     send_plugin_list(plugin_manager).await;
 }
 
+#[cfg(hub_plugins)]
 /// 按插件声明权限探测缺失的基础组件（安装成功后调用，提醒式非阻断）。
 /// 依赖表见 `fluxdown_engine::plugin::dependencies`。
 async fn plugin_missing_components(
@@ -1761,6 +1829,7 @@ async fn plugin_missing_components(
     fluxdown_engine::plugin::dependencies::missing_components(db, data_dir, &perms).await
 }
 
+#[cfg(hub_plugins)]
 /// `plugin_manager()` 返回 `None`（理论上不应发生，`Engine::new` 恒注入）时
 /// 的兜底回执：回发失败结果 + 空插件表，而非静默丢弃信号。
 async fn notify_plugin_manager_unavailable(op: &str, identity: &str) {

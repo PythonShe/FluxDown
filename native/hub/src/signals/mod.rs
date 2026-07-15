@@ -894,6 +894,7 @@ pub struct PluginInfoSignal {
     pub permissions: Vec<String>,
 }
 
+#[cfg(hub_plugins)]
 impl From<fluxdown_engine::plugin::PluginInfo> for PluginInfoSignal {
     fn from(info: fluxdown_engine::plugin::PluginInfo) -> Self {
         Self {
@@ -941,6 +942,7 @@ pub struct SettingFieldSignal {
     pub helper_label: String,
 }
 
+#[cfg(hub_plugins)]
 impl From<fluxdown_engine::plugin::SettingField> for SettingFieldSignal {
     fn from(field: fluxdown_engine::plugin::SettingField) -> Self {
         use fluxdown_engine::plugin::{SettingType, SettingWidget};
@@ -988,6 +990,7 @@ pub struct SettingOptionSignal {
     pub label: String,
 }
 
+#[cfg(hub_plugins)]
 impl From<fluxdown_engine::plugin::manifest::SettingOption> for SettingOptionSignal {
     fn from(opt: fluxdown_engine::plugin::manifest::SettingOption) -> Self {
         Self {
@@ -1045,6 +1048,7 @@ pub struct MarketEntrySignal {
     pub permissions: Vec<String>,
 }
 
+#[cfg(hub_plugins)]
 impl From<fluxdown_engine::plugin::MarketEntry> for MarketEntrySignal {
     fn from(e: fluxdown_engine::plugin::MarketEntry) -> Self {
         Self {
