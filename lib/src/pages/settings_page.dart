@@ -597,6 +597,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onConsumed: _onHighlightConsumed,
                   child: _SettingsContent(
                     category: _selected,
+                    onSelectCategory: (cat) => setState(() => _selected = cat),
                     settingsProvider: widget.settingsProvider,
                     pluginProvider: widget.pluginProvider,
                     downloadController: widget.downloadController,
@@ -954,11 +955,15 @@ class _SettingsContent extends StatefulWidget {
   final PluginProvider pluginProvider;
   final DownloadController? downloadController;
 
+  /// 切换设置分类（如插件依赖提醒跳「组件」分类），由设置页注入。
+  final ValueChanged<SettingsCategory>? onSelectCategory;
+
   const _SettingsContent({
     required this.category,
     required this.settingsProvider,
     required this.pluginProvider,
     this.downloadController,
+    this.onSelectCategory,
   });
 
   @override
@@ -1041,9 +1046,23 @@ class _SettingsContentState extends State<_SettingsContent> {
                   SettingsCategory.plugins => PluginListView(
                     key: const ValueKey('plugins'),
                     provider: pluginProvider,
+                    onNavigateToComponents: () => widget.onSelectCategory
+                        ?.call(SettingsCategory.components),
                   ),
-                  SettingsCategory.components => const _ComponentsContent(
-                    key: ValueKey('components'),
+                  SettingsCategory.components => Column(
+                    key: const ValueKey('components'),
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: const [
+                      _ComponentsContent(
+                        key: ValueKey('component-ffmpeg'),
+                        kind: _ComponentKind.ffmpeg,
+                      ),
+                      SizedBox(height: 12),
+                      _ComponentsContent(
+                        key: ValueKey('component-ytdlp'),
+                        kind: _ComponentKind.ytdlp,
+                      ),
+                    ],
                   ),
                   SettingsCategory.about => _AboutContent(
                     key: const ValueKey('about'),
@@ -4504,18 +4523,22 @@ class _CopyUserscriptButton extends StatelessWidget {
 /// 组件设置分类 body：ffmpeg 状态展示 + 手动路径 + 托管安装/卸载。
 ///
 /// ffmpeg 是可选的外部工具，由官方源按需下载，不随安装包分发；用于合并
-/// 音视频轨（DASH/轨对任务）。内部持有独立的 [ComponentsProvider] 实例
+/// 音视频轨（DASH/轨对任务）。内部持有独立的 [FfmpegController] 实例
 /// （随本 widget 生命周期创建/销毁），进入本分类时自动请求一次状态 +
 /// 版本列表（懒加载，无需额外按钮）。
+/// 组件卡片类型：决定使用哪个 [ComponentController] 与标题/描述文案。
+enum _ComponentKind { ffmpeg, ytdlp }
+
 class _ComponentsContent extends StatefulWidget {
-  const _ComponentsContent({super.key});
+  final _ComponentKind kind;
+  const _ComponentsContent({super.key, required this.kind});
 
   @override
   State<_ComponentsContent> createState() => _ComponentsContentState();
 }
 
 class _ComponentsContentState extends State<_ComponentsContent> {
-  late final ComponentsProvider _provider;
+  late final ComponentController _provider;
   late final TextEditingController _pathController;
   late final FocusNode _pathFocusNode;
   String? _selectedVersion;
@@ -4526,7 +4549,9 @@ class _ComponentsContentState extends State<_ComponentsContent> {
   @override
   void initState() {
     super.initState();
-    _provider = ComponentsProvider();
+    _provider = widget.kind == _ComponentKind.ffmpeg
+        ? FfmpegController()
+        : YtdlpController();
     _lastInstallResultSeq = _provider.installResultSeq;
     _pathController = TextEditingController(text: _provider.manualPath);
     _pathFocusNode = FocusNode();
@@ -4534,7 +4559,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     _provider.requestStatus();
     // 版本列表懒加载：仅在状态回流确认本平台支持托管安装后再拉取，
     // 避免 macOS 等不支持平台每次进页都发起注定失败的请求并弹错。
-    if (_provider.status != null && _provider.managedSupported) {
+    if (_provider.hasStatus && _provider.managedSupported) {
       _versionsRequested = true;
       _provider.requestVersions();
     }
@@ -4562,7 +4587,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     }
     // 状态回流后若确认平台支持托管安装且尚未拉过版本列表，懒拉一次。
     if (!_versionsRequested &&
-        _provider.status != null &&
+        _provider.hasStatus &&
         _provider.managedSupported) {
       _versionsRequested = true;
       _provider.requestVersions();
@@ -4570,23 +4595,28 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     final seq = _provider.installResultSeq;
     if (seq != _lastInstallResultSeq) {
       _lastInstallResultSeq = seq;
-      final result = _provider.lastInstallResult;
-      if (result != null) _showInstallResultToast(result);
+      if (_provider.lastResultOk != null) {
+        _showInstallResultToast(
+          _provider.lastResultOk!,
+          _provider.lastResultMessage,
+        );
+      }
       _pendingOp = '';
     }
     setState(() {});
   }
 
-  void _showInstallResultToast(FfmpegInstallResult result) {
+  void _showInstallResultToast(bool ok, String message) {
     final s = LocaleScope.of(context);
     final isUninstall = _pendingOp == 'uninstall';
-    if (result.ok) {
+    final name = _title(s);
+    if (ok) {
       ShadSonner.of(context).show(
         ShadToast(
           title: Text(
             isUninstall
-                ? s.componentsUninstallSuccess
-                : s.componentsInstallSuccess,
+                ? s.componentsUninstallSuccess(name)
+                : s.componentsInstallSuccess(name),
           ),
           duration: const Duration(seconds: 2),
         ),
@@ -4597,8 +4627,8 @@ class _ComponentsContentState extends State<_ComponentsContent> {
       ShadToast.destructive(
         title: Text(
           isUninstall
-              ? s.componentsUninstallFailed(result.message)
-              : s.componentsInstallFailed(result.message),
+              ? s.componentsUninstallFailed(message)
+              : s.componentsInstallFailed(message),
         ),
       ),
     );
@@ -4618,6 +4648,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
 
   void _confirmUninstall() {
     final s = LocaleScope.of(context);
+    final name = _title(s);
     final c = AppColors.of(context);
     showShadDialog(
       context: context,
@@ -4625,8 +4656,8 @@ class _ComponentsContentState extends State<_ComponentsContent> {
       animateIn: const [],
       animateOut: const [],
       builder: (ctx) => ShadDialog(
-        title: Text(s.componentsUninstallConfirmTitle),
-        description: Text(s.componentsUninstallConfirmMsg),
+        title: Text(s.componentsUninstallConfirmTitle(name)),
+        description: Text(s.componentsUninstallConfirmMsg(name)),
         actions: [
           ShadButton.outline(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -4651,23 +4682,30 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     _ => s.componentsSourceSystem,
   };
 
+  String _title(S s) => widget.kind == _ComponentKind.ffmpeg
+      ? s.componentsFfmpegTitle
+      : s.componentsYtdlpTitle;
+  String _desc(S s) => widget.kind == _ComponentKind.ffmpeg
+      ? s.componentsFfmpegDesc
+      : s.componentsYtdlpDesc;
+
   @override
   Widget build(BuildContext context) {
     final s = LocaleScope.of(context);
     final c = AppColors.of(context);
     final m = AppMetrics.of(context);
-    final status = _provider.status;
-    final hasManaged = status != null && status.managedVersion.isNotEmpty;
+    final hasManaged =
+        _provider.hasStatus && _provider.managedVersion.isNotEmpty;
 
     return _ComponentAccordionCard(
-      label: s.componentsFfmpegTitle,
-      description: s.componentsFfmpegDesc,
+      label: _title(s),
+      description: _desc(s),
       summary: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildStatusRow(c, s, status),
+          _buildStatusRow(c, s),
           const SizedBox(height: 8),
-          _buildSystemPathRow(c, s, status),
+          _buildSystemPathRow(c, s),
         ],
       ),
       child: Column(
@@ -4686,8 +4724,8 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     );
   }
 
-  Widget _buildStatusRow(AppColors c, S s, FfmpegStatusReport? status) {
-    if (status == null) {
+  Widget _buildStatusRow(AppColors c, S s) {
+    if (!_provider.hasStatus) {
       return Row(
         children: [
           SizedBox(
@@ -4706,7 +4744,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
         ],
       );
     }
-    if (status.source == 'none') {
+    if (_provider.source == 'none') {
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4715,8 +4753,8 @@ class _ComponentsContentState extends State<_ComponentsContent> {
           Expanded(
             child: Text(
               _provider.managedSupported
-                  ? s.componentsStatusNotFound
-                  : s.componentsStatusNotFoundUnsupported,
+                  ? s.componentsStatusNotFound(_title(s))
+                  : s.componentsStatusNotFoundUnsupported(_title(s)),
               style: TextStyle(fontSize: 12, color: c.textPrimary),
             ),
           ),
@@ -4739,20 +4777,20 @@ class _ComponentsContentState extends State<_ComponentsContent> {
                 runSpacing: 4,
                 children: [
                   _ComponentBadge(
-                    text: _sourceLabel(s, status.source),
+                    text: _sourceLabel(s, _provider.source),
                     color: c.accent,
                     bg: m.subtle(c.accent),
                   ),
-                  if (status.version.isNotEmpty)
+                  if (_provider.version.isNotEmpty)
                     Text(
-                      'v${status.version}',
+                      'v${_provider.version}',
                       style: TextStyle(fontSize: 11, color: c.textMuted),
                     ),
                 ],
               ),
               const SizedBox(height: 4),
               Text(
-                status.path,
+                _provider.path,
                 style: TextStyle(fontSize: 11.5, color: c.textSecondary),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -4763,9 +4801,9 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     );
   }
 
-  Widget _buildSystemPathRow(AppColors c, S s, FfmpegStatusReport? status) {
-    if (status == null) return const SizedBox.shrink();
-    final found = status.systemPath.isNotEmpty;
+  Widget _buildSystemPathRow(AppColors c, S s) {
+    if (!_provider.hasStatus) return const SizedBox.shrink();
+    final found = _provider.systemPath.isNotEmpty;
     return Row(
       children: [
         Icon(LucideIcons.terminal, size: 12, color: c.textMuted),
@@ -4777,7 +4815,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
         const SizedBox(width: 6),
         Expanded(
           child: Text(
-            found ? status.systemPath : s.componentsSystemPathNotFound,
+            found ? _provider.systemPath : s.componentsSystemPathNotFound,
             style: TextStyle(
               fontSize: 11,
               color: found ? c.textSecondary : c.textMuted,
@@ -4803,7 +4841,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
         ),
         const SizedBox(height: 2),
         Text(
-          s.componentsManualPathDesc,
+          s.componentsManualPathDesc(_title(s)),
           style: TextStyle(fontSize: 11, color: c.textMuted),
         ),
         const SizedBox(height: 8),
@@ -4813,7 +4851,11 @@ class _ComponentsContentState extends State<_ComponentsContent> {
               child: ShadInput(
                 controller: _pathController,
                 focusNode: _pathFocusNode,
-                placeholder: Text(s.componentsManualPathHint),
+                placeholder: Text(
+                  widget.kind == _ComponentKind.ffmpeg
+                      ? s.componentsManualPathHintFfmpeg
+                      : s.componentsManualPathHintYtdlp,
+                ),
                 onSubmitted: (_) => _saveManualPath(),
               ),
             ),
@@ -4854,7 +4896,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              s.componentsManagedUnsupported,
+              s.componentsManagedUnsupported(_title(s)),
               style: TextStyle(fontSize: 11.5, color: c.textSecondary),
             ),
           ),
@@ -4901,13 +4943,15 @@ class _ComponentsContentState extends State<_ComponentsContent> {
         ),
         const SizedBox(height: 2),
         Text(
-          s.componentsInstallSectionDesc,
+          widget.kind == _ComponentKind.ffmpeg
+              ? s.componentsInstallSectionDescFfmpeg
+              : s.componentsInstallSectionDescYtdlp,
           style: TextStyle(fontSize: 11, color: c.textMuted),
         ),
         const SizedBox(height: 8),
         if (hasManaged) ...[
           Text(
-            s.componentsManagedVersionLabel(p.status?.managedVersion ?? ''),
+            s.componentsManagedVersionLabel(p.managedVersion),
             style: TextStyle(fontSize: 11, color: c.textMuted),
           ),
           const SizedBox(height: 8),
@@ -5000,7 +5044,7 @@ class _ComponentsContentState extends State<_ComponentsContent> {
     );
   }
 
-  Widget _buildProgress(AppColors c, AppMetrics m, S s, ComponentsProvider p) {
+  Widget _buildProgress(AppColors c, AppMetrics m, S s, ComponentController p) {
     final total = p.totalBytes;
     final downloaded = p.downloadedBytes;
     final fraction = total > 0 ? (downloaded / total).clamp(0.0, 1.0) : null;

@@ -2,11 +2,11 @@
 // + 安装区（zip 文件上传 / dev 模式目录路径引用）。
 
 import { type ChangeEvent, type ReactNode, useRef, useState } from 'react'
-import { Check, Download, Link2, Trash2, Upload } from 'lucide-react'
+import { Check, Download, Link2, ShieldCheck, Trash2, Upload } from 'lucide-react'
 import { cn } from '../../lib/cn'
 import { confirmDialog } from '../../lib/confirm'
 import { type I18nKey, translateBackendMessage, useI18n } from '../../lib/i18n'
-import type { MarketEntry, PluginDto } from '../../lib/types'
+import type { InstalledPlugin, MarketEntry, PluginDto } from '../../lib/types'
 import {
   useInstallFromMarket,
   useInstallPluginDevMutation,
@@ -26,21 +26,32 @@ export function PluginsSettings() {
   const installMut = useInstallPluginMutation()
   const installDevMut = useInstallPluginDevMutation()
   const [devPath, setDevPath] = useState('')
+  // 最近一次安装成功后缺失的基础组件（提醒式：安装已成功，组件装好前对应能力不可用）。
+  const [missingDeps, setMissingDeps] = useState<string[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
   const { data: market, isLoading: marketLoading, isError: marketError } = useMarketQuery()
   const installFromMarketMut = useInstallFromMarket()
   const installedIds = new Set(plugins?.map((p) => p.identity) ?? [])
 
+  function noteMissingDeps(res: InstalledPlugin) {
+    setMissingDeps(res.missingComponents ?? [])
+  }
+
   function onZipChosen(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ''
-    if (file) installMut.mutate(file)
+    if (file) installMut.mutate(file, { onSuccess: noteMissingDeps })
   }
 
   function installDev() {
     const dir = devPath.trim()
     if (!dir) return
-    installDevMut.mutate(dir, { onSuccess: () => setDevPath('') })
+    installDevMut.mutate(dir, {
+      onSuccess: (res) => {
+        setDevPath('')
+        noteMissingDeps(res)
+      },
+    })
   }
 
   const installError = installMut.error ?? installDevMut.error
@@ -86,6 +97,13 @@ export function PluginsSettings() {
             {t('plugins.installFailed', { error: translateBackendMessage(installError.message) })}
           </p>
         )}
+        {missingDeps.length > 0 && (
+          <p className="px-4 pb-3 text-[12px] text-[var(--warning)]">
+            {t('plugins.depsMissing', {
+              components: missingDeps.map((c) => t(c === 'ytdlp' ? 'components.ytdlp' : 'components.ffmpeg')).join(', '),
+            })}
+          </p>
+        )}
       </div>
 
       {isLoading ? (
@@ -118,6 +136,7 @@ export function PluginsSettings() {
               entry={entry}
               installed={installedIds.has(entry.pluginId)}
               installMut={installFromMarketMut}
+              onInstalled={noteMissingDeps}
             />
           ))}
         </div>
@@ -150,6 +169,35 @@ function DisabledBadge({ reason }: { reason: PluginDto['disabledReason'] }) {
   return <Badge tone={manual ? 'neutral' : 'danger'}>{manual ? t('plugins.disabledManual') : t('plugins.disabledCircuitBreaker')}</Badge>
 }
 
+// 权限徽章：manifest 声明的能力权限（后续新增权限补 PERMISSION_KEYS 即可；
+// 未知权限降级展示原始名）。
+const PERMISSION_KEYS: Record<string, { label: I18nKey; desc: I18nKey }> = {
+  ffmpeg: { label: 'plugins.permFfmpeg', desc: 'plugins.permFfmpegDesc' },
+  ytdlp: { label: 'plugins.permYtdlp', desc: 'plugins.permYtdlpDesc' },
+}
+
+function PermissionBadges({ permissions }: { permissions?: string[] }) {
+  const { t } = useI18n()
+  if (!permissions || permissions.length === 0) return null
+  return (
+    <>
+      {permissions.map((perm) => {
+        const keys = PERMISSION_KEYS[perm]
+        return (
+          <span
+            key={perm}
+            className="inline-flex items-center gap-1 rounded-md bg-accent-weak px-1.5 py-0.5 text-[10px] font-semibold text-accent"
+            title={keys ? t(keys.desc) : perm}
+          >
+            <ShieldCheck size={10} />
+            {keys ? t(keys.label) : perm}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
 function PluginCard({ plugin }: { plugin: PluginDto }) {
   const { t } = useI18n()
   const enabledMut = useSetPluginEnabledMutation()
@@ -174,6 +222,7 @@ function PluginCard({ plugin }: { plugin: PluginDto }) {
             <span className="text-[11px] tabular-nums text-text3">v{plugin.version}</span>
             {plugin.devMode && <Badge tone="accent">{t('plugins.devMode')}</Badge>}
             <DisabledBadge reason={plugin.disabledReason} />
+            <PermissionBadges permissions={plugin.permissions} />
           </div>
           {plugin.description && <p className="mt-1.5 text-[12px] leading-relaxed text-text2">{plugin.description}</p>}
           {plugin.homepage && (
@@ -235,10 +284,12 @@ function MarketCard({
   entry,
   installed,
   installMut,
+  onInstalled,
 }: {
   entry: MarketEntry
   installed: boolean
   installMut: ReturnType<typeof useInstallFromMarket>
+  onInstalled: (res: InstalledPlugin) => void
 }) {
   const { t } = useI18n()
   const pending = installMut.isPending && installMut.variables === entry.pluginId
@@ -262,6 +313,7 @@ function MarketCard({
               </span>
             )}
             <YankedBadge yanked={entry.yanked} />
+            <PermissionBadges permissions={entry.permissions} />
           </div>
           {entry.description && <p className="mt-1.5 text-[12px] leading-relaxed text-text2">{entry.description}</p>}
           {entry.tags.length > 0 && (
@@ -293,7 +345,7 @@ function MarketCard({
         <button
           type="button"
           className={cn('btn sm flex-shrink-0', installed ? 'ghost' : 'primary')}
-          onClick={() => installMut.mutate(entry.pluginId)}
+          onClick={() => installMut.mutate(entry.pluginId, { onSuccess: onInstalled })}
           disabled={installed || pending}
         >
           {installed ? (

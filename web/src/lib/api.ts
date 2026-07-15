@@ -6,6 +6,7 @@ import type {
   ApiInfo,
   ComponentFfmpegStatus,
   ComponentVersions,
+  ComponentYtdlpStatus,
   ConfigMap,
   CreateQueueRequest,
   CreateTaskRequest,
@@ -157,6 +158,16 @@ export const api = {
     }),
   uninstallFfmpeg: () =>
     apiFetch<unknown>('/api/v1/components/ffmpeg/uninstall', { method: 'POST' }),
+
+  getYtdlpStatus: () => apiFetch<ComponentYtdlpStatus>('/api/v1/components/ytdlp'),
+  getYtdlpVersions: () => apiFetch<ComponentVersions>('/api/v1/components/ytdlp/versions'),
+  installYtdlp: (version?: string) =>
+    apiFetch<unknown>('/api/v1/components/ytdlp/install', {
+      method: 'POST',
+      body: JSON.stringify({ version } satisfies InstallFfmpegRequest),
+    }),
+  uninstallYtdlp: () =>
+    apiFetch<unknown>('/api/v1/components/ytdlp/uninstall', { method: 'POST' }),
 }
 
 /** 「保存到本地」下载地址（浏览器导航下载，token 走查询参数）。 */

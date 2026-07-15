@@ -22,7 +22,7 @@
 //!   `aria2.onDownloadXxx` 通知帧。
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -103,6 +103,9 @@ pub struct HubApiHost {
     /// （见插件系统契约 hub 节 5）。`None` 理论上不应发生
     /// （`Engine::new` 恒注入），仅作防御性兜底。
     plugin_manager: Option<Arc<PluginManager>>,
+    /// 数据目录（与 `Engine::data_dir` 同源），供组件存在性探测
+    /// （`plugin::dependencies::missing_components`）解析托管组件路径。
+    data_dir: PathBuf,
 }
 
 impl HubApiHost {
@@ -117,6 +120,7 @@ impl HubApiHost {
         live_speeds: LiveSpeedMap,
         task_events_tx: broadcast::Sender<TaskEvent>,
         plugin_manager: Option<Arc<PluginManager>>,
+        data_dir: PathBuf,
     ) -> Self {
         Self {
             db,
@@ -125,6 +129,7 @@ impl HubApiHost {
             live_speeds,
             task_events_tx,
             plugin_manager,
+            data_dir,
         }
     }
 
@@ -347,5 +352,15 @@ impl ApiHost for HubApiHost {
             .install_latest(plugin_id)
             .await
             .map_err(|e| ApiError::BadRequest(e.to_string()))
+    }
+
+    /// 按插件声明权限探测缺失的基础组件（安装成功后回填提醒载荷）。
+    async fn plugin_missing_components(&self, identity: &str) -> Vec<String> {
+        let Some(pm) = self.plugin_manager.as_ref() else {
+            return Vec::new();
+        };
+        let perms = pm.permissions_of(identity).await;
+        fluxdown_engine::plugin::dependencies::missing_components(&self.db, &self.data_dir, &perms)
+            .await
     }
 }

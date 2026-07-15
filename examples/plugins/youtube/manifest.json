@@ -1,11 +1,11 @@
 {
   "identity": "fluxdown@youtube",
   "name": "YouTube 视频解析",
-  "version": "1.2.0",
-  "description": "解析 YouTube 视频页为可下载直链（Innertube 多客户端回退链 ANDROID_VR→IOS→ANDROID，无需签名解密；遇 bot 风控自动补 visitorData 重试）。支持画质选择与音视频分离合并（DASH），签名直链自动按一次性 URL 处理。关闭「优先 MP4 容器」时，下载完成后经 ffmpeg 自动转码为 H.264/AAC mp4。",
+  "version": "2.2.0",
+  "description": "经宿主 yt-dlp 组件解析 YouTube 视频页为可下载直链（画质/容器选择映射为 yt-dlp 格式选择器），交回引擎多段并发下载 + 断点续传。⚠ 依赖 JS 运行时：需在系统 PATH 安装 Node.js（≥22）或 Deno（≥2.3），否则 yt-dlp 无法求解 n-sig 挑战、拿不到直链。签名直链自动按一次性 URL 处理并透传 http_headers 鉴权头。关闭「优先 MP4 容器」时下载完成后经 ffmpeg 转码为 H.264/AAC mp4。需在 App「组件」页安装 yt-dlp（及可选 ffmpeg）。",
   "homepage": "https://fluxdown.zerx.dev",
   "minAppVersion": "0.1.60",
-  "permissions": ["ffmpeg"],
+  "permissions": ["ytdlp", "ffmpeg"],
   "resolvers": [
     {
       "match": {
@@ -68,6 +68,28 @@
       "type": "boolean",
       "widget": "toggle",
       "default": "true"
+    },
+    {
+      "key": "jsRuntime",
+      "title": "JS 运行时",
+      "description": "yt-dlp 求解 YouTube n-sig 挑战所需的 JavaScript 运行时，须已安装在系统 PATH 中（安全限制：不能填绝对路径）。缺失则视频无法下载。node 需 ≥22，deno 需 ≥2.3。none = 不指定（仅靠缓存，多数视频会失败）。",
+      "type": "string",
+      "widget": "select",
+      "options": [
+        { "value": "node", "label": "Node.js（推荐）" },
+        { "value": "deno", "label": "Deno" },
+        { "value": "quickjs", "label": "QuickJS" },
+        { "value": "none", "label": "不指定" }
+      ],
+      "default": "node"
+    },
+    {
+      "key": "cookies",
+      "title": "Cookie（绕过风控 / 会员视频）",
+      "description": "遇「Sign in to confirm you're not a bot」风控或下载会员/年龄限制视频时填写。支持两种格式：① 浏览器 Cookie 头 k=v; k2=v2；② Netscape cookies.txt 文件内容。新建下载时任务级 Cookie 优先于此设置。留空则不使用 cookie。",
+      "type": "string",
+      "widget": "textarea",
+      "default": ""
     },
     {
       "key": "verbose",

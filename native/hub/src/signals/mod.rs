@@ -278,6 +278,10 @@ pub struct TaskInfo {
     /// 文件跟踪：completed 任务的目标文件是否已丢失（被删除/移动）。默认 false。
     #[serde(default)]
     pub file_missing: bool,
+    /// 任务结束时间，Unix seconds 时间戳（空 = 尚未完成）。
+    /// 记录下载真正完成（status→3）的时刻，不含插件 hook 后处理耗时。
+    #[serde(default)]
+    pub completed_at: String,
 }
 
 /// 文件跟踪：一批已完成任务的「文件已丢失」标志变化（Rust → Dart）。
@@ -786,6 +790,10 @@ pub struct PluginList {
 /// (Rust → Dart). `op` identifies the operation (e.g. "install", "uninstall",
 /// "set_enabled", "save_settings"); `failed_key` names the offending setting
 /// key on a settings validation failure (empty otherwise).
+/// `missing_components` lists base components (e.g. "ffmpeg", "ytdlp") the
+/// plugin's declared permissions require but that are not yet installed —
+/// populated only on a successful install/market_install, so the UI can
+/// remind the user to set up dependencies (advisory, install still succeeds).
 #[derive(Serialize, RustSignal)]
 pub struct PluginOpResult {
     pub op: String,
@@ -793,6 +801,7 @@ pub struct PluginOpResult {
     pub ok: bool,
     pub message: String,
     pub failed_key: String,
+    pub missing_components: Vec<String>,
 }
 
 /// A plugin was auto-disabled by the circuit breaker (Rust → Dart).
@@ -828,6 +837,8 @@ pub struct PluginInfoSignal {
     pub disabled_reason: String,
     pub settings: Vec<SettingFieldSignal>,
     pub settings_values: Vec<ConfigEntry>,
+    /// manifest 声明的能力权限（如 `["ffmpeg"]`，供 UI 展示授权徽章）。
+    pub permissions: Vec<String>,
 }
 
 impl From<fluxdown_engine::plugin::PluginInfo> for PluginInfoSignal {
@@ -847,6 +858,7 @@ impl From<fluxdown_engine::plugin::PluginInfo> for PluginInfoSignal {
                 .into_iter()
                 .map(|(key, value)| ConfigEntry { key, value })
                 .collect(),
+            permissions: info.permissions,
         }
     }
 }
@@ -970,6 +982,8 @@ pub struct MarketEntrySignal {
     pub publish_time: String,
     pub yanked: String,
     pub tags: Vec<String>,
+    /// manifest 声明的能力权限（如 `["ffmpeg"]`，供安装前展示授权）。
+    pub permissions: Vec<String>,
 }
 
 impl From<fluxdown_engine::plugin::MarketEntry> for MarketEntrySignal {
@@ -990,6 +1004,7 @@ impl From<fluxdown_engine::plugin::MarketEntry> for MarketEntrySignal {
             publish_time: e.publish_time,
             yanked: e.yanked,
             tags: e.tags,
+            permissions: e.permissions,
         }
     }
 }
@@ -1064,6 +1079,80 @@ pub struct FfmpegInstallProgress {
 /// Dart). Always immediately followed by a fresh [`FfmpegStatusReport`].
 #[derive(Serialize, RustSignal)]
 pub struct FfmpegInstallResult {
+    pub ok: bool,
+    pub message: String,
+}
+
+// ========== Component management signals: yt-dlp ==========
+
+/// Request the current yt-dlp component status (Dart → Rust, sent when the
+/// components settings page opens). Local process probe — fast enough to
+/// `.await` directly inside the `download_actor` `select!` branch.
+#[derive(Deserialize, DartSignal)]
+pub struct RequestYtdlpStatus {}
+
+/// Request the list of installable yt-dlp versions (Dart → Rust). Network
+/// I/O (GitHub release API) — `download_actor` MUST NOT `.await` it inside
+/// the `select!` branch; it hands off to an off-actor `tokio::spawn` task.
+#[derive(Deserialize, DartSignal)]
+pub struct RequestYtdlpVersions {}
+
+/// Install (or reinstall/update) the managed yt-dlp build (Dart → Rust).
+/// `version` empty = latest stable. Same off-actor dispatch rule as
+/// [`RequestYtdlpVersions`] (downloads a multi-MB binary).
+#[derive(Deserialize, DartSignal)]
+pub struct InstallYtdlp {
+    pub version: String,
+}
+
+/// Uninstall the managed yt-dlp build (Dart → Rust). No network I/O —
+/// manual/system paths are unaffected.
+#[derive(Deserialize, DartSignal)]
+pub struct UninstallYtdlp {}
+
+/// yt-dlp component status snapshot (Rust → Dart), sent after
+/// [`RequestYtdlpStatus`] and after every install/uninstall completes.
+/// `source` mirrors `fluxdown_engine::components::ComponentSource::as_str()`
+/// ("manual"/"managed"/"system"/"none").
+#[derive(Serialize, RustSignal)]
+pub struct YtdlpStatusReport {
+    pub source: String,
+    pub path: String,
+    pub version: String,
+    pub managed_version: String,
+    pub system_path: String,
+    /// Whether managed install is available on this platform (mirrors
+    /// `fluxdown_engine::components::YtdlpStatus::managed_supported`).
+    /// yt-dlp ships official builds for all desktop/server platforms, so this
+    /// is normally `true` (unlike ffmpeg on macOS).
+    pub managed_supported: bool,
+}
+
+/// Installable yt-dlp version list result (Rust → Dart), sent after
+/// [`RequestYtdlpVersions`]. `versions` is empty and `message` carries the
+/// error text on failure (network error / unsupported platform).
+#[derive(Serialize, RustSignal)]
+pub struct YtdlpVersionList {
+    pub ok: bool,
+    pub message: String,
+    pub versions: Vec<String>,
+    pub latest_stable: String,
+}
+
+/// yt-dlp managed install download progress (Rust → Dart), sent while
+/// [`InstallYtdlp`] is in flight. `total_bytes == 0` means the total size
+/// is unknown (indeterminate progress). Throttled by the engine (~256KB
+/// steps) — safe to send on every event without extra debouncing.
+#[derive(Serialize, RustSignal)]
+pub struct YtdlpInstallProgress {
+    pub downloaded_bytes: i64,
+    pub total_bytes: i64,
+}
+
+/// Result of an [`InstallYtdlp`]/[`UninstallYtdlp`] operation (Rust →
+/// Dart). Always immediately followed by a fresh [`YtdlpStatusReport`].
+#[derive(Serialize, RustSignal)]
+pub struct YtdlpInstallResult {
     pub ok: bool,
     pub message: String,
 }

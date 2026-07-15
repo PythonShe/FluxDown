@@ -22,6 +22,7 @@
 //! - [`manager`]：`PluginManager`（Arc 共享，插件装载/启停/resolve/notify）。
 
 pub mod bridge;
+pub mod dependencies;
 pub mod install;
 pub mod manager;
 pub mod manifest;

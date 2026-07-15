@@ -1,346 +1,365 @@
 // FluxDown 插件：YouTube 视频解析（classic script，入口挂 globalThis）。
 //
-// 原理：调用 YouTube Innertube `/youtubei/v1/player`，伪装移动端客户端
-// （返回的 streamingData 直链未做 signatureCipher 加密，且当前不要求 PO Token），
-// 从 adaptiveFormats 里按设置挑选视频+音频直链。
+// 原理：调用宿主自带的 yt-dlp 组件（flux.ytdlp），以 `-J`（--dump-single-json）
+// 提取选定格式的 googlevideo 直链，交回引擎做多段并发下载 + 断点续传。yt-dlp
+// 自身负责客户端伪装 / 签名解密 / 格式选择——远比手写 Innertube 稳健且覆盖更多
+// 站点，本插件只做「画质设置 → yt-dlp 格式选择器」的映射与直链回填。
 //
-// 抗封锁策略（LOGIN_REQUIRED "confirm you're not a bot" 为 IP 级间歇性风控）：
-//   1. 多客户端回退链：ANDROID_VR → IOS → ANDROID，任一通过即用；
-//   2. 首个客户端遇 LOGIN_REQUIRED 时获取 visitorData（匿名访客凭据）重试整条链；
-//   3. visitorData 缓存于 flux.storage 复用，失效（仍被拒）时强制刷新一次。
+// 抗 bot 风控（"Sign in to confirm you're not a bot"，IP 级间歇性风控）：
+//   1. 多 player_client 回退：一次调用内令 yt-dlp 轮询 tv/android_vr/ios/web，
+//      任一通过即用（比多次进程调用省）；
+//   2. cookie：登录态 cookie 是绕过风控的唯一可靠手段。来源优先级
+//      任务级 ctx.cookies > 已续期 cookie（flux.storage）> 插件设置 cookies。
+//      经 `flux.fs.writeFile('cookies.txt', …)` 写入插件工作区（= yt-dlp cwd 同根），
+//      以相对名注入 `--cookies cookies.txt`，用完即删（`--cookies-from-browser`
+//      被 bridge 拒）。ctx.cookies 为 "k=v; k2=v2" 头格式，本地转 Netscape；
+//      设置项若已是 Netscape 文件内容则原样透传。
+//   3. cookie 自续期：Google 会话的 __Secure-*PSIDTS token 由浏览器约每 30 分钟
+//      轮换、旧值随即作废，静态导出的快照很快失效。而 yt-dlp 每次运行结束会把
+//      服务端 Set-Cookie 下发的新 token 重写回 --cookies 文件——本插件在删除前
+//      回读该文件，解析成功后经 flux.storage 持久化（cookieRotated），下次优先
+//      使用，令 cookie 链与浏览器脱钩、自我延续。用户更新设置项（seedHash 变化）
+//      时自动重播种；续期 cookie 解析失败时自动作废回退设置项。
+//
+// 依赖 JS 运行时（重要）：yt-dlp 2026 起将 YouTube n-sig 挑战求解外部化（EJS），
+// 必须有一个 JS 运行时（推荐 Node.js ≥ 22，或 Deno ≥ 2.3）安装在系统 PATH 中，
+// 否则所有格式直链缺失、只能拿到缩略图（视频无法下载）。默认用 node；「JS 运行时」
+// 设置项可切换。bridge 安全策略只允许裸名（不能填绝对路径），故运行时须在 PATH。
+//
+// yt-dlp 组件可在 App「组件」页安装；宿主会自动注入 `--ffmpeg-location`（合并/
+// remux 依赖 ffmpeg，插件自带的 --ffmpeg-location 会被 bridge 拒绝）。
 //
 // 返回值约定（ResolveResult）：
-//   url        — 视频（或纯音频）直链
-//   audioUrl   — 音视频分离时的音频直链，引擎按 DASH 分离下载后合并
-//   ephemeral  — googlevideo 直链带签名且限时（~6h），置 true 跳过 probe，
-//                每次 start/resume 重新 resolve 拿新链（惰性 resolve 天然防过期）
-//   rangeSupported — googlevideo 完整支持 HTTP Range（YouTube 播放器本身靠
-//                Range 分片拉流），置 true 让引擎跳过 probe 的同时仍按多段
-//                并发下载，不落入保守单流启动
+//   url / audioUrl / fileName / totalBytes / extraHeaders / ephemeral / rangeSupported
+//   （详见各字段回填处注释）。
 
-var INNERTUBE_PLAYER = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-var INNERTUBE_VISITOR = 'https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false';
-var VISITOR_KEY = 'visitorData';
-
-// 回退链按「直链质量 + 风控通过率」排序。全部返回未加密 url 的客户端。
-var CLIENTS = [
-  {
-    label: 'ANDROID_VR',
-    clientName: '28',
-    context: {
-      clientName: 'ANDROID_VR',
-      clientVersion: '1.62.27',
-      deviceMake: 'Oculus',
-      deviceModel: 'Quest 3',
-      osName: 'Android',
-      osVersion: '12L',
-      androidSdkVersion: 32,
-    },
-    userAgent:
-      'com.google.android.apps.youtube.vr.oculus/1.62.27 ' +
-      '(Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
-  },
-  {
-    label: 'IOS',
-    clientName: '5',
-    context: {
-      clientName: 'IOS',
-      clientVersion: '20.10.4',
-      deviceMake: 'Apple',
-      deviceModel: 'iPhone16,2',
-      osName: 'iPhone',
-      osVersion: '18.3.2.22D82',
-    },
-    userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
-  },
-  {
-    label: 'ANDROID',
-    clientName: '3',
-    context: {
-      clientName: 'ANDROID',
-      clientVersion: '20.10.38',
-      osName: 'Android',
-      osVersion: '11',
-      androidSdkVersion: 30,
-    },
-    userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
-  },
-];
-
-// 从各类 YouTube URL 形态中抽取 11 位 videoId。
-function extractVideoId(url) {
-  var patterns = [
-    /[?&]v=([A-Za-z0-9_-]{11})/,           // watch?v=
-    /youtu\.be\/([A-Za-z0-9_-]{11})/,      // 短链
-    /\/shorts\/([A-Za-z0-9_-]{11})/,       // Shorts
-    /\/embed\/([A-Za-z0-9_-]{11})/,        // 嵌入页
-    /\/live\/([A-Za-z0-9_-]{11})/,         // 直播回放
-  ];
-  for (var i = 0; i < patterns.length; i++) {
-    var m = patterns[i].exec(url);
-    if (m) return m[1];
-  }
-  return null;
-}
+// 一次调用内让 yt-dlp 轮询的 player_client 顺序（任一通过即用）。
+var PLAYER_CLIENTS = 'default,tv,android_vr,ios,web_safari';
 
 // Windows/Unix 通用的文件名净化。
 function sanitizeFileName(name) {
-  return name
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 120) || 'youtube-video';
-}
-
-function parseQualityHeight(quality) {
-  var m = /^(\d+)p$/.exec(quality);
-  return m ? Number(m[1]) : Infinity; // 'best' → 不设上限
-}
-
-// 在 adaptiveFormats 中挑视频流：<= 目标高度里取最高；容器偏好仅作排序权重，
-// 目标高度下无偏好容器时回退另一容器（不因容器损失画质档位）。
-function pickVideo(formats, maxHeight, preferMp4) {
-  var candidates = formats.filter(function (f) {
-    return (
-      f.url &&
-      f.qualityLabel &&
-      f.height &&
-      f.height <= maxHeight &&
-      /^video\//.test(f.mimeType || '')
-    );
-  });
-  candidates.sort(function (a, b) {
-    if (a.height !== b.height) return b.height - a.height;
-    var aMp4 = /^video\/mp4/.test(a.mimeType) ? 1 : 0;
-    var bMp4 = /^video\/mp4/.test(b.mimeType) ? 1 : 0;
-    if (aMp4 !== bMp4) return preferMp4 ? bMp4 - aMp4 : aMp4 - bMp4;
-    return (b.bitrate || 0) - (a.bitrate || 0);
-  });
-  return candidates[0] || null;
-}
-
-// 挑音频流：偏好 m4a（audio/mp4，与 mp4 视频合并无需转码），按码率取最高。
-function pickAudio(formats) {
-  var candidates = formats.filter(function (f) {
-    return f.url && /^audio\//.test(f.mimeType || '');
-  });
-  candidates.sort(function (a, b) {
-    var aM4a = /^audio\/mp4/.test(a.mimeType) ? 1 : 0;
-    var bM4a = /^audio\/mp4/.test(b.mimeType) ? 1 : 0;
-    if (aM4a !== bM4a) return bM4a - aM4a;
-    return (b.bitrate || 0) - (a.bitrate || 0);
-  });
-  return candidates[0] || null;
-}
-
-function extOf(mimeType, isAudio) {
-  if (/webm/.test(mimeType)) return isAudio ? '.webm' : '.webm';
-  return isAudio ? '.m4a' : '.mp4';
-}
-
-// 获取匿名访客凭据（visitorData），风控重试用。失败返回 null（不阻断主流程）。
-async function fetchVisitorData(verbose) {
-  try {
-    var resp = await flux.fetch({
-      method: 'POST',
-      url: INNERTUBE_VISITOR,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        context: { client: { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' } },
-      }),
-    });
-    if (resp.status !== 200) return null;
-    var vd = JSON.parse(resp.body).responseContext;
-    vd = vd && vd.visitorData;
-    if (vd && verbose) flux.logger.info('[youtube] fetched visitorData (len=' + vd.length + ')');
-    return vd || null;
-  } catch (e) {
-    if (verbose) flux.logger.warn('[youtube] visitor_id fetch failed:', String(e));
-    return null;
-  }
-}
-
-// 单客户端调 player。返回 { ok, player?, status?, reason? }。
-async function callPlayer(client, videoId, visitorData, cookies) {
-  var clientCtx = {};
-  for (var k in client.context) clientCtx[k] = client.context[k];
-  clientCtx.hl = 'en';
-  clientCtx.gl = 'US';
-  if (visitorData) clientCtx.visitorData = visitorData;
-
-  var headers = {
-    'content-type': 'application/json',
-    'user-agent': client.userAgent,
-    'x-youtube-client-name': client.clientName,
-    'x-youtube-client-version': client.context.clientVersion,
-  };
-  if (visitorData) headers['x-goog-visitor-id'] = visitorData;
-  if (cookies) headers['cookie'] = cookies;
-
-  var resp = await flux.fetch({
-    method: 'POST',
-    url: INNERTUBE_PLAYER,
-    headers: headers,
-    body: JSON.stringify({
-      context: { client: clientCtx },
-      videoId: videoId,
-      contentCheckOk: true,
-      racyCheckOk: true,
-    }),
-  });
-  if (resp.status !== 200) {
-    return { ok: false, status: 'HTTP_' + resp.status, reason: '' };
-  }
-  if (resp.truncated) {
-    return { ok: false, status: 'TRUNCATED', reason: 'Innertube 响应超出体积上限' };
-  }
-  var player = JSON.parse(resp.body);
-  var ps = player.playabilityStatus || {};
-  if (ps.status !== 'OK') {
-    return { ok: false, status: ps.status || 'UNKNOWN', reason: ps.reason || '' };
-  }
-  return { ok: true, player: player };
-}
-
-// 依次尝试回退链；遇 LOGIN_REQUIRED（bot 风控）时补 visitorData 重试整条链。
-async function resolvePlayer(videoId, cookies, verbose) {
-  var visitorData = await flux.storage.get(VISITOR_KEY);
-  if (verbose) {
-    // 出口诊断：风控是 IP 级的，先看引擎实际用哪个出口访问外网。
-    try {
-      var ipResp = await flux.fetch({ url: 'https://api.ipify.org?format=json' });
-      flux.logger.info('[youtube] egress ip =', ipResp.body.trim());
-    } catch (e) {
-      flux.logger.warn('[youtube] egress probe failed:', String(e));
-    }
-  }
-  var failures = [];
-  var attempts = visitorData ? [visitorData] : [null];
-
-  for (var round = 0; round < attempts.length; round++) {
-    var vd = attempts[round];
-    for (var i = 0; i < CLIENTS.length; i++) {
-      var client = CLIENTS[i];
-      var r = await callPlayer(client, videoId, vd, cookies);
-      if (r.ok) {
-        if (verbose) {
-          flux.logger.info('[youtube]', videoId, 'client=' + client.label, vd ? '(visitorData)' : '');
-        }
-        return r.player;
-      }
-      failures.push(client.label + (vd ? '+vd' : '') + '=' + r.status);
-      if (verbose) {
-        flux.logger.warn('[youtube]', client.label, '→', r.status, r.reason);
-      }
-      // 非风控类拒绝（地区/会员/删除）→ 换客户端也无意义的状态仅 UNPLAYABLE 例外，
-      // ERROR（视频不存在）直接终止整条链。
-      if (r.status === 'ERROR') {
-        throw new Error('YouTube 拒绝播放 [ERROR]: ' + (r.reason || '视频不存在或已删除'));
-      }
-      // 首次遇风控 → 追加一轮带（新）visitorData 的重试。
-      if (r.status === 'LOGIN_REQUIRED' && attempts.length === round + 1 && attempts.length < 2) {
-        var fresh = await fetchVisitorData(verbose);
-        if (fresh && fresh !== vd) {
-          await flux.storage.set(VISITOR_KEY, fresh);
-          attempts.push(fresh);
-        }
-      }
-    }
-  }
-  // 全链被拒：用 oembed 判别是「视频已删除/不存在」还是真·IP 风控。
-  // YouTube 的 bot 墙（LOGIN_REQUIRED）按「出口 IP 信誉 × 视频热度」打分：
-  // 数据中心/代理 IP 访问非热门视频时，所有免登录客户端都会被要求登录验证。
-  var exists = null; // null = oembed 探测失败，不下结论
-  try {
-    var oe = await flux.fetch({
-      url: 'https://www.youtube.com/oembed?format=json&url=' +
-        encodeURIComponent('https://www.youtube.com/watch?v=' + videoId),
-    });
-    if (oe.status === 200) exists = true;
-    else if (oe.status >= 400 && oe.status < 500) exists = false;
-  } catch (e) {
-    // oembed 自身失败 → 不影响主错误。
-  }
-  if (exists === false) {
-    throw new Error('视频不存在或已删除: ' + videoId);
-  }
-  throw new Error(
-    'YouTube 要求登录验证 [' + failures.join(', ') + ']。' +
-    (exists ? '视频确认存在，' : '') +
-    '当前网络出口（代理/数据中心 IP）被 YouTube 风控，对非热门视频强制登录。' +
-    '解决办法：切换代理节点（优先住宅 IP）后重试，或稍后再试。'
+  return (
+    (name || '')
+      .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120) || 'youtube-video'
   );
+}
+
+// 画质设置 → yt-dlp 格式选择器。
+function buildFormat(quality, preferMp4) {
+  if (quality === 'audio') {
+    return preferMp4 ? 'bestaudio[ext=m4a]/bestaudio' : 'bestaudio';
+  }
+  var heightClause = '';
+  var m = /^(\d+)p$/.exec(quality);
+  if (m) heightClause = '[height<=' + m[1] + ']';
+  if (preferMp4) {
+    return (
+      'bestvideo' + heightClause + '[ext=mp4]+bestaudio[ext=m4a]/' +
+      'bestvideo' + heightClause + '+bestaudio/' +
+      'best' + heightClause + '/best'
+    );
+  }
+  return (
+    'bestvideo' + heightClause + '+bestaudio/' +
+    'best' + heightClause + '/best'
+  );
+}
+
+function sizeOf(f) {
+  if (!f) return 0;
+  var n = Number(f.filesize);
+  if (n > 0) return n;
+  var a = Number(f.filesize_approx);
+  return a > 0 ? a : 0;
+}
+
+function extOf(f, info, hasVideo) {
+  var e = (f && f.ext) || info.ext || '';
+  if (e) return '.' + e;
+  return hasVideo ? '.mp4' : '.m4a';
+}
+
+// yt-dlp http_headers → extraHeaders（键为标准 HTTP 头名）。
+function headersOf(f, info) {
+  var h = (f && f.http_headers) || info.http_headers;
+  if (!h || typeof h !== 'object') return null;
+  var out = {};
+  var keys = Object.keys(h);
+  for (var i = 0; i < keys.length; i++) {
+    var v = h[keys[i]];
+    if (v != null) out[keys[i]] = String(v);
+  }
+  return keys.length ? out : null;
+}
+
+// 判定一段文本是否已是 Netscape cookie 文件（原样透传，不转换）。
+function looksNetscape(text) {
+  var t = text.replace(/^\uFEFF/, '').trimStart();
+  if (/^#\s*(Netscape|HTTP Cookie File)/i.test(t)) return true;
+  // 无表头但含 TAB 分隔的行（yt-dlp 也接受）。
+  return /\t/.test(text);
+}
+
+// "k=v; k2=v2" HTTP Cookie 头 → Netscape 文件内容（域固定 .youtube.com）。
+// 会员/年龄限制视频需登录 cookie；此转换让浏览器扩展直传的头格式可用。
+function cookieHeaderToNetscape(header) {
+  var lines = ['# Netscape HTTP Cookie File'];
+  var parts = header.split(';');
+  for (var i = 0; i < parts.length; i++) {
+    var kv = parts[i].trim();
+    if (!kv) continue;
+    var eq = kv.indexOf('=');
+    if (eq <= 0) continue;
+    var name = kv.slice(0, eq).trim();
+    var value = kv.slice(eq + 1).trim();
+    if (!name) continue;
+    // domain \t includeSubdomains \t path \t secure \t expiry \t name \t value
+    lines.push(['.youtube.com', 'TRUE', '/', 'TRUE', '0', name, value].join('\t'));
+  }
+  return lines.length > 1 ? lines.join('\n') + '\n' : '';
+}
+
+// FNV-1a 32-bit 哈希（hex）——标记 cookie 设置项版本，检测用户是否更新过设置。
+function fnv1a(s) {
+  var h = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
+// 组装 cookie 上下文：任务级 ctx.cookies（头格式）优先；否则设置项 cookies，
+// 且若 flux.storage 中存有同一设置版本（seedHash 匹配）的续期副本则优先用它
+// （更新鲜）。均空 → text=null（不注入 --cookies）。
+// 返回 { text, rotatable, usedRotated, seedHash }：rotatable = 来源为设置项，
+// 成功后可回存续期副本；usedRotated = 本次用的是续期副本（失败时须作废）。
+async function buildCookieContext(ctx) {
+  var task = (ctx.cookies || '').trim();
+  if (task) {
+    return { text: cookieHeaderToNetscape(task), rotatable: false, usedRotated: false, seedHash: '' };
+  }
+  var setting = (flux.settings.cookies || '').trim();
+  if (!setting) return { text: null, rotatable: false, usedRotated: false, seedHash: '' };
+  var seed = looksNetscape(setting) ? setting : cookieHeaderToNetscape(setting);
+  var seedHash = fnv1a(seed);
+  try {
+    if ((await flux.storage.get('cookieSeedHash')) === seedHash) {
+      var rotated = await flux.storage.get('cookieRotated');
+      if (rotated && looksNetscape(rotated)) {
+        return { text: rotated, rotatable: true, usedRotated: true, seedHash: seedHash };
+      }
+    }
+  } catch (e) {
+    // storage 读失败不致命，退回设置项。
+  }
+  return { text: seed, rotatable: true, usedRotated: false, seedHash: seedHash };
+}
+
+// 从 yt-dlp stderr 提取用户可读的失败原因（友好错误）。
+function friendlyError(url, r, cookiesUsed) {
+  var stderr = (r.stderr || '').trim();
+  // 缺 JS 运行时的典型症状：n-sig 求解失败 / 只有缩略图 / 无 JS runtime。
+  if (/n challenge solving failed|Only images are available|No supported JavaScript runtime|nsig extraction failed/i.test(stderr)) {
+    return (
+      '缺少 JS 运行时，无法解出视频直链。请安装 Node.js（≥ 22）或 Deno（≥ 2.3）并确保其在系统 PATH 中' +
+      (flux.settings.jsRuntime && flux.settings.jsRuntime !== 'node'
+        ? '（当前设置的运行时为「' + flux.settings.jsRuntime + '」，请确认已安装）'
+        : '') +
+      '。详见 https://github.com/yt-dlp/yt-dlp/wiki/EJS 。原始信息: ' + stderr.slice(-200)
+    );
+  }
+  if (/confirm you.?re not a bot|Sign in to confirm/i.test(stderr)) {
+    return (
+      'YouTube 要求验证「你不是机器人」（IP 级风控）。' +
+      (cookiesUsed
+        ? '当前 cookie 未能通过，请在浏览器登录 YouTube 后重新导出 cookie 填入任务或插件设置。'
+        : '请在浏览器登录 YouTube 后导出 cookie，填入新建下载的 Cookie 字段或插件「Cookie」设置项。') +
+      ' 原始信息: ' + stderr.slice(-300)
+    );
+  }
+  if (/Video unavailable|Private video|members-only|age.?restricted/i.test(stderr)) {
+    return '视频不可用（私有/会员/年龄限制）：' + stderr.slice(-300) + '。会员视频需填入登录 cookie。';
+  }
+  if (stderr) return 'yt-dlp 解析失败: ' + stderr.slice(-400);
+  return 'yt-dlp 未返回可用数据（可能被风控拦截），请尝试填入登录 cookie';
 }
 
 globalThis.resolve = async (ctx) => {
   var verbose = flux.settings.verbose;
-  var videoId = extractVideoId(ctx.url);
-  if (!videoId) {
-    // 非视频页（频道页/播放列表等误匹配）→ 放行原始 URL。
-    if (verbose) flux.logger.info('[youtube] no videoId in', ctx.url, '— pass through');
-    return null;
+
+  if (!flux.ytdlp) {
+    throw new Error('flux.ytdlp 门面不可用（manifest 需声明 permissions:["ytdlp"]）');
+  }
+  var avail = await flux.ytdlp.available();
+  if (!avail || !avail.available) {
+    throw new Error('yt-dlp 未安装或不可用，请在 App「组件」页安装 yt-dlp 组件');
   }
 
-  var player = await resolvePlayer(videoId, ctx.cookies, verbose);
-
-  var sd = player.streamingData || {};
-  var adaptive = sd.adaptiveFormats || [];
-  var title = (player.videoDetails && player.videoDetails.title) || videoId;
-  var base = sanitizeFileName(title);
-  var quality = flux.settings.quality;
-  var preferMp4 = flux.settings.preferMp4;
-
-  // 仅音频模式：单流下载，无需合并。
-  if (quality === 'audio') {
-    var audioOnly = pickAudio(adaptive);
-    if (!audioOnly) throw new Error('未找到可用音频流: ' + videoId);
-    if (verbose) {
-      flux.logger.info('[youtube]', videoId, 'audio itag=' + audioOnly.itag, audioOnly.mimeType);
-    }
-    return {
-      url: audioOnly.url,
-      fileName: base + extOf(audioOnly.mimeType, true),
-      totalBytes: Number(audioOnly.contentLength) || null,
-      ephemeral: true,
-      rangeSupported: true,
-    };
+  var fmt = buildFormat(flux.settings.quality, flux.settings.preferMp4);
+  var ck = await buildCookieContext(ctx);
+  var cookiesText = ck.text;
+  var args = [
+    '-J',
+    '--no-warnings',
+    '--extractor-args', 'youtube:player_client=' + PLAYER_CLIENTS,
+    '-f', fmt,
+  ];
+  // JS 运行时：yt-dlp 2026 起把 YouTube 的 n-sig 挑战求解强制外部化（EJS），
+  // 缺运行时则所有格式 URL 缺失、只剩 storyboard（下不了）。宿主自动注入的
+  // --ffmpeg-location 不含 JS 运行时，故须显式指定。bridge 校验器拒绝含盘符/
+  // 绝对路径的参数，因此只能传裸名（如 'node'），运行时须在 PATH 中。默认 node，
+  // 设置项可切 deno/quickjs 或 none（none = 不注入，靠 nsig 缓存，多数视频会失败）。
+  var jsRuntime = (flux.settings.jsRuntime || 'node').trim();
+  if (jsRuntime && jsRuntime !== 'none') {
+    args.push('--js-runtimes', jsRuntime);
   }
-
-  var maxHeight = parseQualityHeight(quality);
-  var video = pickVideo(adaptive, maxHeight, preferMp4);
-
-  // 目标画质下无独立视频流时回退 muxed 渐进流（如 itag 18，自带音轨）。
-  if (!video) {
-    var muxed = (sd.formats || []).filter(function (f) { return f.url; });
-    muxed.sort(function (a, b) { return (b.height || 0) - (a.height || 0); });
-    if (!muxed.length) throw new Error('未找到可用视频流: ' + videoId);
-    var m = muxed[0];
-    if (verbose) flux.logger.info('[youtube]', videoId, 'muxed itag=' + m.itag, m.qualityLabel);
-    return {
-      url: m.url,
-      fileName: base + extOf(m.mimeType, false),
-      totalBytes: Number(m.contentLength) || null,
-      ephemeral: true,
-      rangeSupported: true,
-    };
+  // cookie 经 flux.fs 物化进插件工作区（= yt-dlp cwd），以相对名注入 --cookies；
+  // 用完即删（敏感数据不长驻）。取代旧 spec.cookiesText 字段——通用文件能力。
+  if (cookiesText) {
+    await flux.fs.writeFile('cookies.txt', cookiesText);
+    args.push('--cookies', 'cookies.txt');
   }
+  args.push(ctx.url);
 
-  var audio = pickAudio(adaptive);
   if (verbose) {
     flux.logger.info(
-      '[youtube]', videoId,
-      'video itag=' + video.itag, video.qualityLabel, video.mimeType,
-      audio ? 'audio itag=' + audio.itag : 'no-audio'
+      '[youtube] yt-dlp -f', fmt,
+      'clients=' + PLAYER_CLIENTS,
+      cookiesText ? 'with-cookies' : 'no-cookies',
+      ctx.url
     );
   }
 
-  var result = {
-    url: video.url,
-    fileName: base + extOf(video.mimeType, false),
-    totalBytes: Number(video.contentLength) || null,
-    ephemeral: true,
-    rangeSupported: true,
-  };
-  if (audio) result.audioUrl = audio.url;
-  return result;
+  var r;
+  var rotatedBack = null;
+  try {
+    r = await flux.ytdlp.run({
+      args: args,
+      timeoutMs: 20 * 1000,
+    });
+  } catch (e) {
+    throw new Error('yt-dlp 调用异常: ' + String(e));
+  } finally {
+    if (cookiesText) {
+      // yt-dlp 运行结束会把轮换后的新 token 重写回 cookies.txt——删除前回读，
+      // 解析成功后持久化（cookie 自续期，见文件头注释第 3 点）。
+      if (ck.rotatable) {
+        try {
+          rotatedBack = await flux.fs.readFile('cookies.txt');
+        } catch (e) {
+          rotatedBack = null;
+        }
+      }
+      try {
+        await flux.fs.remove('cookies.txt');
+      } catch (e) {
+        // 清理失败不致命（工作区隔离、下次覆盖写）。
+      }
+    }
+  }
+
+  if (r.timedOut) throw new Error('yt-dlp 解析超时（20s）: ' + ctx.url);
+
+  // 关键：yt-dlp 遇 bot 风控时退出码可能为 0 但 stdout 输出 "null"/空。
+  // 不能只看 r.code——须校验 stdout 为合法非空对象，否则给出友好错误。
+  var raw = (r.stdout || '').trim();
+  if (r.code !== 0 || !raw || raw === 'null') {
+    // 用续期副本失败 → 作废之，下次回退到设置项重新播种。
+    if (ck.usedRotated) {
+      try {
+        await flux.storage.set('cookieRotated', '');
+      } catch (e) {}
+    }
+    throw new Error(friendlyError(ctx.url, r, !!cookiesText));
+  }
+
+  var info;
+  try {
+    info = JSON.parse(raw);
+  } catch (e) {
+    throw new Error('yt-dlp 输出非法 JSON: ' + String(e) + ' | ' + raw.slice(0, 200));
+  }
+  if (!info || typeof info !== 'object') {
+    throw new Error(friendlyError(ctx.url, r, !!cookiesText));
+  }
+
+  // 解析成功且 cookie 来自设置项 → 持久化 yt-dlp 回写的续期副本。
+  if (ck.rotatable && rotatedBack && looksNetscape(rotatedBack)) {
+    try {
+      await flux.storage.set('cookieRotated', rotatedBack);
+      await flux.storage.set('cookieSeedHash', ck.seedHash);
+    } catch (e) {
+      // 回存失败不致命，仅失去续期加成。
+    }
+  }
+
+  var title = info.title || info.id || 'youtube-video';
+  var base = sanitizeFileName(title);
+  var reqs = Array.isArray(info.requested_formats) ? info.requested_formats : null;
+
+  // 情形 A：requested_formats（音视频分离或选定单流）。
+  if (reqs && reqs.length >= 1) {
+    var vf = null;
+    var af = null;
+    for (var i = 0; i < reqs.length; i++) {
+      var f = reqs[i];
+      var hasV = f.vcodec && f.vcodec !== 'none';
+      var hasA = f.acodec && f.acodec !== 'none';
+      if (hasV && !vf) vf = f;
+      else if (hasA && !hasV && !af) af = f;
+      else if (hasA && !af) af = f;
+    }
+
+    if (flux.settings.quality === 'audio') {
+      var a = af || reqs[0];
+      if (!a || !a.url) throw new Error('yt-dlp 未返回音频直链: ' + ctx.url);
+      if (verbose) flux.logger.info('[youtube] audio', a.format_id, a.ext);
+      return {
+        url: a.url,
+        fileName: base + extOf(a, info, false),
+        totalBytes: sizeOf(a) || null,
+        extraHeaders: headersOf(a, info),
+        ephemeral: true,
+        rangeSupported: true,
+      };
+    }
+
+    if (vf && vf.url) {
+      var result = {
+        url: vf.url,
+        fileName: base + extOf(vf, info, true),
+        totalBytes: (sizeOf(vf) + sizeOf(af)) || null,
+        extraHeaders: headersOf(vf, info),
+        ephemeral: true,
+        rangeSupported: true,
+      };
+      if (af && af.url) result.audioUrl = af.url;
+      if (verbose) {
+        flux.logger.info(
+          '[youtube] video', vf.format_id, vf.ext,
+          af ? 'audio ' + af.format_id : 'muxed'
+        );
+      }
+      return result;
+    }
+  }
+
+  // 情形 B：单一 muxed 流（顶层 url）。
+  if (info.url) {
+    var hasVideo = flux.settings.quality !== 'audio';
+    if (verbose) flux.logger.info('[youtube] muxed single', info.format_id, info.ext);
+    return {
+      url: info.url,
+      fileName: base + extOf(info, info, hasVideo),
+      totalBytes: sizeOf(info) || null,
+      extraHeaders: headersOf(null, info),
+      ephemeral: true,
+      rangeSupported: true,
+    };
+  }
+
+  throw new Error('yt-dlp 未返回可用直链: ' + ctx.url + '（格式选择器可能过严，可调整画质设置）');
 };

@@ -236,10 +236,16 @@ fn register_core(state: AppState) -> Router<AppState> {
             .route(routes::API_QUEUES, get(api_list_queues))
             .route(routes::API_PLUGINS, get(api_list_plugins))
             .route(routes::API_PLUGINS_INSTALL, post(api_install_plugin))
-            .route(routes::API_PLUGINS_INSTALL_DEV, post(api_install_plugin_dev))
+            .route(
+                routes::API_PLUGINS_INSTALL_DEV,
+                post(api_install_plugin_dev),
+            )
             .route(routes::API_PLUGIN_ENABLED, put(api_set_plugin_enabled))
             .route(routes::API_PLUGIN_SETTINGS, put(api_update_plugin_settings))
-            .route(routes::API_PLUGIN, axum::routing::delete(api_uninstall_plugin))
+            .route(
+                routes::API_PLUGIN,
+                axum::routing::delete(api_uninstall_plugin),
+            )
             .route(
                 routes::API_TASK_IGNORE_PLUGIN_RETRY,
                 post(api_ignore_plugin_retry),
@@ -751,7 +757,10 @@ const MAX_PLUGIN_ZIP: usize = 10 * 1024 * 1024;
     ),
     security(("bearerAuth" = []), ("tokenHeader" = []))
 )]
-pub(crate) async fn api_list_plugins(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn api_list_plugins(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     if let Err(resp) = guard(&state, &headers) {
         return *resp;
     }
@@ -779,10 +788,14 @@ pub(crate) async fn api_install_plugin(
         return *resp;
     }
     if body.len() > MAX_PLUGIN_ZIP {
-        return result_response(StatusCode::BAD_REQUEST, false, "plugin zip too large (>10MB)");
+        return result_response(
+            StatusCode::BAD_REQUEST,
+            false,
+            "plugin zip too large (>10MB)",
+        );
     }
     match state.host.install_plugin_zip(body.to_vec()).await {
-        Ok(identity) => Json(crate::types::InstalledPlugin { identity }).into_response(),
+        Ok(identity) => installed_response(&state, identity).await,
         Err(e) => e.into_response(),
     }
 }
@@ -807,10 +820,16 @@ pub(crate) async fn api_install_plugin_dev(
     }
     let req: crate::types::InstallPluginDevRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => return result_response(StatusCode::BAD_REQUEST, false, &format!("invalid payload: {e}")),
+        Err(e) => {
+            return result_response(
+                StatusCode::BAD_REQUEST,
+                false,
+                &format!("invalid payload: {e}"),
+            );
+        }
     };
     match state.host.install_plugin_dev(req.dir_path).await {
-        Ok(identity) => Json(crate::types::InstalledPlugin { identity }).into_response(),
+        Ok(identity) => installed_response(&state, identity).await,
         Err(e) => e.into_response(),
     }
 }
@@ -836,7 +855,13 @@ pub(crate) async fn api_set_plugin_enabled(
     }
     let req: crate::types::SetPluginEnabledRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => return result_response(StatusCode::BAD_REQUEST, false, &format!("invalid payload: {e}")),
+        Err(e) => {
+            return result_response(
+                StatusCode::BAD_REQUEST,
+                false,
+                &format!("invalid payload: {e}"),
+            );
+        }
     };
     ack(state.host.set_plugin_enabled(&identity, req.enabled).await)
 }
@@ -862,7 +887,13 @@ pub(crate) async fn api_update_plugin_settings(
     }
     let entries: std::collections::HashMap<String, String> = match serde_json::from_slice(&body) {
         Ok(m) => m,
-        Err(e) => return result_response(StatusCode::BAD_REQUEST, false, &format!("invalid payload: {e}")),
+        Err(e) => {
+            return result_response(
+                StatusCode::BAD_REQUEST,
+                false,
+                &format!("invalid payload: {e}"),
+            );
+        }
     };
     ack(state.host.update_plugin_settings(&identity, entries).await)
 }
@@ -945,12 +976,29 @@ pub(crate) async fn api_market_install(
     }
     let req: crate::types::MarketInstallRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => return result_response(StatusCode::BAD_REQUEST, false, &format!("invalid payload: {e}")),
+        Err(e) => {
+            return result_response(
+                StatusCode::BAD_REQUEST,
+                false,
+                &format!("invalid payload: {e}"),
+            );
+        }
     };
     match state.host.market_install(&req.plugin_id).await {
-        Ok(identity) => Json(crate::types::InstalledPlugin { identity }).into_response(),
+        Ok(identity) => installed_response(&state, identity).await,
         Err(e) => e.into_response(),
     }
+}
+
+/// 安装成功统一返回体：回填缺失基础组件列表（提醒式依赖检查，见
+/// [`crate::types::InstalledPlugin`]）。
+async fn installed_response(state: &AppState, identity: String) -> Response {
+    let missing_components = state.host.plugin_missing_components(&identity).await;
+    Json(crate::types::InstalledPlugin {
+        identity,
+        missing_components,
+    })
+    .into_response()
 }
 
 /// 无返回值操作的统一应答。

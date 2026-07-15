@@ -25,6 +25,7 @@ use tokio::sync::Semaphore;
 use super::runtime::{
     ExecutionBudget, FfmpegSpec, HostContext, PluginBridge, PluginEntryKind, PluginError,
     PluginEvent, PluginLogLevel, PluginScript, ResolveRequest, ResolveResult, ScriptRuntime,
+    YtdlpSpec,
 };
 
 /// 硬顶（**CPU/中断**预算）：单次调用的 JS 字节码执行不得跨过该墙——interrupt
@@ -161,6 +162,7 @@ impl QuickJsScriptRuntime {
         let entry_owned = entry.to_string();
         let ffmpeg_permitted = host.ffmpeg_permitted;
         let ffmpeg_root = host.ffmpeg_root.clone();
+        let ytdlp_permitted = host.ytdlp_permitted;
         let interrupt_ns_bridge = interrupt_ns.clone();
         let exec = ctx.async_with(async move |ctx| -> Result<String, PluginError> {
             inject_bridge(
@@ -171,6 +173,7 @@ impl QuickJsScriptRuntime {
                 artifact_task_id,
                 ffmpeg_permitted,
                 ffmpeg_root,
+                ytdlp_permitted,
                 interrupt_ns_bridge,
             )
             .map_err(|e| PluginError::Runtime(format!("注入 flux 失败: {e}")))?;
@@ -429,6 +432,7 @@ fn inject_bridge(
     artifact_task_id: Option<String>,
     ffmpeg_permitted: bool,
     ffmpeg_root: Option<PathBuf>,
+    ytdlp_permitted: bool,
     interrupt_ns: Arc<AtomicU64>,
 ) -> Result<(), rquickjs::Error> {
     let globals = ctx.globals();
@@ -506,6 +510,93 @@ fn inject_bridge(
         )?
         .with_name("__flux_storage_set")?;
         globals.set("__flux_storage_set", f)?;
+    }
+
+    // __flux_fs_write(name, content) -> Promise<String("" 或错误消息)>
+    {
+        let b = bridge.clone();
+        let pid = plugin_id.to_string();
+        let f = Function::new(
+            ctx.clone(),
+            Async(move |name: String, content: String| {
+                let b = b.clone();
+                let pid = pid.clone();
+                async move {
+                    let msg = match b.fs_write(&pid, &name, content).await {
+                        Ok(()) => String::new(),
+                        Err(e) => e.to_string(),
+                    };
+                    Ok::<String, rquickjs::Error>(msg)
+                }
+            }),
+        )?
+        .with_name("__flux_fs_write")?;
+        globals.set("__flux_fs_write", f)?;
+    }
+
+    // __flux_fs_read(name) -> Promise<String>（不存在返回 STORAGE_NONE 哨兵）
+    {
+        let b = bridge.clone();
+        let pid = plugin_id.to_string();
+        let f = Function::new(
+            ctx.clone(),
+            Async(move |name: String| {
+                let b = b.clone();
+                let pid = pid.clone();
+                async move {
+                    let v = b
+                        .fs_read(&pid, &name)
+                        .await
+                        .unwrap_or_else(|| STORAGE_NONE.to_string());
+                    Ok::<String, rquickjs::Error>(v)
+                }
+            }),
+        )?
+        .with_name("__flux_fs_read")?;
+        globals.set("__flux_fs_read", f)?;
+    }
+
+    // __flux_fs_remove(name) -> Promise<String("" 或错误消息)>
+    {
+        let b = bridge.clone();
+        let pid = plugin_id.to_string();
+        let f = Function::new(
+            ctx.clone(),
+            Async(move |name: String| {
+                let b = b.clone();
+                let pid = pid.clone();
+                async move {
+                    let msg = match b.fs_remove(&pid, &name).await {
+                        Ok(()) => String::new(),
+                        Err(e) => e.to_string(),
+                    };
+                    Ok::<String, rquickjs::Error>(msg)
+                }
+            }),
+        )?
+        .with_name("__flux_fs_remove")?;
+        globals.set("__flux_fs_remove", f)?;
+    }
+
+    // __flux_fs_list() -> Promise<String(JSON array)>
+    {
+        let b = bridge.clone();
+        let pid = plugin_id.to_string();
+        let f = Function::new(
+            ctx.clone(),
+            Async(move || {
+                let b = b.clone();
+                let pid = pid.clone();
+                async move {
+                    let names = b.fs_list(&pid).await;
+                    Ok::<String, rquickjs::Error>(
+                        serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string()),
+                    )
+                }
+            }),
+        )?
+        .with_name("__flux_fs_list")?;
+        globals.set("__flux_fs_list", f)?;
     }
 
     // __flux_log(level, msg) -> ()（同步）
@@ -642,6 +733,116 @@ fn inject_bridge(
             .with_name("__flux_ffmpeg_run")?;
             globals.set("__flux_ffmpeg_run", f)?;
         }
+
+        // __flux_ffprobe_run(optsJson) -> Promise<String(JSON)>（同 ffmpeg 权限门/牢笼）
+        {
+            let b = bridge.clone();
+            let pid = plugin_id.to_string();
+            let root = ffmpeg_root.clone();
+            let dl = interrupt_ns.clone();
+            let f = Function::new(
+                ctx.clone(),
+                Async(move |opts: String| {
+                    let b = b.clone();
+                    let pid = pid.clone();
+                    let root = root.clone();
+                    let dl = dl.clone();
+                    async move {
+                        let Some(root) = root else {
+                            return Ok::<String, rquickjs::Error>(
+                                serde_json::json!({ "__fluxError":
+                                    "flux.ffprobe.run 仅在有产物文件的钩子（如 onDone）中可用" })
+                                .to_string(),
+                            );
+                        };
+                        let spec: FfmpegSpec = serde_json::from_str(&opts).unwrap_or_default();
+                        let started = Instant::now();
+                        let out = b.run_ffprobe(&pid, root, spec).await;
+                        dl.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Release);
+                        let payload = match out {
+                            Ok(o) => serde_json::json!({ "value": {
+                                "code": o.code,
+                                "stdout": o.stdout,
+                                "stderr": o.stderr,
+                                "timedOut": o.timed_out,
+                                "truncatedStdout": o.truncated_stdout,
+                                "truncatedStderr": o.truncated_stderr,
+                            }}),
+                            Err(e) => serde_json::json!({ "__fluxError": e.to_string() }),
+                        };
+                        Ok::<String, rquickjs::Error>(payload.to_string())
+                    }
+                }),
+            )?
+            .with_name("__flux_ffprobe_run")?;
+            globals.set("__flux_ffprobe_run", f)?;
+        }
+    }
+
+    // __flux_ytdlp_*：仅在 manifest 授予 "ytdlp" 权限时注入（否则 flux.ytdlp 门面
+    // 不存在）。牢笼由 bridge 自持（每插件 scratch 目录），故 run 无 root 前置检查。
+    if ytdlp_permitted {
+        // __flux_ytdlp_available() -> Promise<String(JSON)>
+        {
+            let b = bridge.clone();
+            let f = Function::new(
+                ctx.clone(),
+                Async(move || {
+                    let b = b.clone();
+                    async move {
+                        let payload = match b.ytdlp_available().await {
+                            Some(a) => serde_json::json!({ "value": {
+                                "available": a.available,
+                                "version": a.version,
+                                "source": a.source,
+                            }}),
+                            None => serde_json::json!({ "value": {
+                                "available": false, "version": "", "source": "none",
+                            }}),
+                        };
+                        Ok::<String, rquickjs::Error>(payload.to_string())
+                    }
+                }),
+            )?
+            .with_name("__flux_ytdlp_available")?;
+            globals.set("__flux_ytdlp_available", f)?;
+        }
+
+        // __flux_ytdlp_run(optsJson) -> Promise<String(JSON)>
+        {
+            let b = bridge.clone();
+            let pid = plugin_id.to_string();
+            let dl = interrupt_ns.clone();
+            let f = Function::new(
+                ctx.clone(),
+                Async(move |opts: String| {
+                    let b = b.clone();
+                    let pid = pid.clone();
+                    let dl = dl.clone();
+                    async move {
+                        let spec: YtdlpSpec = serde_json::from_str(&opts).unwrap_or_default();
+                        // 挂起时长补进中断预算：长时子进程返回后 JS 仍保有 CPU 预算。
+                        let started = Instant::now();
+                        let out = b.run_ytdlp(&pid, spec).await;
+                        dl.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Release);
+                        let payload = match out {
+                            Ok(o) => serde_json::json!({ "value": {
+                                "code": o.code,
+                                "stdout": o.stdout,
+                                "stderr": o.stderr,
+                                "timedOut": o.timed_out,
+                                "truncatedStdout": o.truncated_stdout,
+                                "truncatedStderr": o.truncated_stderr,
+                            }}),
+                            Err(e) => serde_json::json!({ "__fluxError": e.to_string() }),
+                        };
+                        Ok::<String, rquickjs::Error>(payload.to_string())
+                    }
+                }),
+            )?
+            .with_name("__flux_ytdlp_run")?;
+            globals.set("__flux_ytdlp_run", f)?;
+        }
     }
 
     Ok(())
@@ -664,6 +865,20 @@ const FLUX_PRELUDE: &str = r#"
       set: (key, value) => __flux_storage_set(String(key), String(value)).then((s) => {
         if (s) throw new Error(s);
       }),
+    },
+    // flux.fs：牢笼内（每插件工作区，与 flux.ytdlp 的 cwd 同根）通用临时文件读写，
+    // 供为受管工具物化输入文件（cookie/config/字幕…）。始终可用，无需权限。
+    fs: {
+      writeFile: (name, content) =>
+        __flux_fs_write(String(name), String(content)).then((s) => {
+          if (s) throw new Error(s);
+        }),
+      readFile: (name) =>
+        __flux_fs_read(String(name)).then((s) => (s === '__FLUX_NONE__' ? null : s)),
+      remove: (name) => __flux_fs_remove(String(name)).then((s) => {
+        if (s) throw new Error(s);
+      }),
+      list: () => __flux_fs_list().then((s) => JSON.parse(s)),
     },
     settings: __flux_settings_json,
     info: __flux_info,
@@ -690,6 +905,30 @@ const FLUX_PRELUDE: &str = r#"
     globalThis.flux.ffmpeg = {
       available: () => __flux_ffmpeg_available().then(__ffunwrap),
       run: (opts) => __flux_ffmpeg_run(JSON.stringify(opts || {})).then(__ffunwrap),
+    };
+  }
+  // flux.ffprobe：与 flux.ffmpeg 同由 ffmpeg 权限门 + 同牢笼门控（onDone 才有牢笼）。
+  if (typeof __flux_ffprobe_run === 'function') {
+    const __fpunwrap = (s) => {
+      const r = JSON.parse(s);
+      if (r.__fluxError) throw new Error(r.__fluxError);
+      return r.value;
+    };
+    globalThis.flux.ffprobe = {
+      run: (opts) => __flux_ffprobe_run(JSON.stringify(opts || {})).then(__fpunwrap),
+    };
+  }
+  // flux.ytdlp：仅当宿主注入了 __flux_ytdlp_run（即 manifest 授予 ytdlp 权限）
+  // 时可用；否则 flux.ytdlp 为 undefined，插件应先 `if (flux.ytdlp)` 判定。
+  if (typeof __flux_ytdlp_run === 'function') {
+    const __ytunwrap = (s) => {
+      const r = JSON.parse(s);
+      if (r.__fluxError) throw new Error(r.__fluxError);
+      return r.value;
+    };
+    globalThis.flux.ytdlp = {
+      available: () => __flux_ytdlp_available().then(__ytunwrap),
+      run: (opts) => __flux_ytdlp_run(JSON.stringify(opts || {})).then(__ytunwrap),
     };
   }
   globalThis.console = {
@@ -839,6 +1078,7 @@ mod tests {
             HostContext {
                 ffmpeg_permitted: true,
                 ffmpeg_root: None,
+                ..Default::default()
             },
         )
         .await;
@@ -855,6 +1095,7 @@ mod tests {
             HostContext {
                 ffmpeg_permitted: true,
                 ffmpeg_root: None,
+                ..Default::default()
             },
         )
         .await;
@@ -882,5 +1123,19 @@ mod tests {
             "error should mention onDone: {}",
             r.url
         );
+    }
+
+    /// flux.fs 始终注入（无需权限），且四个方法形状正确。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fs_facade_always_present() {
+        let r = probe_resolve(
+            "globalThis.resolve = async () => ({ url: \
+             (typeof flux.fs) + ':' + (typeof flux.fs.writeFile) + ':' + \
+             (typeof flux.fs.readFile) + ':' + (typeof flux.fs.remove) + ':' + \
+             (typeof flux.fs.list) });",
+            HostContext::default(),
+        )
+        .await;
+        assert_eq!(r.url, "object:function:function:function:function");
     }
 }

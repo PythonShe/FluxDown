@@ -3,7 +3,7 @@ title: 插件 API 参考
 description: 入口函数签名、flux.* 完整接口、全部运行时限制。
 section: plugins
 order: 4
-sourceHash: "4b8d3f0f5697"
+sourceHash: "fa95fde1efd4"
 ---
 
 插件脚本能看到的一切：FluxDown 会调用的五个入口函数，和注入的 `flux` 对象。跨越 JS 边界的字段名全部是 camelCase。
@@ -93,6 +93,29 @@ resolve 出 `{ status, headers, body, truncated }`——`status` 是数字状态
 
 值只能是字符串；结构化数据自己 JSON 序列化。
 
+### `flux.fs`
+
+始终可用——无需在 manifest 里声明权限。插件自己的临时文件工作区，和 `flux.storage` 的键值存储是两码事：需要给受管工具一个磁盘上的真实文件（而不是内存里的字符串）时用它。这个工作区就是 `flux.ytdlp` 运行时的**同一个目录**（其 cwd）——写在这里的文件，yt-dlp（或任何工具调用）都能用普通相对文件名读到。
+
+- `flux.fs.writeFile(name, content)` → `Promise<void>`——写入（或覆盖）一个文本文件；文件名非法或触发限额时 reject（抛异常）。
+- `flux.fs.readFile(name)` → `Promise<string | null>`——读回文本文件；不存在则为 `null`。
+- `flux.fs.remove(name)` → `Promise<void>`——删除文件；文件不存在不算错误（幂等）。
+- `flux.fs.list()` → `Promise<string[]>`——工作区顶层的文件名列表（不含子目录，也不含 yt-dlp 自己的 `.cache`）。
+
+`name` 必须是扁平的安全文件名：非空、不含 `/`、`\`、`:`，不是 `.` 或 `..`，且不超过 255 个字符——否则抛异常。限额：单文件 **8 MB**，单插件工作区总量 **64 MB**，文件数至多 **100** 个。内容仅支持文本（不支持二进制）。Unix 下写入会尽力设为 `0600`。
+
+典型用法：为受管工具物化输入文件——cookie、配置、字幕——写入后以相对名喂给工具调用，用完删除。例子——给 `flux.ytdlp` 喂一份 cookie：
+
+```js
+await flux.fs.writeFile('cookies.txt', netscapeCookieText);
+try {
+  const r = await flux.ytdlp.run({ args: ['--cookies', 'cookies.txt', '-J', ctx.url] });
+  // ... 使用 r.stdout
+} finally {
+  await flux.fs.remove('cookies.txt');
+}
+```
+
 ### `flux.settings`
 
 只读对象，装着 manifest 里声明的设置项，类型已经转好：`string` 项是字符串，`number` 是数字，`boolean` 是布尔。用户没填的项带着 `default` 值。
@@ -153,6 +176,66 @@ globalThis.onDone = async (ctx) => {
 };
 ```
 
+### `flux.ffprobe`
+
+和 `flux.ffmpeg` 由同一个 `permissions: ["ffmpeg"]` 声明门控——不存在独立权限。它共享完全相同的牢笼（**仅**在 `onDone` 里可用，其他事件里调用会 reject）、相同的路径解析顺序（用户手动指定 → 托管安装 → 系统 `PATH`），以及相同的参数审查（不许 URL scheme、不许绝对路径、不许上级穿越、不许内嵌绝对路径）。ffprobe 随托管 ffmpeg 一并安装——在「组件」页安装 ffmpeg 时会同时把 ffprobe 落到 `<data_dir>/bin`，无需额外安装步骤。
+
+- `flux.ffprobe.run(spec)` → `Promise<outcome>`——运行 ffprobe。`spec` 与 resolve 出的 `outcome` 形状与 `flux.ffmpeg.run` 完全一致（`args` / `subdir` / `timeoutMs`，resolve 出 `{ code, stdout, stderr, timedOut, truncatedStdout, truncatedStderr }`）。
+
+用它做结构化探测，而不是去抠 ffmpeg 的 stderr：
+
+```js
+const out = await flux.ffprobe.run({
+  args: ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', './in.mp4'],
+});
+const info = JSON.parse(out.stdout);
+```
+
+### `flux.ytdlp`
+
+**仅当** manifest 声明 `permissions: ["ytdlp"]` 时可用——否则 `flux.ytdlp` 为 `undefined`，请用 `if (flux.ytdlp)` 判断。它运行 FluxDown 解析到的 yt-dlp（用户手动指定的路径 → 托管安装 → 系统 `PATH`），因此还要求 yt-dlp 确实存在（可在应用「组件」页安装）。
+
+- `flux.ytdlp.available()` → `Promise<{ available, version, source }>`——探测生效的 yt-dlp。`source` 取 `"manual"` / `"managed"` / `"system"` / `"none"`。想轻量探测也可以直接 `run({ args: ['--version'] })` 看 `code === 0`。
+- `flux.ytdlp.run(spec)` → `Promise<outcome>`——运行 yt-dlp。`spec`：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `args` | — | 必填，非空。yt-dlp 参数数组（不含程序名；`--ignore-config` 会自动前置）。 |
+| `subdir` | 无 | 牢笼根下的工作子目录；安全相对路径，不得逃逸。 |
+| `timeoutMs` | 300000 | 单次调用超时，上限 3600000（60 分钟）。 |
+
+resolve 出 `{ code, stdout, stderr, timedOut, truncatedStdout, truncatedStderr }`——`code` 是退出码（被杀死/无码时为 `-1`），`stdout`/`stderr` 会截断（256 KB / 64 KB），`timedOut` 为 `true` 表示被超时杀掉。
+
+**牢笼。** 和 `flux.ffmpeg` 不同，`flux.ytdlp` 在**所有**上下文里都可用——`resolve` 和每个 hook——因为它不依赖产物文件。牢笼根不是任务的产物目录，而是 bridge 自持的每插件 scratch 目录（懒创建于 FluxDown 数据目录下），跨调用复用。它就是本次调用的工作目录，`subdir` 在其中划出子目录。读写的文件一律用**相对**名引用。这正是 `flux.fs` 读写的同一个工作区——喂给 yt-dlp cookie、配置或字幕文件的方式就是：调用前 `flux.fs.writeFile('cookies.txt', …)`，在 `args` 里以相对名引用该文件，调用结束后 `flux.fs.remove('cookies.txt')`。
+
+yt-dlp 是网络工具，和 ffmpeg 的牢笼不同，URL 参数与出站网络访问都放行——从远程 URL 提取正是它的本职。会被拦的是那些能跳出 yt-dlp 本身或逃出牢笼的东西：
+
+| 拦截 | 例子 |
+|---|---|
+| 绝对路径 / 盘符 | `/etc/x`、`C:\x`、`\\host\share` |
+| 上级穿越 | `../x`、`a/../b` |
+| 内嵌绝对路径 | `--paths home:/etc/x` |
+| `file:` 本地方案 | `file:///etc/passwd` |
+| 会执行外部程序 / 加载任意配置或插件 / 读浏览器凭据的开关 | `--exec`、`--exec-before-download`、`--downloader`、`--external-downloader`、`--config-location`/`--config-locations`、`--plugin-dirs`、`--ffmpeg-location`、`--batch-file`、`-a`、`--load-info`/`--load-info-json`、`--cookies-from-browser` |
+
+`--ignore-config` 恒被前置注入，这样 yt-dlp 自己的配置文件（本可能夹带危险开关）也读不到。全部插件合计同时至多跑 2 个 yt-dlp 进程，每个子进程在超时或取消时被杀。
+
+FluxDown 会自动注入 `--ffmpeg-location`（指向解析到的托管/系统 ffmpeg），使合并（bestvideo+bestaudio）、`-x` 抽音、remux、recode 都能正常工作——插件自带的 `--ffmpeg-location` 仍会被拒（见上表），只信任宿主自己注入的路径。它还会自动注入 `--cache-dir <jail>/.cache`，把 yt-dlp 的缓存收在牢笼内，不外泄。
+
+例子——向 yt-dlp 要元数据 JSON，从中挑一条直链来 resolve：
+
+```js
+globalThis.resolve = async (ctx) => {
+  if (!flux.ytdlp) return null;
+  const r = await flux.ytdlp.run({ args: ['-J', '--no-warnings', ctx.url] });
+  if (r.code !== 0) throw new Error('yt-dlp 失败: ' + (r.stderr || '').slice(-400));
+  const info = JSON.parse(r.stdout);
+  const direct = info.url || info.formats?.[info.formats.length - 1]?.url;
+  if (!direct) return null;
+  return { url: direct, fileName: info.title ? `${info.title}.${info.ext || 'mp4'}` : undefined };
+};
+```
+
 ## 运行时限制
 
 每次调用都在全新的 QuickJS 上下文里跑：调用之间没有任何全局变量残留，没有定时器和 DOM API，脚本按 classic script 加载（顶层 `function` 声明自动成为全局函数；`export` 语法不能用）。
@@ -164,4 +247,4 @@ globalThis.onDone = async (ctx) => {
 
 连续 3 次超时或内存超限会触发熔断：插件被自动禁用，应用弹出提示，直到手动重新启用为止。
 
-获得 `permissions: ["ffmpeg"]` 的钩子会拿到抬高的墙钟预算（约 30 分钟），好让长时 ffmpeg 跑完；30 秒 CPU 顶仍约束 JavaScript 本身——等待 ffmpeg 子进程的时间不计入。
+获得 `permissions: ["ffmpeg"]`（且命中产物钩子，即 `onDone`）或 `permissions: ["ytdlp"]`（任意 hook）的插件会拿到抬高的墙钟预算（约 30 分钟），好让长时外部工具跑完；30 秒 CPU 顶仍约束 JavaScript 本身——等待子进程的时间不计入。`resolve` 始终用自己的预算（默认 10 秒，`timeoutMs` 可改，30 秒硬顶），即便 `flux.ytdlp` 在那里也能用——长任务请按此规划 `run()` 调用。

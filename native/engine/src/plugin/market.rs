@@ -85,6 +85,10 @@ pub struct MarketEntry {
     pub yanked: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// manifest 声明的能力权限（如 `["ffmpeg"]`；CI flatten 自 manifest 抄录，
+    /// 供安装前展示授权。旧索引缺省 → 空，不影响安装）。
+    #[serde(default)]
+    pub permissions: Vec<String>,
     /// 预留：未来作者签名方案（`none` / `sigstore` / `ed25519`）。
     #[serde(default = "sig_none")]
     pub sig_scheme: String,
@@ -440,6 +444,7 @@ mod tests {
                     publish_time: String::new(),
                     yanked: "none".into(),
                     tags: vec![],
+                    permissions: vec![],
                     sig_scheme: "none".into(),
                     sigstore_bundle_ref: String::new(),
                 },
@@ -457,6 +462,7 @@ mod tests {
                     publish_time: String::new(),
                     yanked: "vulnerable".into(),
                     tags: vec![],
+                    permissions: vec![],
                     sig_scheme: "none".into(),
                     sigstore_bundle_ref: String::new(),
                 },

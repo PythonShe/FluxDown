@@ -29,6 +29,9 @@ pub struct TaskInfo {
     /// 由引擎按需扫描计算并落库（见 `crate::download_manager::DownloadManager::spawn_file_scan`）；
     /// 仅对 status=3 语义有效，默认 false。
     pub file_missing: bool,
+    /// 任务结束时间，Unix seconds 时间戳（空 = 尚未完成）。
+    /// 记录下载真正完成（status→3）的时刻，不含插件 hook 后处理耗时。
+    pub completed_at: String,
 }
 
 /// 命名队列元数据。字段对应 `hub::signals::QueueInfo`。

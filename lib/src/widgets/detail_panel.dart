@@ -467,9 +467,27 @@ class _DetailPanelState extends State<DetailPanel> {
         if (pluginActive) _buildPluginActivityCard(c, task),
         _buildInfoRow(currentS.infoSize, task.sizeText, c),
         _buildInfoRow(currentS.infoDownloaded, task.downloadedText, c),
-        _buildInfoRow(currentS.infoSpeed, task.speedText, c),
-        _buildInfoRow(currentS.infoRemaining, task.etaText, c),
+        // 速度/剩余仅对进行中的任务有意义，其余状态不展示。
+        if (task.status == TaskStatus.downloading ||
+            task.status == TaskStatus.resuming) ...[
+          _buildInfoRow(currentS.infoSpeed, task.speedText, c),
+          _buildInfoRow(currentS.infoRemaining, task.etaText, c),
+        ],
         _buildInfoRow(currentS.infoStatus, task.statusText, c),
+        _buildInfoRow(currentS.infoStartedAt, _formatDateTime(task.createdAt), c),
+        if (task.status == TaskStatus.completed &&
+            task.completedAt != null) ...[
+          _buildInfoRow(
+            currentS.infoCompletedAt,
+            _formatDateTime(task.completedAt!),
+            c,
+          ),
+          _buildInfoRow(
+            currentS.infoDuration,
+            _formatDuration(task.completedAt!.difference(task.createdAt)),
+            c,
+          ),
+        ],
         if (segCount != null)
           _buildInfoRow(currentS.threads, currentS.infoThreads(segCount), c),
         if (splitCount > 0) _buildSplitInfoRow(c, task),
@@ -644,6 +662,25 @@ class _DetailPanelState extends State<DetailPanel> {
     final secs = d.inSeconds % 60;
     if (mins <= 0) return '${secs}s';
     return '${mins}m${secs.toString().padLeft(2, '0')}s';
+  }
+
+  /// `yyyy-MM-dd HH:mm:ss` 本地时间格式（开始/结束时间行）。
+  static String _formatDateTime(DateTime dt) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} '
+        '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+  }
+
+  /// 任务耗时格式：`23s` / `3m05s` / `1h02m03s`（开始→下载完成，不含 hook）。
+  static String _formatDuration(Duration d) {
+    if (d.isNegative) d = Duration.zero;
+    String two(int v) => v.toString().padLeft(2, '0');
+    final hours = d.inHours;
+    final mins = d.inMinutes % 60;
+    final secs = d.inSeconds % 60;
+    if (hours > 0) return '${hours}h${two(mins)}m${two(secs)}s';
+    if (mins > 0) return '${mins}m${two(secs)}s';
+    return '${secs}s';
   }
 
   Widget _buildUrlRow(AppColors c, String url) {

@@ -16,7 +16,9 @@ use crate::db::Db;
 use crate::events::{EngineEvent, EventSink};
 use crate::logger::log_info;
 
-use super::manifest::{PERMISSION_FFMPEG, PluginManifest, SettingField, SettingType};
+use super::manifest::{
+    PERMISSION_FFMPEG, PERMISSION_YTDLP, PluginManifest, SettingField, SettingType,
+};
 use super::quickjs::HARD_TIMEOUT_CEILING;
 use super::runtime::{
     ExecutionBudget, HostContext, PluginBridge, PluginEntryKind, PluginError, PluginEvent,
@@ -36,10 +38,10 @@ const DEFAULT_HOOK_BUDGET: ExecutionBudget = ExecutionBudget {
     timeout: Duration::from_secs(5),
     memory_limit_bytes: 32 * 1024 * 1024,
 };
-/// ffmpeg-授权插件的 hook 墙钟预算：容纳长时 ffmpeg 子进程（转码可达分钟级）。
-/// CPU/中断预算仍是 30s（见 [`super::quickjs`]，`await` 不烧 CPU、不计入中断顶），
-/// 内存与普通 hook 一致。
-const FFMPEG_HOOK_BUDGET: ExecutionBudget = ExecutionBudget {
+/// 外部工具（ffmpeg / yt-dlp）授权插件的 hook 墙钟预算：容纳长时子进程（转码 /
+/// 下载可达分钟级）。CPU/中断预算仍是 30s（见 [`super::quickjs`]，`await` 不烧
+/// CPU、不计入中断顶），内存与普通 hook 一致。
+const EXTERNAL_TOOL_HOOK_BUDGET: ExecutionBudget = ExecutionBudget {
     timeout: Duration::from_secs(1830),
     memory_limit_bytes: 32 * 1024 * 1024,
 };
@@ -400,7 +402,11 @@ impl PluginManager {
                 settings_json,
                 self.bridge.clone(),
                 budget,
-                HostContext::default(),
+                HostContext {
+                    // resolve 平面授予 yt-dlp（直链提取的主战场）；ffmpeg 无产物牢笼故不授予。
+                    ytdlp_permitted: manifest.has_permission(PERMISSION_YTDLP),
+                    ..Default::default()
+                },
             )
             .await;
 
@@ -465,6 +471,7 @@ impl PluginManager {
             // ffmpeg 门：授权 + 有产物文件（onDone 才有）→ 注入 flux.ffmpeg 并抬升
             // hook 墙钟预算；牢笼根 = 产物所在目录。其余事件/未授权 → 无 ffmpeg。
             let ffmpeg_permitted = p.manifest.has_permission(PERMISSION_FFMPEG);
+            let ytdlp_permitted = p.manifest.has_permission(PERMISSION_YTDLP);
             let ffmpeg_root = match &event {
                 PluginEvent::Done { file_path, .. } => {
                     Path::new(file_path).parent().map(Path::to_path_buf)
@@ -474,9 +481,11 @@ impl PluginManager {
             let host = HostContext {
                 ffmpeg_permitted,
                 ffmpeg_root,
+                ytdlp_permitted,
             };
-            let budget = if ffmpeg_permitted && host.ffmpeg_root.is_some() {
-                FFMPEG_HOOK_BUDGET
+            // 授权外部工具（ffmpeg 有产物牢笼 / yt-dlp 任意上下文）→ 抬升墙钟预算。
+            let budget = if (ffmpeg_permitted && host.ffmpeg_root.is_some()) || ytdlp_permitted {
+                EXTERNAL_TOOL_HOOK_BUDGET
             } else {
                 self.hook_budget
             };
@@ -834,6 +843,18 @@ impl PluginManager {
             });
         }
         out
+    }
+
+    /// 按 identity 查插件 manifest 声明的能力权限（供安装后依赖提醒）。
+    ///
+    /// 插件不存在时返回空（调用方视为无依赖）。
+    pub async fn permissions_of(&self, identity: &str) -> Vec<String> {
+        let snapshot = self.plugins.read().await.clone();
+        snapshot
+            .iter()
+            .find(|p| p.manifest.identity == identity)
+            .map(|p| p.manifest.permissions.clone())
+            .unwrap_or_default()
     }
 
     /// 逃生舱窄接口：清该任务 resolver_plugin_id（不改插件全局状态）。

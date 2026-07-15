@@ -191,7 +191,7 @@ export interface TokenResponse {
   note: string
 }
 
-// ---- 组件（v1 仅 ffmpeg） ----
+// ---- 组件（ffmpeg / yt-dlp） ----
 
 /** ffmpeg 路径来源：manual=手动指定 managed=托管安装 system=系统 PATH none=未找到。 */
 export type FfmpegSource = 'manual' | 'managed' | 'system' | 'none'
@@ -199,6 +199,16 @@ export type FfmpegSource = 'manual' | 'managed' | 'system' | 'none'
 export interface ComponentFfmpegStatus {
   source: FfmpegSource
   /** 当前平台是否提供托管安装（macOS 等为 false）。 */
+  managedSupported: boolean
+  path: string
+  version: string
+  managedVersion: string
+  systemPath: string
+}
+
+export interface ComponentYtdlpStatus {
+  source: FfmpegSource
+  /** 当前平台是否提供托管安装（yt-dlp 全平台均支持，通常为 true）。 */
   managedSupported: boolean
   path: string
   version: string
@@ -253,10 +263,14 @@ export interface PluginDto {
   disabledReason: PluginDisabledReason
   settings: SettingFieldDto[]
   settingsValues: Record<string, string>
+  /** manifest 声明的能力权限（如 ["ffmpeg"]），旧服务端可能缺省。 */
+  permissions?: string[]
 }
 
 export interface InstalledPlugin {
   identity: string
+  /** 插件声明权限所需但尚未安装的基础组件（"ffmpeg"/"ytdlp"），提醒式。 */
+  missingComponents?: string[]
 }
 
 /** 去中心化插件市场索引条目（浏览/安装用）。yanked 值域：none/deprecated/vulnerable/malicious。 */
@@ -274,4 +288,6 @@ export interface MarketEntry {
   publishTime: string
   yanked: string
   tags: string[]
+  /** manifest 声明的能力权限（如 ["ffmpeg"]），旧索引可能缺省。 */
+  permissions?: string[]
 }

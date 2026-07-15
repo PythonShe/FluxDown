@@ -239,10 +239,11 @@ fn task_from_row(row: &AnyRow) -> Result<TaskInfo, sqlx::Error> {
         queue_id: row.try_get("queue_id").unwrap_or_default(),
         checksum: row.try_get("checksum").unwrap_or_default(),
         file_missing: row.try_get::<i32, _>("file_missing").unwrap_or(0) != 0,
+        completed_at: row.try_get("completed_at").unwrap_or_default(),
     })
 }
 
-const TASK_COLUMNS: &str = "id, url, file_name, save_dir, status, downloaded_bytes, total_bytes, error_message, created_at, proxy_url, queue_id, checksum, file_missing";
+const TASK_COLUMNS: &str = "id, url, file_name, save_dir, status, downloaded_bytes, total_bytes, error_message, created_at, proxy_url, queue_id, checksum, file_missing, completed_at";
 
 impl Db {
     /// 在 `dir` 目录下打开（不存在则创建）SQLite 数据库 `flux_down.db`。
@@ -348,6 +349,11 @@ impl Db {
         // 失效，彻底关闭"迟到写落到重建后段行"的静默空洞窗口。进程内单调
         // （DownloadManager.generation），跨进程无需单调（旧进程已死）。
         self.add_column_if_missing("tasks", "segments_epoch", "INTEGER NOT NULL DEFAULT 0")
+            .await?;
+        // 任务结束时间（Unix 秒，字符串；空 = 尚未完成）。仅记录下载真正
+        // 完成（status→3）的时刻，插件 onDone 等 hook 后处理不计入；任务
+        // 重新开始下载（status→0/1/5）时清空，供重下后重新记录。
+        self.add_column_if_missing("tasks", "completed_at", "TEXT NOT NULL DEFAULT ''")
             .await?;
         Ok(())
     }
@@ -506,18 +512,33 @@ impl Db {
         Ok(())
     }
 
+    /// 更新任务状态与错误信息，并同步维护 `completed_at`（任务结束时间）：
+    /// - `status = 3`（下载完成）且尚未记录 → 写入当前 Unix 秒。此写入发生在
+    ///   下载数据落盘完成之时，早于插件 onDone 等 hook 后处理，故结束时间
+    ///   不含 hook 耗时；重复写 3（幂等竞态）不会覆盖首次记录。
+    /// - `status ∈ {0, 1, 5}`（重新排队/下载/准备）→ 清空，重下后重新记录。
+    /// - 其余状态（暂停/错误）保持不变。
     pub async fn update_task_status(
         &self,
         id: &str,
         status: i32,
         error_message: &str,
     ) -> Result<(), DbError> {
-        sqlx::query("UPDATE tasks SET status = $1, error_message = $2 WHERE id = $3")
-            .bind(status)
-            .bind(error_message)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE tasks SET status = $1, error_message = $2,
+                 completed_at = CASE
+                     WHEN $1 = 3 AND completed_at = '' THEN $3
+                     WHEN $1 IN (0, 1, 5) THEN ''
+                     ELSE completed_at
+                 END
+             WHERE id = $4",
+        )
+        .bind(status)
+        .bind(error_message)
+        .bind(chrono_now())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -2481,6 +2502,60 @@ mod tests {
             task.downloaded_bytes, 1000,
             "陈旧的较小进度写入不得覆盖已落库的较大值"
         );
+
+        close_test_db(&db, dir).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // update_task_status: completed_at 维护
+    // -----------------------------------------------------------------------
+
+    /// completed_at 生命周期契约：
+    /// - status→3 首次写入时间戳；重复写 3 不覆盖首次记录（幂等竞态）；
+    /// - 暂停/错误（2/4）保持不变；
+    /// - 重新下载（0/1/5）清空，供重下后重新记录。
+    #[tokio::test]
+    async fn update_task_status_maintains_completed_at() {
+        let (db, dir) = open_test_db().await;
+        insert_task_with_size(&db, "c1", 1000).await;
+
+        let load = |db: Db| async move {
+            db.load_task_by_id("c1")
+                .await
+                .expect("load")
+                .expect("task exists")
+        };
+
+        // 初始为空。
+        assert_eq!(load(db.clone()).await.completed_at, "");
+
+        // 下载中不记录。
+        db.update_task_status("c1", 1, "").await.expect("status 1");
+        assert_eq!(load(db.clone()).await.completed_at, "");
+
+        // 完成 → 记录当前 Unix 秒。
+        db.update_task_status("c1", 3, "").await.expect("status 3");
+        let first = load(db.clone()).await.completed_at;
+        assert!(
+            first.parse::<u64>().is_ok_and(|v| v > 0),
+            "完成时必须记录非空 Unix 秒时间戳，got {first:?}"
+        );
+
+        // 重复写 3（幂等竞态）不覆盖首次记录。
+        db.update_task_status("c1", 3, "")
+            .await
+            .expect("status 3 again");
+        assert_eq!(load(db.clone()).await.completed_at, first);
+
+        // 错误态保持不变。
+        db.update_task_status("c1", 4, "boom")
+            .await
+            .expect("status 4");
+        assert_eq!(load(db.clone()).await.completed_at, first);
+
+        // 重新下载 → 清空。
+        db.update_task_status("c1", 1, "").await.expect("restart");
+        assert_eq!(load(db.clone()).await.completed_at, "");
 
         close_test_db(&db, dir).await;
     }

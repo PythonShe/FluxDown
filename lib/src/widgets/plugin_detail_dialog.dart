@@ -24,6 +24,7 @@ void showPluginDetailDialog(
   String publishTime = '',
   String minAppVersion = '',
   int settingsCount = 0,
+  List<String> permissions = const [],
   String? yankedLabel,
 }) {
   showShadDialog(
@@ -131,6 +132,12 @@ void showPluginDetailDialog(
                     ],
                   ),
                 ],
+                if (permissions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  _SectionTitle(text: s.pluginDetailPermissions),
+                  const SizedBox(height: 4),
+                  for (final perm in permissions) _PermissionRow(perm: perm),
+                ],
                 if (description.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   _SectionTitle(text: s.pluginDetailDescription),
@@ -162,6 +169,63 @@ void showPluginDetailDialog(
       );
     },
   );
+}
+
+/// 单条权限行：盾徽 + 权限名 + 说明。权限 → 展示文案在此闭合映射，
+/// 新增能力权限时补一臂即可（未知权限降级展示原始名，向前兼容旧客户端
+/// 看新插件的场景）。
+class _PermissionRow extends StatelessWidget {
+  final String perm;
+
+  const _PermissionRow({required this.perm});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = currentS;
+    final c = AppColors.of(context);
+    final (name, desc) = switch (perm) {
+      'ffmpeg' => (s.pluginPermFfmpegName, s.pluginPermFfmpegDesc),
+      'ytdlp' => (s.pluginPermYtdlpName, s.pluginPermYtdlpDesc),
+      _ => (perm, s.pluginPermUnknownDesc),
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(LucideIcons.shieldCheck, size: 13, color: c.accent),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: name,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: c.textPrimary,
+                    ),
+                  ),
+                  TextSpan(
+                    text: ' — $desc',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.5,
+                      color: c.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _SectionTitle extends StatelessWidget {

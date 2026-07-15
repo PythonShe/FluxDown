@@ -119,6 +119,7 @@ async fn run_on_done(
     let host = HostContext {
         ffmpeg_permitted: true,
         ffmpeg_root: Some(jail.to_path_buf()),
+        ..Default::default()
     };
     // invoke_hook 为 fire-and-forget（吞错仅记日志）：await 完成后由产物断言判定成败。
     rt.invoke_hook(

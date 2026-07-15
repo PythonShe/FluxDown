@@ -213,6 +213,9 @@ class S {
   String get infoSpeed => _r('infoSpeed');
   String get infoRemaining => _r('infoRemaining');
   String get infoStatus => _r('infoStatus');
+  String get infoStartedAt => _r('infoStartedAt');
+  String get infoCompletedAt => _r('infoCompletedAt');
+  String get infoDuration => _r('infoDuration');
   String infoThreads(int n) => _r('infoThreads', {'n': n});
   String get infoPath => _r('infoPath');
   String get infoError => _r('infoError');
@@ -1028,6 +1031,11 @@ class S {
       _r('pluginOpEnabledFailed', {'message': message});
   String pluginOpGenericFailed(String message) =>
       _r('pluginOpGenericFailed', {'message': message});
+  String get pluginDepsMissingTitle => _r('pluginDepsMissingTitle');
+  String pluginDepsMissingBody(String components) =>
+      _r('pluginDepsMissingBody', {'components': components});
+  String get pluginDepsGoToComponents => _r('pluginDepsGoToComponents');
+  String get pluginDepsLater => _r('pluginDepsLater');
 
   // ─────────────────────────────────────────────
   // 插件系统 — 去中心化市场
@@ -1054,6 +1062,12 @@ class S {
       _r('pluginDetailSettingsCount', {'count': '$count'});
   String get pluginDetailHomepage => _r('pluginDetailHomepage');
   String get pluginDetailDescription => _r('pluginDetailDescription');
+  String get pluginDetailPermissions => _r('pluginDetailPermissions');
+  String get pluginPermFfmpegName => _r('pluginPermFfmpegName');
+  String get pluginPermFfmpegDesc => _r('pluginPermFfmpegDesc');
+  String get pluginPermYtdlpName => _r('pluginPermYtdlpName');
+  String get pluginPermYtdlpDesc => _r('pluginPermYtdlpDesc');
+  String get pluginPermUnknownDesc => _r('pluginPermUnknownDesc');
   String get pluginDetailUsage => _r('pluginDetailUsage');
   String get pluginDetailUsageBody => _r('pluginDetailUsageBody');
   String get marketYankedVulnerable => _r('marketYankedVulnerable');
@@ -1096,12 +1110,15 @@ class S {
 
   String get componentsFfmpegTitle => _r('componentsFfmpegTitle');
   String get componentsFfmpegDesc => _r('componentsFfmpegDesc');
+  String get componentsYtdlpTitle => _r('componentsYtdlpTitle');
+  String get componentsYtdlpDesc => _r('componentsYtdlpDesc');
   String get componentsStatusLoading => _r('componentsStatusLoading');
-  String get componentsStatusNotFound => _r('componentsStatusNotFound');
-  String get componentsStatusNotFoundUnsupported =>
-      _r('componentsStatusNotFoundUnsupported');
-  String get componentsManagedUnsupported =>
-      _r('componentsManagedUnsupported');
+  String componentsStatusNotFound(String name) =>
+      _r('componentsStatusNotFound', {'name': name});
+  String componentsStatusNotFoundUnsupported(String name) =>
+      _r('componentsStatusNotFoundUnsupported', {'name': name});
+  String componentsManagedUnsupported(String name) =>
+      _r('componentsManagedUnsupported', {'name': name});
   String get componentsSourceManual => _r('componentsSourceManual');
   String get componentsSourceManaged => _r('componentsSourceManaged');
   String get componentsSourceSystem => _r('componentsSourceSystem');
@@ -1110,15 +1127,21 @@ class S {
       _r('componentsSystemPathNotFound');
 
   String get componentsManualPathLabel => _r('componentsManualPathLabel');
-  String get componentsManualPathDesc => _r('componentsManualPathDesc');
-  String get componentsManualPathHint => _r('componentsManualPathHint');
+  String componentsManualPathDesc(String name) =>
+      _r('componentsManualPathDesc', {'name': name});
+  String get componentsManualPathHintFfmpeg =>
+      _r('componentsManualPathHintFfmpeg');
+  String get componentsManualPathHintYtdlp =>
+      _r('componentsManualPathHintYtdlp');
   String get componentsManualPathSave => _r('componentsManualPathSave');
   String get componentsManualPathClear => _r('componentsManualPathClear');
 
   String get componentsInstallSectionTitle =>
       _r('componentsInstallSectionTitle');
-  String get componentsInstallSectionDesc =>
-      _r('componentsInstallSectionDesc');
+  String get componentsInstallSectionDescFfmpeg =>
+      _r('componentsInstallSectionDescFfmpeg');
+  String get componentsInstallSectionDescYtdlp =>
+      _r('componentsInstallSectionDescYtdlp');
   String get componentsFetchVersionsButton =>
       _r('componentsFetchVersionsButton');
   String get componentsVersionsLoading => _r('componentsVersionsLoading');
@@ -1134,14 +1157,16 @@ class S {
   String get componentsInstalling => _r('componentsInstalling');
   String get componentsInstallUnknownSize =>
       _r('componentsInstallUnknownSize');
-  String get componentsInstallSuccess => _r('componentsInstallSuccess');
+  String componentsInstallSuccess(String name) =>
+      _r('componentsInstallSuccess', {'name': name});
   String componentsInstallFailed(String message) =>
       _r('componentsInstallFailed', {'message': message});
-  String get componentsUninstallSuccess => _r('componentsUninstallSuccess');
+  String componentsUninstallSuccess(String name) =>
+      _r('componentsUninstallSuccess', {'name': name});
   String componentsUninstallFailed(String message) =>
       _r('componentsUninstallFailed', {'message': message});
-  String get componentsUninstallConfirmTitle =>
-      _r('componentsUninstallConfirmTitle');
-  String get componentsUninstallConfirmMsg =>
-      _r('componentsUninstallConfirmMsg');
+  String componentsUninstallConfirmTitle(String name) =>
+      _r('componentsUninstallConfirmTitle', {'name': name});
+  String componentsUninstallConfirmMsg(String name) =>
+      _r('componentsUninstallConfirmMsg', {'name': name});
 }

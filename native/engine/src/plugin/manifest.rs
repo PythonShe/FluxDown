@@ -173,8 +173,10 @@ pub const VALID_EVENTS: [&str; 4] = ["onStart", "onError", "onDone", "onMetaProb
 
 /// ffmpeg 能力权限名（manifest `permissions`）。
 pub const PERMISSION_FFMPEG: &str = "ffmpeg";
+/// yt-dlp 能力权限名（manifest `permissions`）。
+pub const PERMISSION_YTDLP: &str = "ytdlp";
 /// 合法能力权限（manifest `permissions`）。
-pub const VALID_PERMISSIONS: [&str; 1] = [PERMISSION_FFMPEG];
+pub const VALID_PERMISSIONS: [&str; 2] = [PERMISSION_FFMPEG, PERMISSION_YTDLP];
 
 impl PluginManifest {
     /// 从 JSON 字节解析（不校验语义，仅结构）。

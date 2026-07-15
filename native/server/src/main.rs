@@ -211,6 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_cfg.demo_url.clone(),
         server_cfg.language.clone(),
         plugin_manager,
+        engine_data_dir.clone(),
     ));
     if let Some(url) = &server_cfg.demo_url {
         log_info!("[server] demo mode enabled, allowed url: {}", url);
@@ -226,6 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         demo_url: server_cfg.demo_url.clone(),
         data_dir: engine_data_dir,
         ffmpeg_installing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ytdlp_installing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     let spa = ServeDir::new(&server_cfg.webroot)
         .fallback(ServeFile::new(server_cfg.webroot.join("index.html")));

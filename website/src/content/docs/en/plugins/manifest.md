@@ -20,7 +20,7 @@ order: 3
 | `minAppVersion` | no | string | Three-part version. If the running FluxDown is older, the plugin is skipped at load (logged, not an error). |
 | `resolvers` | no | array | **At most one entry** in v1. See below. |
 | `hooks` | no | object | See below. |
-| `permissions` | no | array | Capability grants. v1 accepts only `"ffmpeg"`. Unknown values are rejected. |
+| `permissions` | no | array | Capability grants. v1 accepts `"ffmpeg"` and `"ytdlp"`. Unknown values are rejected. |
 | `settings` | no | array | Declarative settings fields. See below. |
 
 A plugin may declare a resolver, hooks, or both. A manifest with neither is valid but does nothing.
@@ -68,14 +68,15 @@ Caveat: if the same plugin also declares a resolver, `onMetaProbed` never fires 
 
 ## `permissions`
 
-Extra host capabilities a plugin opts into. Empty or omitted = the base sandbox (network via `flux.fetch`, `flux.storage`, logging). v1 recognises a single value:
+Extra host capabilities a plugin opts into. Empty or omitted = the base sandbox (network via `flux.fetch`, `flux.storage`, logging). v1 recognises two values:
 
 | Value | Grants |
 |---|---|
 | `ffmpeg` | The `flux.ffmpeg` API — run the resolved ffmpeg on a finished file (see the [API reference](/docs/en/plugins/api-reference/)). |
+| `ytdlp` | The `flux.ytdlp` API — run the resolved yt-dlp from `resolve` or any hook (see the [API reference](/docs/en/plugins/api-reference/)). |
 
 ```json
-{ "permissions": ["ffmpeg"] }
+{ "permissions": ["ffmpeg", "ytdlp"] }
 ```
 
 Unknown values fail the whole manifest, so an older FluxDown that doesn't know a permission rejects the plugin rather than silently ignoring it — pair a new permission with a `minAppVersion` bump.

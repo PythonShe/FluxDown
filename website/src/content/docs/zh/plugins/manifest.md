@@ -3,7 +3,7 @@ title: Manifest 参考
 description: manifest.json 全部字段、设置项 widget 矩阵、URL pattern 规则。
 section: plugins
 order: 3
-sourceHash: "7aecb3d3de79"
+sourceHash: "a54c005928f3"
 ---
 
 `manifest.json` 放在插件文件夹根部。所有键名用 camelCase。**未知键会被拒绝**——写错字段名会让整份 manifest 校验失败，而不是被静默忽略。
@@ -21,7 +21,7 @@ sourceHash: "7aecb3d3de79"
 | `minAppVersion` | 否 | string | 三段版本号。运行中的 FluxDown 比它旧时，插件在加载阶段被跳过（记日志，不算错误）。 |
 | `resolvers` | 否 | array | v1 **至多一个**。见下。 |
 | `hooks` | 否 | object | 见下。 |
-| `permissions` | 否 | array | 能力授权。v1 仅接受 `"ffmpeg"`，未知值一律拒绝。 |
+| `permissions` | 否 | array | 能力授权。v1 接受 `"ffmpeg"` 与 `"ytdlp"`，未知值一律拒绝。 |
 | `settings` | 否 | array | 声明式设置项。见下。 |
 
 插件可以只声明 resolver、只声明 hooks，或两者都有。两者都没有的 manifest 合法，只是什么也不做。
@@ -68,14 +68,15 @@ sourceHash: "7aecb3d3de79"
 
 ## `permissions`
 
-插件主动申请的额外宿主能力。为空或省略 = 基础沙箱（`flux.fetch` 网络、`flux.storage`、日志）。v1 只识别一个值：
+插件主动申请的额外宿主能力。为空或省略 = 基础沙箱（`flux.fetch` 网络、`flux.storage`、日志）。v1 识别两个值：
 
 | 值 | 授予 |
 |---|---|
 | `ffmpeg` | `flux.ffmpeg` 接口——对下载完成的文件运行解析到的 ffmpeg（见 [API 参考](/docs/zh/plugins/api-reference/)）。 |
+| `ytdlp` | `flux.ytdlp` 接口——在 `resolve` 或任意 hook 里运行解析到的 yt-dlp（见 [API 参考](/docs/zh/plugins/api-reference/)）。 |
 
 ```json
-{ "permissions": ["ffmpeg"] }
+{ "permissions": ["ffmpeg", "ytdlp"] }
 ```
 
 未知值会让整份 manifest 失败——这样不认识某权限的旧版 FluxDown 会拒绝该插件，而不是悄悄忽略；新增权限时请一并抬高 `minAppVersion`。

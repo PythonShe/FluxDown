@@ -24,7 +24,10 @@ use axum::routing::{get, post, put};
 use fluxdown_api::auth::{check_management_auth, constant_time_eq};
 use fluxdown_api::service::ApiError;
 use fluxdown_api::types::{QueueDto, TaskDto};
-use fluxdown_engine::components::{ffmpeg_status, install_ffmpeg, list_versions, uninstall_ffmpeg};
+use fluxdown_engine::components::{
+    ffmpeg_status, install_ffmpeg, install_ytdlp, list_versions, list_ytdlp_versions,
+    uninstall_ffmpeg, uninstall_ytdlp, ytdlp_status,
+};
 use fluxdown_engine::db::Db;
 use fluxdown_engine::downloader::build_client;
 use fluxdown_engine::log_info;
@@ -38,9 +41,9 @@ use utoipa::OpenApi;
 use crate::actor::ActorCmd;
 use crate::config::default_save_dir;
 use crate::wire::{
-    ComponentFfmpegStatus, ComponentVersions, CreateQueueRequest, FsEntry, FsListResponse,
-    InstallFfmpegRequest, MoveQueueRequest, ProxyTestRequest, ProxyTestResponse, StatsResponse,
-    TokenResponse, UpdateQueueRequest, WsClientMsg, WsServerMsg,
+    ComponentFfmpegStatus, ComponentVersions, ComponentYtdlpStatus, CreateQueueRequest, FsEntry,
+    FsListResponse, InstallFfmpegRequest, MoveQueueRequest, ProxyTestRequest, ProxyTestResponse,
+    StatsResponse, TokenResponse, UpdateQueueRequest, WsClientMsg, WsServerMsg,
 };
 use crate::ws_hub::WsHub;
 
@@ -61,6 +64,8 @@ pub struct ServerState {
     pub data_dir: PathBuf,
     /// ffmpeg 托管安装互斥标志：安装/更新期间为 `true`，防止并发重复安装。
     pub ffmpeg_installing: Arc<AtomicBool>,
+    /// yt-dlp 托管安装互斥标志：安装/更新期间为 `true`，防止并发重复安装。
+    pub ytdlp_installing: Arc<AtomicBool>,
 }
 
 impl ServerState {
@@ -108,9 +113,31 @@ pub fn extra_router(state: ServerState) -> Router {
         .route(paths::TOKEN_REGENERATE, post(token_regenerate))
         .route(paths::STATS, get(stats))
         .route(paths::COMPONENT_FFMPEG, get(component_ffmpeg_status))
-        .route(paths::COMPONENT_FFMPEG_VERSIONS, get(component_ffmpeg_versions))
-        .route(paths::COMPONENT_FFMPEG_INSTALL, post(component_ffmpeg_install))
-        .route(paths::COMPONENT_FFMPEG_UNINSTALL, post(component_ffmpeg_uninstall))
+        .route(
+            paths::COMPONENT_FFMPEG_VERSIONS,
+            get(component_ffmpeg_versions),
+        )
+        .route(
+            paths::COMPONENT_FFMPEG_INSTALL,
+            post(component_ffmpeg_install),
+        )
+        .route(
+            paths::COMPONENT_FFMPEG_UNINSTALL,
+            post(component_ffmpeg_uninstall),
+        )
+        .route(paths::COMPONENT_YTDLP, get(component_ytdlp_status))
+        .route(
+            paths::COMPONENT_YTDLP_VERSIONS,
+            get(component_ytdlp_versions),
+        )
+        .route(
+            paths::COMPONENT_YTDLP_INSTALL,
+            post(component_ytdlp_install),
+        )
+        .route(
+            paths::COMPONENT_YTDLP_UNINSTALL,
+            post(component_ytdlp_uninstall),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     let open = Router::new()
@@ -139,6 +166,10 @@ pub mod paths {
     pub const COMPONENT_FFMPEG_VERSIONS: &str = "/api/v1/components/ffmpeg/versions";
     pub const COMPONENT_FFMPEG_INSTALL: &str = "/api/v1/components/ffmpeg/install";
     pub const COMPONENT_FFMPEG_UNINSTALL: &str = "/api/v1/components/ffmpeg/uninstall";
+    pub const COMPONENT_YTDLP: &str = "/api/v1/components/ytdlp";
+    pub const COMPONENT_YTDLP_VERSIONS: &str = "/api/v1/components/ytdlp/versions";
+    pub const COMPONENT_YTDLP_INSTALL: &str = "/api/v1/components/ytdlp/install";
+    pub const COMPONENT_YTDLP_UNINSTALL: &str = "/api/v1/components/ytdlp/uninstall";
     pub const OPENAPI: &str = "/api/v1/openapi.json";
     pub const DOCS: &str = "/api/v1/docs";
 }
@@ -762,6 +793,114 @@ async fn component_ffmpeg_uninstall(
 }
 
 // ---------------------------------------------------------------------------
+// 组件（yt-dlp）—— 不走 actor，直接持 Db + data_dir 调引擎 components API。
+// ---------------------------------------------------------------------------
+
+/// yt-dlp 组件状态探测（生效路径来源 / 版本 / 托管版本 / 系统路径）。
+#[utoipa::path(get, path = "/api/v1/components/ytdlp", tag = "server",
+    responses((status = 200, body = ComponentYtdlpStatus)),
+    security(("bearer_token" = []), ("api_key" = []))
+)]
+async fn component_ytdlp_status(State(state): State<ServerState>) -> Result<Response, ApiError> {
+    let status = ytdlp_status(&state.db, &state.data_dir).await;
+    Ok(axum::Json(ComponentYtdlpStatus::from(status)).into_response())
+}
+
+/// 列出当前平台可安装的 yt-dlp 稳定版本（降序；数据来自 yt-dlp/yt-dlp latest Release）。
+#[utoipa::path(get, path = "/api/v1/components/ytdlp/versions", tag = "server",
+    responses(
+        (status = 200, body = ComponentVersions),
+        (status = 500, description = "拉取版本列表失败（网络错误或当前平台无托管构建）")
+    ),
+    security(("bearer_token" = []), ("api_key" = []))
+)]
+async fn component_ytdlp_versions(State(_state): State<ServerState>) -> Result<Response, ApiError> {
+    let client =
+        build_client(&ProxyConfig::default(), "").map_err(|e| ApiError::Internal(e.to_string()))?;
+    let versions = list_ytdlp_versions(&client)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(axum::Json(ComponentVersions::from(versions)).into_response())
+}
+
+/// 安装/更新托管 yt-dlp：立即返回 202，实际下载在后台执行——进度经 WS
+/// `componentProgress` 推送，完成/失败经 `componentResult` 推送。安装期间
+/// 重复请求返回 400（`ytdlp_installing` 互斥标志去重）。
+#[utoipa::path(post, path = "/api/v1/components/ytdlp/install", tag = "server",
+    request_body = InstallFfmpegRequest,
+    responses(
+        (status = 202, description = "已开始安装，经 WS 推送进度/结果"),
+        (status = 400, description = "已有安装任务在进行中")
+    ),
+    security(("bearer_token" = []), ("api_key" = []))
+)]
+async fn component_ytdlp_install(
+    State(state): State<ServerState>,
+    axum::Json(req): axum::Json<InstallFfmpegRequest>,
+) -> Result<Response, ApiError> {
+    if state.ytdlp_installing.swap(true, Ordering::SeqCst) {
+        return Err(ApiError::BadRequest(
+            "ytdlp install already in progress".to_string(),
+        ));
+    }
+    let db = state.db.clone();
+    let data_dir = state.data_dir.clone();
+    let hub = state.hub.clone();
+    let flag = state.ytdlp_installing.clone();
+    tokio::spawn(async move {
+        let outcome: Result<(), String> = async {
+            let client = build_client(&ProxyConfig::default(), "").map_err(|e| e.to_string())?;
+            let hub_progress = hub.clone();
+            let progress = move |downloaded: u64, total: u64| {
+                hub_progress.broadcast(&WsServerMsg::ComponentProgress {
+                    component: "ytdlp".to_string(),
+                    downloaded_bytes: downloaded as i64,
+                    total_bytes: total as i64,
+                });
+            };
+            install_ytdlp(&db, &data_dir, &client, req.version.as_deref(), &progress)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+        .await;
+        match outcome {
+            Ok(()) => hub.broadcast(&WsServerMsg::ComponentResult {
+                component: "ytdlp".to_string(),
+                ok: true,
+                message: "installed".to_string(),
+            }),
+            Err(message) => {
+                log_info!("[components] ytdlp install failed: {}", message);
+                hub.broadcast(&WsServerMsg::ComponentResult {
+                    component: "ytdlp".to_string(),
+                    ok: false,
+                    message,
+                });
+            }
+        }
+        flag.store(false, Ordering::SeqCst);
+    });
+    Ok((
+        StatusCode::ACCEPTED,
+        axum::Json(serde_json::json!({ "success": true, "message": "installing" })),
+    )
+        .into_response())
+}
+
+/// 卸载托管安装（删除数据目录 `bin/yt-dlp[.exe]` 与版本记录；手动/系统路径不受影响）。
+#[utoipa::path(post, path = "/api/v1/components/ytdlp/uninstall", tag = "server",
+    responses((status = 200, description = "已卸载")),
+    security(("bearer_token" = []), ("api_key" = []))
+)]
+async fn component_ytdlp_uninstall(State(state): State<ServerState>) -> Result<Response, ApiError> {
+    uninstall_ytdlp(&state.db, &state.data_dir)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(ok_response())
+}
+
+// ---------------------------------------------------------------------------
 // OpenAPI（核心 + 扩展合并）与 Scalar 文档
 // ---------------------------------------------------------------------------
 
@@ -792,6 +931,10 @@ async fn component_ffmpeg_uninstall(
         component_ffmpeg_versions,
         component_ffmpeg_install,
         component_ffmpeg_uninstall,
+        component_ytdlp_status,
+        component_ytdlp_versions,
+        component_ytdlp_install,
+        component_ytdlp_uninstall,
     ),
     components(schemas(
         crate::wire::WsServerMsg,
@@ -809,6 +952,7 @@ async fn component_ffmpeg_uninstall(
         crate::wire::StatsResponse,
         crate::wire::TokenResponse,
         crate::wire::ComponentFfmpegStatus,
+        crate::wire::ComponentYtdlpStatus,
         crate::wire::ComponentVersions,
         crate::wire::InstallFfmpegRequest,
     )),

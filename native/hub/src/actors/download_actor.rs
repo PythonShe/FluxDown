@@ -6,10 +6,10 @@ use fluxdown_engine::bt_downloader::BtConfig;
 use fluxdown_engine::db::Db;
 use fluxdown_engine::download_manager::{self, TaskDone};
 use fluxdown_engine::events::EventSink;
+use fluxdown_engine::plugin::{PluginError, PluginManager};
 use fluxdown_engine::proxy_config::ProxyConfig;
 use fluxdown_engine::selection::HostSelection;
 use fluxdown_engine::{Engine, EngineConfig};
-use fluxdown_engine::plugin::{PluginError, PluginManager};
 use rinf::{DartSignal, RustSignal};
 use tokio::sync::{broadcast, mpsc};
 
@@ -26,15 +26,17 @@ use crate::signals::{
     DeleteQueue, DetectSystemProxy, DownloadUpdate, Ed2kServerSubscriptionResult,
     ExternalDownloadRequest, FfmpegInstallProgress, FfmpegInstallResult, FfmpegStatusReport,
     FfmpegVersionList, FileAssociationStatus, IgnorePluginRetry, InstallFfmpeg,
-    InstallMarketPlugin, InstallPlugin, InstallUpdate, MarketEntrySignal, MarketIndexLoaded,
-    MoveTaskToQueue, OpenFile, PluginList, PluginOpResult, ProbeTorrentMeta, ProxyTestResult,
-    RequestAllQueues, RequestAllTasks, RequestConfig, RequestFfmpegStatus,
+    InstallMarketPlugin, InstallPlugin, InstallUpdate, InstallYtdlp, MarketEntrySignal,
+    MarketIndexLoaded, MoveTaskToQueue, OpenFile, PluginList, PluginOpResult, ProbeTorrentMeta,
+    ProxyTestResult, RequestAllQueues, RequestAllTasks, RequestConfig, RequestFfmpegStatus,
     RequestFfmpegVersions, RequestMarketIndex, RequestPlugins, RequestUpdateFailureMarker,
-    RescanFiles, RevealFile, SaveConfig, SavePluginSettings, SelectBtFiles, SelectHlsQuality,
-    SetFileAssociation, SetPluginEnabled, SetPriorityTask, SetUrlProtocol, SystemProxyInfo,
-    TestProxyConnection, TrackerSubscriptionResult, UninstallFfmpeg, UninstallPlugin,
-    UpdateCheckResult, UpdateEd2kServerSubscription, UpdateFailureMarker, UpdateQueue,
-    UpdateTrackerSubscription, UrlProtocolStatus,
+    RequestYtdlpStatus, RequestYtdlpVersions, RescanFiles, RevealFile, SaveConfig,
+    SavePluginSettings, SelectBtFiles, SelectHlsQuality, SetFileAssociation, SetPluginEnabled,
+    SetPriorityTask, SetUrlProtocol, SystemProxyInfo, TestProxyConnection,
+    TrackerSubscriptionResult, UninstallFfmpeg, UninstallPlugin, UninstallYtdlp, UpdateCheckResult,
+    UpdateEd2kServerSubscription, UpdateFailureMarker, UpdateQueue, UpdateTrackerSubscription,
+    UrlProtocolStatus, YtdlpInstallProgress, YtdlpInstallResult, YtdlpStatusReport,
+    YtdlpVersionList,
 };
 use crate::updater;
 use fluxdown_api::server::{ApiServerConfig, ApiServerHandle, spawn_api_server};
@@ -440,15 +442,14 @@ pub async fn run(db_dir: PathBuf) {
     // `on_resolve_ready`；onError 重试意图经 `plugin_retry_rx` 回流调用
     // `plugin_request_retry`。不接线会导致该宿主下 off-actor resolve 永不
     // 完成（下载卡死）。
-    let mut resolve_rx: mpsc::UnboundedReceiver<
-        fluxdown_engine::download_manager::ResolveOutcome,
-    > = match engine.manager.take_resolve_rx() {
-        Some(rx) => rx,
-        None => {
-            let (_tx, rx) = mpsc::unbounded_channel();
-            rx
-        }
-    };
+    let mut resolve_rx: mpsc::UnboundedReceiver<fluxdown_engine::download_manager::ResolveOutcome> =
+        match engine.manager.take_resolve_rx() {
+            Some(rx) => rx,
+            None => {
+                let (_tx, rx) = mpsc::unbounded_channel();
+                rx
+            }
+        };
     let mut plugin_retry_rx: mpsc::UnboundedReceiver<(String, u64)> =
         match engine.manager.take_plugin_retry_rx() {
             Some(rx) => rx,
@@ -501,6 +502,10 @@ pub async fn run(db_dir: PathBuf) {
     let req_ffmpeg_versions_recv = RequestFfmpegVersions::get_dart_signal_receiver();
     let install_ffmpeg_recv = InstallFfmpeg::get_dart_signal_receiver();
     let uninstall_ffmpeg_recv = UninstallFfmpeg::get_dart_signal_receiver();
+    let req_ytdlp_status_recv = RequestYtdlpStatus::get_dart_signal_receiver();
+    let req_ytdlp_versions_recv = RequestYtdlpVersions::get_dart_signal_receiver();
+    let install_ytdlp_recv = InstallYtdlp::get_dart_signal_receiver();
+    let uninstall_ytdlp_recv = UninstallYtdlp::get_dart_signal_receiver();
 
     // Tracker 订阅刷新通道：后台 fetch 任务完成后把结果送回 actor 循环，
     // 由循环更新 BtConfig、失效 BT 会话并通知 Dart。
@@ -628,6 +633,7 @@ pub async fn run(db_dir: PathBuf) {
         live_speeds,
         task_events_tx,
         plugin_manager.clone(),
+        engine.data_dir.clone(),
     ));
 
     // Native Messaging listener (reads from the Named Pipe / Unix socket).
@@ -1292,8 +1298,11 @@ pub async fn run(db_dir: PathBuf) {
                         ))
                     };
                     match result {
-                        Ok(identity) => finish_plugin_op(&pm, "install", &identity, Ok(())).await,
-                        Err(e) => finish_plugin_op(&pm, "install", "", Err(e)).await,
+                        Ok(identity) => {
+                            let missing = plugin_missing_components(&pm, &engine.db, &engine.data_dir, &identity).await;
+                            finish_plugin_op(&pm, "install", &identity, Ok(()), missing).await;
+                        }
+                        Err(e) => finish_plugin_op(&pm, "install", "", Err(e), Vec::new()).await,
                     }
                 } else {
                     notify_plugin_manager_unavailable("install", "").await;
@@ -1303,7 +1312,7 @@ pub async fn run(db_dir: PathBuf) {
                 let msg = signal.message;
                 if let Some(pm) = engine.manager.plugin_manager() {
                     let result = pm.uninstall(&msg.identity).await;
-                    finish_plugin_op(&pm, "uninstall", &msg.identity, result).await;
+                    finish_plugin_op(&pm, "uninstall", &msg.identity, result, Vec::new()).await;
                 } else {
                     notify_plugin_manager_unavailable("uninstall", &msg.identity).await;
                 }
@@ -1312,7 +1321,7 @@ pub async fn run(db_dir: PathBuf) {
                 let msg = signal.message;
                 if let Some(pm) = engine.manager.plugin_manager() {
                     let result = pm.set_enabled(&msg.identity, msg.enabled).await;
-                    finish_plugin_op(&pm, "set_enabled", &msg.identity, result).await;
+                    finish_plugin_op(&pm, "set_enabled", &msg.identity, result, Vec::new()).await;
                 } else {
                     notify_plugin_manager_unavailable("set_enabled", &msg.identity).await;
                 }
@@ -1326,7 +1335,7 @@ pub async fn run(db_dir: PathBuf) {
                         .map(|e| (e.key, e.value))
                         .collect();
                     let result = pm.update_settings(&msg.identity, &entries).await;
-                    finish_plugin_op(&pm, "save_settings", &msg.identity, result).await;
+                    finish_plugin_op(&pm, "save_settings", &msg.identity, result, Vec::new()).await;
                 } else {
                     notify_plugin_manager_unavailable("save_settings", &msg.identity).await;
                 }
@@ -1388,6 +1397,8 @@ pub async fn run(db_dir: PathBuf) {
                 match engine.manager.market_client().await {
                     Some(client) => {
                         let plugin_manager = engine.manager.plugin_manager();
+                        let db = engine.db.clone();
+                        let data_dir = engine.data_dir.clone();
                         tokio::spawn(async move {
                             let result = client.install_latest(&plugin_id).await;
                             // identity 字段回填 plugin_id 供失败时 Dart 按市场条目
@@ -1397,12 +1408,20 @@ pub async fn run(db_dir: PathBuf) {
                                 Ok(identity) => (true, identity, String::new()),
                                 Err(e) => (false, plugin_id.clone(), e.to_string()),
                             };
+                            // 安装成功后按声明权限探测缺失的基础组件（提醒式）。
+                            let missing = match plugin_manager.as_ref() {
+                                Some(pm) if ok => {
+                                    plugin_missing_components(pm, &db, &data_dir, &identity).await
+                                }
+                                _ => Vec::new(),
+                            };
                             PluginOpResult {
                                 op: "market_install".to_string(),
                                 identity,
                                 ok,
                                 message,
                                 failed_key: String::new(),
+                                missing_components: missing,
                             }
                             .send_signal_to_dart();
                             match plugin_manager {
@@ -1535,6 +1554,118 @@ pub async fn run(db_dir: PathBuf) {
                     fluxdown_engine::components::ffmpeg_status(&engine.db, &engine.data_dir).await;
                 ffmpeg_status_report(status).send_signal_to_dart();
             }
+            // --- yt-dlp 组件管理：与 ffmpeg 同构（状态本地探测直 await；版本
+            // 列表/安装是网络 I/O，丢 off-actor tokio::spawn，完成后从任务内
+            // send_signal_to_dart）。---
+            Some(_) = req_ytdlp_status_recv.recv() => {
+                let status =
+                    fluxdown_engine::components::ytdlp_status(&engine.db, &engine.data_dir).await;
+                ytdlp_status_report(status).send_signal_to_dart();
+            }
+            Some(_) = req_ytdlp_versions_recv.recv() => {
+                let all_cfg = engine.db.get_all_config().await.unwrap_or_default();
+                let proxy_cfg = ProxyConfig::from_config_map(&all_cfg);
+                match fluxdown_engine::downloader::build_client(&proxy_cfg, "") {
+                    Ok(client) => {
+                        tokio::spawn(async move {
+                            match fluxdown_engine::components::list_ytdlp_versions(&client).await {
+                                Ok(v) => {
+                                    YtdlpVersionList {
+                                        ok: true,
+                                        message: String::new(),
+                                        versions: v.versions,
+                                        latest_stable: v.latest_stable,
+                                    }
+                                    .send_signal_to_dart();
+                                }
+                                Err(e) => {
+                                    YtdlpVersionList {
+                                        ok: false,
+                                        message: e.to_string(),
+                                        versions: Vec::new(),
+                                        latest_stable: String::new(),
+                                    }
+                                    .send_signal_to_dart();
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        YtdlpVersionList {
+                            ok: false,
+                            message: e.to_string(),
+                            versions: Vec::new(),
+                            latest_stable: String::new(),
+                        }
+                        .send_signal_to_dart();
+                    }
+                }
+            }
+            Some(signal) = install_ytdlp_recv.recv() => {
+                let version = signal.message.version;
+                let all_cfg = engine.db.get_all_config().await.unwrap_or_default();
+                let proxy_cfg = ProxyConfig::from_config_map(&all_cfg);
+                match fluxdown_engine::downloader::build_client(&proxy_cfg, "") {
+                    Ok(client) => {
+                        let db = engine.db.clone();
+                        let data_dir = engine.data_dir.clone();
+                        tokio::spawn(async move {
+                            let version_opt =
+                                if version.is_empty() { None } else { Some(version.as_str()) };
+                            let progress = |downloaded: u64, total: u64| {
+                                YtdlpInstallProgress {
+                                    downloaded_bytes: i64::try_from(downloaded).unwrap_or(i64::MAX),
+                                    total_bytes: i64::try_from(total).unwrap_or(i64::MAX),
+                                }
+                                .send_signal_to_dart();
+                            };
+                            let result = fluxdown_engine::components::install_ytdlp(
+                                &db,
+                                &data_dir,
+                                &client,
+                                version_opt,
+                                &progress,
+                            )
+                            .await;
+                            match result {
+                                Ok(_) => {
+                                    YtdlpInstallResult { ok: true, message: String::new() }
+                                        .send_signal_to_dart();
+                                }
+                                Err(e) => {
+                                    YtdlpInstallResult { ok: false, message: e.to_string() }
+                                        .send_signal_to_dart();
+                                }
+                            }
+                            let status =
+                                fluxdown_engine::components::ytdlp_status(&db, &data_dir).await;
+                            ytdlp_status_report(status).send_signal_to_dart();
+                        });
+                    }
+                    Err(e) => {
+                        YtdlpInstallResult { ok: false, message: e.to_string() }
+                            .send_signal_to_dart();
+                    }
+                }
+            }
+            Some(_) = uninstall_ytdlp_recv.recv() => {
+                let result =
+                    fluxdown_engine::components::uninstall_ytdlp(&engine.db, &engine.data_dir)
+                        .await;
+                match result {
+                    Ok(()) => {
+                        YtdlpInstallResult { ok: true, message: String::new() }
+                            .send_signal_to_dart();
+                    }
+                    Err(e) => {
+                        YtdlpInstallResult { ok: false, message: e.to_string() }
+                            .send_signal_to_dart();
+                    }
+                }
+                let status =
+                    fluxdown_engine::components::ytdlp_status(&engine.db, &engine.data_dir).await;
+                ytdlp_status_report(status).send_signal_to_dart();
+            }
             // --- Off-actor plugin resolve 回流(见插件系统契约一，关键：不接线
             // 会导致该宿主下 off-actor resolve 永不完成，下载卡死) ---
             Some(out) = resolve_rx.recv() => {
@@ -1549,7 +1680,12 @@ pub async fn run(db_dir: PathBuf) {
 
 /// 刷新插件列表并回发 `PluginList`（安装/卸载/开关/存设置后统一调用）。
 async fn send_plugin_list(plugin_manager: &PluginManager) {
-    let plugins = plugin_manager.list().await.into_iter().map(Into::into).collect();
+    let plugins = plugin_manager
+        .list()
+        .await
+        .into_iter()
+        .map(Into::into)
+        .collect();
     PluginList { plugins }.send_signal_to_dart();
 }
 
@@ -1562,6 +1698,7 @@ async fn finish_plugin_op(
     op: &str,
     identity: &str,
     result: Result<(), PluginError>,
+    missing_components: Vec<String>,
 ) {
     let (ok, message) = match result {
         Ok(()) => (true, String::new()),
@@ -1573,9 +1710,22 @@ async fn finish_plugin_op(
         ok,
         message,
         failed_key: String::new(),
+        missing_components,
     }
     .send_signal_to_dart();
     send_plugin_list(plugin_manager).await;
+}
+
+/// 按插件声明权限探测缺失的基础组件（安装成功后调用，提醒式非阻断）。
+/// 依赖表见 `fluxdown_engine::plugin::dependencies`。
+async fn plugin_missing_components(
+    plugin_manager: &PluginManager,
+    db: &fluxdown_engine::db::Db,
+    data_dir: &Path,
+    identity: &str,
+) -> Vec<String> {
+    let perms = plugin_manager.permissions_of(identity).await;
+    fluxdown_engine::plugin::dependencies::missing_components(db, data_dir, &perms).await
 }
 
 /// `plugin_manager()` 返回 `None`（理论上不应发生，`Engine::new` 恒注入）时
@@ -1587,17 +1737,32 @@ async fn notify_plugin_manager_unavailable(op: &str, identity: &str) {
         ok: false,
         message: "插件系统未启用".to_string(),
         failed_key: String::new(),
+        missing_components: Vec::new(),
     }
     .send_signal_to_dart();
-    PluginList { plugins: Vec::new() }.send_signal_to_dart();
+    PluginList {
+        plugins: Vec::new(),
+    }
+    .send_signal_to_dart();
 }
 
 /// `fluxdown_engine::components::FfmpegStatus` → `FfmpegStatusReport` 信号。
 /// `source` 走 `FfmpegSource::as_str()` 保持与 server/web 端一致的 wire 字符串。
-fn ffmpeg_status_report(
-    status: fluxdown_engine::components::FfmpegStatus,
-) -> FfmpegStatusReport {
+fn ffmpeg_status_report(status: fluxdown_engine::components::FfmpegStatus) -> FfmpegStatusReport {
     FfmpegStatusReport {
+        source: status.source.as_str().to_string(),
+        path: status.path,
+        version: status.version,
+        managed_version: status.managed_version,
+        system_path: status.system_path,
+        managed_supported: status.managed_supported,
+    }
+}
+
+/// `fluxdown_engine::components::YtdlpStatus` → `YtdlpStatusReport` 信号。
+/// `source` 走 `ComponentSource::as_str()` 保持与 server/web 端一致的 wire 字符串。
+fn ytdlp_status_report(status: fluxdown_engine::components::YtdlpStatus) -> YtdlpStatusReport {
+    YtdlpStatusReport {
         source: status.source.as_str().to_string(),
         path: status.path,
         version: status.version,

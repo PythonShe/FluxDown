@@ -260,6 +260,7 @@ fn sample_task(id: &str, status: i32) -> TaskDto {
         queue_id: String::new(),
         checksum: String::new(),
         file_missing: false,
+        completed_at: String::new(),
     }
 }
 

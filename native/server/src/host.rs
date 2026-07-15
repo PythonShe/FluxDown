@@ -12,7 +12,7 @@
 //! 读取 [`WsHub`] 内 `EngineEventSink` 维护的实时速率缓存。
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -43,6 +43,9 @@ pub struct ServerApiHost {
     /// 插件管理器（Arc 共享）。`Engine::new` 在 `plugins` feature 下总会注入，
     /// `None` 仅为防御性处理（理论上不会在本 crate 的构建配置下出现）。
     plugin_manager: Option<Arc<PluginManager>>,
+    /// 数据目录（与 `Engine::data_dir` 同源），供组件存在性探测
+    /// （`plugin::dependencies::missing_components`）解析托管组件路径。
+    data_dir: PathBuf,
 }
 
 /// 演示模式守卫：`demo_url` 已设置且请求 URL 与之不符（trim 后精确比较）
@@ -65,6 +68,7 @@ impl ServerApiHost {
         demo_url: Option<String>,
         default_language: Option<String>,
         plugin_manager: Option<Arc<PluginManager>>,
+        data_dir: PathBuf,
     ) -> Self {
         Self {
             db,
@@ -73,6 +77,7 @@ impl ServerApiHost {
             demo_url,
             default_language,
             plugin_manager,
+            data_dir,
         }
     }
 
@@ -382,6 +387,16 @@ impl ApiHost for ServerApiHost {
         self.hub.broadcast(&WsServerMsg::PluginsChanged {});
         Ok(identity)
     }
+
+    /// 按插件声明权限探测缺失的基础组件（安装成功后回填提醒载荷）。
+    async fn plugin_missing_components(&self, identity: &str) -> Vec<String> {
+        let Some(pm) = self.plugin_manager.as_ref() else {
+            return Vec::new();
+        };
+        let perms = pm.permissions_of(identity).await;
+        fluxdown_engine::plugin::dependencies::missing_components(&self.db, &self.data_dir, &perms)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -450,6 +465,7 @@ mod tests {
             None,
             Some("zh".to_string()),
             None,
+            std::env::temp_dir(),
         );
 
         // 设置页未保存过语言 → 回退 FLUXDOWN_LANG
@@ -475,7 +491,15 @@ mod tests {
             .expect("connect mem db");
         let (cmd_tx, _cmd_rx) = mpsc::channel(1);
         let hub = Arc::new(WsHub::new(4));
-        let host = ServerApiHost::new(db, cmd_tx, Arc::clone(&hub), None, None, None);
+        let host = ServerApiHost::new(
+            db,
+            cmd_tx,
+            Arc::clone(&hub),
+            None,
+            None,
+            None,
+            std::env::temp_dir(),
+        );
 
         let mut rx = host
             .subscribe_task_events()

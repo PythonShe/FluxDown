@@ -1421,13 +1421,19 @@
       },
       "InstalledPlugin": {
         "type": "object",
-        "description": "安装成功返回体。",
+        "description": "安装成功返回体。\n\n`missing_components` 列出插件声明权限所需、但尚未安装的基础组件\n（如 `\"ffmpeg\"`/`\"ytdlp\"`，依赖表见引擎 `plugin::dependencies`）——\n提醒式而非阻断式：安装本身已成功，客户端应提示用户前往组件设置安装依赖。",
         "required": [
           "identity"
         ],
         "properties": {
           "identity": {
             "type": "string"
+          },
+          "missingComponents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1464,6 +1470,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "manifest 声明的能力权限（如 `[\"ffmpeg\"]`，供安装前展示授权）。"
           },
           "pluginId": {
             "type": "string"
@@ -1537,6 +1550,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "manifest 声明的能力权限（如 `[\"ffmpeg\"]`，供 UI 展示授权徽章）。"
           },
           "settings": {
             "type": "array",
@@ -1789,7 +1809,7 @@
       },
       "TaskDto": {
         "type": "object",
-        "description": "任务信息（`GET /api/v1/tasks`、`GET /api/v1/tasks/{id}` 响应）。\n\n# Examples\n\n```\nuse fluxdown_api::types::TaskDto;\nuse fluxdown_engine::model::TaskInfo;\n\nlet info = TaskInfo {\n    task_id: \"t1\".to_string(),\n    url: \"https://example.com/f.zip\".to_string(),\n    file_name: \"f.zip\".to_string(),\n    save_dir: \"/tmp\".to_string(),\n    status: 1,\n    downloaded_bytes: 10,\n    total_bytes: 100,\n    error_message: String::new(),\n    created_at: \"1700000000\".to_string(),\n    proxy_url: String::new(),\n    queue_id: String::new(),\n    checksum: String::new(),\n    file_missing: false,\n};\nlet dto = TaskDto::from(info);\nassert_eq!(dto.task_id, \"t1\");\nlet json = serde_json::to_string(&dto).unwrap();\nassert!(json.contains(\"\\\"taskId\\\":\\\"t1\\\"\"));\n```",
+        "description": "任务信息（`GET /api/v1/tasks`、`GET /api/v1/tasks/{id}` 响应）。\n\n# Examples\n\n```\nuse fluxdown_api::types::TaskDto;\nuse fluxdown_engine::model::TaskInfo;\n\nlet info = TaskInfo {\n    task_id: \"t1\".to_string(),\n    url: \"https://example.com/f.zip\".to_string(),\n    file_name: \"f.zip\".to_string(),\n    save_dir: \"/tmp\".to_string(),\n    status: 1,\n    downloaded_bytes: 10,\n    total_bytes: 100,\n    error_message: String::new(),\n    created_at: \"1700000000\".to_string(),\n    proxy_url: String::new(),\n    queue_id: String::new(),\n    checksum: String::new(),\n    file_missing: false,\n    completed_at: String::new(),\n};\nlet dto = TaskDto::from(info);\nassert_eq!(dto.task_id, \"t1\");\nlet json = serde_json::to_string(&dto).unwrap();\nassert!(json.contains(\"\\\"taskId\\\":\\\"t1\\\"\"));\n```",
         "required": [
           "taskId",
           "url",
@@ -1808,6 +1828,10 @@
           "checksum": {
             "type": "string",
             "description": "Checksum spec，格式 `algo=hexhash`（空 = 跳过校验）。"
+          },
+          "completedAt": {
+            "type": "string",
+            "description": "任务结束时间，Unix 秒级时间戳（空 = 尚未完成）。\n记录下载真正完成（status→3）的时刻，不含插件 hook 后处理耗时。"
           },
           "createdAt": {
             "type": "string",

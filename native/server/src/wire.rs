@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use fluxdown_api::types::{QueueDto, TaskDto};
-use fluxdown_engine::components::{FfmpegStatus, FfmpegVersions};
+use fluxdown_engine::components::{FfmpegStatus, FfmpegVersions, YtdlpStatus, YtdlpVersions};
 use fluxdown_engine::model::{BtFileEntry, HlsQualityOption, QueuePosition, SegmentDetail};
 
 // ---------------------------------------------------------------------------
@@ -374,6 +374,46 @@ impl From<FfmpegVersions> for ComponentVersions {
     }
 }
 
+/// yt-dlp 组件状态（`GET /api/v1/components/ytdlp`）。
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentYtdlpStatus {
+    /// 生效路径来源：`manual` / `managed` / `system` / `none`。
+    pub source: String,
+    /// 生效的可执行文件路径（`source == "none"` 时为空）。
+    pub path: String,
+    /// `yt-dlp --version` 探测到的版本串（探测失败/未找到时为空）。
+    pub version: String,
+    /// 托管安装记录的版本号（空 = 未托管安装）。
+    pub managed_version: String,
+    /// 系统 PATH 中探测到的 yt-dlp 路径（无论是否生效；空 = 无）。
+    pub system_path: String,
+    /// 当前平台是否提供托管安装（GitHub Release 构建）。
+    pub managed_supported: bool,
+}
+
+impl From<YtdlpStatus> for ComponentYtdlpStatus {
+    fn from(s: YtdlpStatus) -> Self {
+        Self {
+            source: s.source.as_str().to_string(),
+            path: s.path,
+            version: s.version,
+            managed_version: s.managed_version,
+            system_path: s.system_path,
+            managed_supported: s.managed_supported,
+        }
+    }
+}
+
+impl From<YtdlpVersions> for ComponentVersions {
+    fn from(v: YtdlpVersions) -> Self {
+        Self {
+            versions: v.versions,
+            latest_stable: v.latest_stable,
+        }
+    }
+}
+
 /// 安装/更新 ffmpeg 请求（`POST /api/v1/components/ffmpeg/install`）。
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -494,6 +534,7 @@ mod tests {
             queue_id: "q1".into(),
             checksum: String::new(),
             file_missing: false,
+            completed_at: String::new(),
         }
     }
 

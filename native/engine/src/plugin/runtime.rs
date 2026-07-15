@@ -250,6 +250,53 @@ pub struct FfmpegAvailability {
     pub source: String,
 }
 
+// ---------------------------------------------------------------------------
+// yt-dlp bridge：单一 near-raw argv 面（flux.ytdlp.run / .available）。
+// ---------------------------------------------------------------------------
+
+/// `flux.ytdlp.run(spec)` 的请求。**近乎全量 yt-dlp CLI**：`args` 直传给 yt-dlp
+/// 二进制（不含程序名），仅经 bridge 侧校验（见 [`super::bridge`]）。与 ffmpeg
+/// 不同，yt-dlp 是网络工具——**URL 参数允许**；但越牢文件路径、以及会执行外部
+/// 程序 / 加载任意配置或插件的开关（`--exec`/`--downloader`/`--config-location`/
+/// `--plugin-dirs`/`--ffmpeg-location`/`--batch-file` 等）一律被拒。文件引用一律
+/// 用**相对路径**（相对 cwd = 牢笼根/`subdir`）。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct YtdlpSpec {
+    /// yt-dlp 参数数组（不含二进制名与宿主自动前置的 `--ignore-config` /
+    /// `--ffmpeg-location`；后者指向宿主解析到的可信 ffmpeg，插件自带的同名开关被拒）。
+    pub args: Vec<String>,
+    /// 牢笼根下的工作子目录（可空；须为安全相对路径）。缺省时 cwd = 牢笼根本身。
+    pub subdir: Option<String>,
+    /// 本次调用超时（毫秒）。缺省取 bridge 默认值，并被 bridge 上限裁剪。
+    pub timeout_ms: Option<u64>,
+}
+
+/// `flux.ytdlp.run(spec)` 的返回值。`stdout`/`stderr` 均按 bridge 上限截断。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YtdlpOutcome {
+    /// 进程退出码（被信号杀死或无码时为 -1）。
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    /// 命中超时被强杀。
+    pub timed_out: bool,
+    pub truncated_stdout: bool,
+    pub truncated_stderr: bool,
+}
+
+/// `flux.ytdlp.available()` 的返回值（探测生效 yt-dlp 路径）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YtdlpAvailability {
+    pub available: bool,
+    /// `yt-dlp --version` 探测到的版本串（不可用时为空）。
+    pub version: String,
+    /// 路径来源：`"manual"`/`"managed"`/`"system"`/`"none"`。
+    pub source: String,
+}
+
 /// 单次插件调用的**宿主侧上下文**（不跨 JS 边界，插件不可设置）。承载 ffmpeg
 /// 能力门 + 文件访问牢笼根，由 manager 按调用上下文（事件/resolve）注入。
 #[derive(Debug, Clone, Default)]
@@ -259,6 +306,10 @@ pub struct HostContext {
     /// ffmpeg 允许读写的牢笼根（通常为任务 `save_dir`）。`None` = 无牢笼
     /// （resolve / 无产物事件）→ `flux.ffmpeg.run` 一律被拒。
     pub ffmpeg_root: Option<PathBuf>,
+    /// manifest `permissions` 是否含 `"ytdlp"`——决定是否注入 `flux.ytdlp` 门面。
+    /// yt-dlp 的文件牢笼由 bridge 自持（每插件 scratch 目录），故此处只需授权门，
+    /// 无需牢笼根：resolve 与全部 hook 上下文下授权即可用（区别于 ffmpeg）。
+    pub ytdlp_permitted: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +404,37 @@ pub trait PluginBridge: Send + Sync {
         Err(PluginError::Runtime("此 bridge 不支持产物登记".to_string()))
     }
 
+    /// `flux.fs.writeFile(name, content)`：把文本写入插件工作区（每插件 scratch
+    /// 目录，与 `flux.ytdlp` 的 cwd 同根）内的**扁平文件名** `name`。供插件为受管
+    /// 工具（yt-dlp/ffmpeg…）物化输入文件（cookie/config/字幕…），以相对名喂给
+    /// 工具——取代按需给每个工具 spec 加类型化字段的做法。牢笼内限定 + 单文件/
+    /// 总量/文件数上限；默认实现拒绝。
+    async fn fs_write(
+        &self,
+        _plugin_id: &str,
+        _name: &str,
+        _content: String,
+    ) -> Result<(), PluginError> {
+        Err(PluginError::Runtime("此 bridge 不支持 flux.fs".to_string()))
+    }
+
+    /// `flux.fs.readFile(name)`：读回工作区内文件文本（不存在返回 `None`）。
+    /// 默认返回 `None`。
+    async fn fs_read(&self, _plugin_id: &str, _name: &str) -> Option<String> {
+        None
+    }
+
+    /// `flux.fs.remove(name)`：删除工作区内文件（不存在视为成功）。默认拒绝。
+    async fn fs_remove(&self, _plugin_id: &str, _name: &str) -> Result<(), PluginError> {
+        Err(PluginError::Runtime("此 bridge 不支持 flux.fs".to_string()))
+    }
+
+    /// `flux.fs.list()`：列出工作区内顶层文件名（不含子目录 / yt-dlp `.cache`）。
+    /// 默认返回空。
+    async fn fs_list(&self, _plugin_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+
     /// `flux.ffmpeg.available()`：探测生效 ffmpeg（manual→managed→system）。
     /// 只读、不触网、不落盘。默认实现返回 `None`（无 ffmpeg 支持的 bridge）。
     async fn ffmpeg_available(&self) -> Option<FfmpegAvailability> {
@@ -371,6 +453,37 @@ pub trait PluginBridge: Send + Sync {
         _spec: FfmpegSpec,
     ) -> Result<FfmpegOutcome, PluginError> {
         Err(PluginError::Runtime("此 bridge 不支持 ffmpeg".to_string()))
+    }
+
+    /// `flux.ffprobe.run(spec)`：在 `jail_root` 牢笼内执行 ffprobe（随 ffmpeg 组件
+    /// 一并安装），用于结构化探测（`-print_format json -show_format -show_streams`）。
+    /// 与 [`Self::run_ffmpeg`] 同权限门（`ffmpeg`）、同牢笼、同校验；默认实现拒绝。
+    async fn run_ffprobe(
+        &self,
+        _plugin_id: &str,
+        _jail_root: PathBuf,
+        _spec: FfmpegSpec,
+    ) -> Result<FfmpegOutcome, PluginError> {
+        Err(PluginError::Runtime("此 bridge 不支持 ffprobe".to_string()))
+    }
+
+    /// `flux.ytdlp.available()`：探测生效 yt-dlp（manual→managed→system）。
+    /// 只读、不触网、不落盘。默认实现返回 `None`（无 yt-dlp 支持的 bridge）。
+    async fn ytdlp_available(&self) -> Option<YtdlpAvailability> {
+        None
+    }
+
+    /// `flux.ytdlp.run(spec)`：在 bridge 自持的每插件 scratch 牢笼内执行 yt-dlp。
+    ///
+    /// 实现方须把一切文件访问约束在牢笼内（cwd = 牢笼根/`subdir`，拒绝绝对路径
+    /// 与 `..`），并拒绝会执行外部程序 / 加载任意配置或插件的开关（见
+    /// [`super::bridge`] 的校验器）；**网络放行**（yt-dlp 的本职）。默认实现拒绝。
+    async fn run_ytdlp(
+        &self,
+        _plugin_id: &str,
+        _spec: YtdlpSpec,
+    ) -> Result<YtdlpOutcome, PluginError> {
+        Err(PluginError::Runtime("此 bridge 不支持 yt-dlp".to_string()))
     }
 }
 

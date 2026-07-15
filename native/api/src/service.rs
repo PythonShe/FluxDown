@@ -188,6 +188,14 @@ pub trait ApiHost: Send + Sync {
         let _ = plugin_id;
         Err(plugins_unsupported())
     }
+
+    /// 按插件声明权限探测缺失的基础组件（如 `"ffmpeg"`/`"ytdlp"`），供安装
+    /// 成功后回填 [`crate::types::InstalledPlugin::missing_components`] 提醒
+    /// 用户安装依赖。依赖表见引擎 `plugin::dependencies`。默认空（无提醒）。
+    async fn plugin_missing_components(&self, identity: &str) -> Vec<String> {
+        let _ = identity;
+        Vec::new()
+    }
 }
 
 /// 未支持插件的宿主（如纯 aria2 客户端场景）的统一错误。

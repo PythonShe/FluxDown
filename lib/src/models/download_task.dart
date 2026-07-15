@@ -216,6 +216,10 @@ class DownloadTask {
   final bool isSelected;
   final DateTime createdAt;
 
+  /// 任务结束时间（下载真正完成的时刻，不含插件 hook 后处理耗时）。
+  /// null = 尚未完成；仅在 status 为 completed 时有展示意义。
+  final DateTime? completedAt;
+
   /// Per-segment progress data (null if no segment info received yet)
   final List<SegmentData>? segments;
 
@@ -259,12 +263,14 @@ class DownloadTask {
     this.queueId = '',
     this.fileNameConfirmed = false,
     this.fileMissing = false,
+    this.completedAt,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
   /// 从 AllTasks 信号中的 TaskInfo 构建
   factory DownloadTask.fromTaskInfo(TaskInfo info) {
     final seconds = int.tryParse(info.createdAt) ?? 0;
+    final completedSeconds = int.tryParse(info.completedAt) ?? 0;
     // DB 中有非空文件名，说明 Rust 已确认过（create_task 写入的用户名或
     // 下载引擎 update_task_file_info 写入的实际名），标记为已确认。
     final hasName = info.fileName.isNotEmpty;
@@ -283,10 +289,14 @@ class DownloadTask {
       createdAt: seconds > 0
           ? DateTime.fromMillisecondsSinceEpoch(seconds * 1000)
           : DateTime.now(),
+      completedAt: completedSeconds > 0
+          ? DateTime.fromMillisecondsSinceEpoch(completedSeconds * 1000)
+          : null,
     );
   }
 
   DownloadTask copyWith({
+    bool clearCompletedAt = false,
     String? id,
     String? url,
     String? fileName,
@@ -304,6 +314,7 @@ class DownloadTask {
     bool? fileNameConfirmed,
     bool? fileMissing,
     DateTime? createdAt,
+    DateTime? completedAt,
   }) {
     return DownloadTask(
       id: id ?? this.id,
@@ -323,6 +334,7 @@ class DownloadTask {
       fileNameConfirmed: fileNameConfirmed ?? this.fileNameConfirmed,
       fileMissing: fileMissing ?? this.fileMissing,
       createdAt: createdAt ?? this.createdAt,
+      completedAt: clearCompletedAt ? null : (completedAt ?? this.completedAt),
     );
   }
 
@@ -338,6 +350,17 @@ class DownloadTask {
     final nameFromProgress = p.fileName.isNotEmpty ? p.fileName : null;
     final nowConfirmed = fileNameConfirmed || nameFromProgress != null;
 
+    // 结束时间：进入 completed 时若尚无记录则以当前时刻兜底（权威值来自
+    // DB 的 AllTasks 快照，此处保证会话内实时显示）；重新开始下载时清空。
+    final DateTime? nextCompletedAt = newStatus == TaskStatus.completed
+        ? (completedAt ?? DateTime.now())
+        : completedAt;
+    final bool clearCompleted =
+        newStatus == TaskStatus.pending ||
+        newStatus == TaskStatus.downloading ||
+        newStatus == TaskStatus.preparing ||
+        newStatus == TaskStatus.resuming;
+
     return copyWith(
       status: newStatus,
       downloadedBytes: p.downloadedBytes,
@@ -347,6 +370,8 @@ class DownloadTask {
       saveDir: p.saveDir.isNotEmpty ? p.saveDir : null,
       errorMessage: p.errorMessage,
       fileNameConfirmed: nowConfirmed,
+      completedAt: nextCompletedAt,
+      clearCompletedAt: clearCompleted,
     );
   }
 

@@ -92,6 +92,29 @@ Persistent key-value store, private to your plugin, survives app restarts (backe
 
 Values are strings; JSON-encode anything structured yourself.
 
+### `flux.fs`
+
+Always available — no `permissions` entry required. Scratch-file storage for a plugin's own workspace, distinct from `flux.storage`'s key-value store: use it when a managed tool needs a real file on disk rather than a string in memory. The workspace is the **same directory** `flux.ytdlp` runs in (its cwd) — anything written here is reachable by yt-dlp (or any tool call) as a plain relative filename.
+
+- `flux.fs.writeFile(name, content)` → `Promise<void>` — write (or overwrite) a text file; rejects (throws) on an invalid name or a limit violation.
+- `flux.fs.readFile(name)` → `Promise<string | null>` — read a text file back; `null` if it doesn't exist.
+- `flux.fs.remove(name)` → `Promise<void>` — delete a file; a missing file is not an error (idempotent).
+- `flux.fs.list()` → `Promise<string[]>` — top-level file names in the workspace (sub-directories and yt-dlp's own `.cache` are not included).
+
+`name` must be a flat, safe filename: non-empty, containing none of `/`, `\`, `:`, not `.` or `..`, and at most 255 characters — anything else throws. Limits: **8 MB** per file, **64 MB** total per plugin workspace, **100 files** max. Content is text only (no binary). On Unix, files are written best-effort `0600`.
+
+Typical use: materialize an input file for a managed tool — cookies, a config, subtitles — write it, reference it by relative name in the tool call, then remove it. Example — feed a cookie jar to `flux.ytdlp`:
+
+```js
+await flux.fs.writeFile('cookies.txt', netscapeCookieText);
+try {
+  const r = await flux.ytdlp.run({ args: ['--cookies', 'cookies.txt', '-J', ctx.url] });
+  // ... use r.stdout
+} finally {
+  await flux.fs.remove('cookies.txt');
+}
+```
+
 ### `flux.settings`
 
 Read-only object with your manifest-declared settings, already typed: `string` fields arrive as strings, `number` as numbers, `boolean` as booleans. Unset fields carry their `default`.
@@ -152,6 +175,66 @@ globalThis.onDone = async (ctx) => {
 };
 ```
 
+### `flux.ffprobe`
+
+Gated by the same `permissions: ["ffmpeg"]` declaration as `flux.ffmpeg` — no separate permission exists. It shares the exact same jail (available **only** inside `onDone`, rejecting elsewhere), the same path-resolution order (user-set → managed install → system `PATH`), and the same argument screening (no URL scheme, no absolute path, no parent traversal, no embedded absolute path). ffprobe ships alongside the managed ffmpeg install — installing ffmpeg from the Components page also places ffprobe in `<data_dir>/bin`, so no separate install step is needed.
+
+- `flux.ffprobe.run(spec)` → `Promise<outcome>` — run ffprobe. `spec` and the resolved `outcome` are identical in shape to `flux.ffmpeg.run` (`args` / `subdir` / `timeoutMs`, resolving to `{ code, stdout, stderr, timedOut, truncatedStdout, truncatedStderr }`).
+
+Use it for structured probing instead of scraping ffmpeg's stderr:
+
+```js
+const out = await flux.ffprobe.run({
+  args: ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', './in.mp4'],
+});
+const info = JSON.parse(out.stdout);
+```
+
+### `flux.ytdlp`
+
+Available **only** when the manifest declares `permissions: ["ytdlp"]` — otherwise `flux.ytdlp` is `undefined`, so guard with `if (flux.ytdlp)`. It runs the yt-dlp FluxDown resolves (a user-set path → the managed install → system `PATH`), so yt-dlp must also actually be present (installable from the app's Components page).
+
+- `flux.ytdlp.available()` → `Promise<{ available, version, source }>` — probe the effective yt-dlp. `source` is `"manual"` / `"managed"` / `"system"` / `"none"`. A quick `run({ args: ['--version'] })` and checking `code === 0` works as a lighter-weight liveness probe too.
+- `flux.ytdlp.run(spec)` → `Promise<outcome>` — run yt-dlp. `spec`:
+
+| Field | Default | Notes |
+|---|---|---|
+| `args` | — | Required, non-empty. yt-dlp argument array (no program name; `--ignore-config` is prepended for you). |
+| `subdir` | none | Working sub-directory under the jail root; safe relative path, may not escape. |
+| `timeoutMs` | 300000 | Per-call timeout, capped at 3600000 (60 min). |
+
+Resolves to `{ code, stdout, stderr, timedOut, truncatedStdout, truncatedStderr }` — `code` is the exit code (`-1` when killed / none), `stdout`/`stderr` are truncated (256 KB / 64 KB), `timedOut` is `true` when the timeout killed the run.
+
+**The jail.** Unlike `flux.ffmpeg`, `flux.ytdlp` works in **every** context — `resolve` and every hook — since it has no dependency on a produced file. The jail isn't a task's output folder; it's a scratch directory the bridge keeps per plugin (lazily created under FluxDown's data directory), reused across calls. That's the working directory for the call, and `subdir` carves out a sub-folder inside it. Reference any files you read or write there by **relative** name. This is the same workspace `flux.fs` reads and writes — it's how you feed yt-dlp a cookie jar, config file, or subtitles: `flux.fs.writeFile('cookies.txt', …)` beforehand, reference the file by its relative name in `args`, then `flux.fs.remove('cookies.txt')` once the call returns.
+
+yt-dlp is a network tool, so unlike ffmpeg's jail, URL arguments and outbound network access are allowed — extracting from a remote URL is its entire job. What's blocked is anything that would step outside yt-dlp itself or escape the jail:
+
+| Blocked | Examples |
+|---|---|
+| absolute path / drive letter | `/etc/x`, `C:\x`, `\\host\share` |
+| parent traversal | `../x`, `a/../b` |
+| an embedded absolute path | `--paths home:/etc/x` |
+| the `file:` local scheme | `file:///etc/passwd` |
+| a switch that runs external programs, loads arbitrary config/plugins, or reads browser credentials | `--exec`, `--exec-before-download`, `--downloader`, `--external-downloader`, `--config-location`/`--config-locations`, `--plugin-dirs`, `--ffmpeg-location`, `--batch-file`, `-a`, `--load-info`/`--load-info-json`, `--cookies-from-browser` |
+
+`--ignore-config` is always prepended, so none of yt-dlp's own config files — which could otherwise smuggle in a blocked switch — get read either. At most 2 yt-dlp processes run at once across all plugins, and each child is killed on timeout or cancellation.
+
+FluxDown auto-injects `--ffmpeg-location` (pointing at the resolved managed/system ffmpeg) so merges (bestvideo+bestaudio), `-x` audio extraction, remuxing, and recoding all work — a plugin-supplied `--ffmpeg-location` is still rejected (see the table above), only the host's own injected path is trusted. It also auto-injects `--cache-dir <jail>/.cache`, keeping yt-dlp's cache inside the jail instead of leaking outside it.
+
+Example — resolve a page by asking yt-dlp for its metadata JSON and picking a direct link out of it:
+
+```js
+globalThis.resolve = async (ctx) => {
+  if (!flux.ytdlp) return null;
+  const r = await flux.ytdlp.run({ args: ['-J', '--no-warnings', ctx.url] });
+  if (r.code !== 0) throw new Error('yt-dlp failed: ' + (r.stderr || '').slice(-400));
+  const info = JSON.parse(r.stdout);
+  const direct = info.url || info.formats?.[info.formats.length - 1]?.url;
+  if (!direct) return null;
+  return { url: direct, fileName: info.title ? `${info.title}.${info.ext || 'mp4'}` : undefined };
+};
+```
+
 ## Runtime limits
 
 Each invocation runs in a fresh QuickJS context: no globals survive between calls, timers and DOM APIs don't exist, and scripts load as classic scripts (top-level `function` declarations become globals; `export` syntax will not work).
@@ -163,4 +246,4 @@ Each invocation runs in a fresh QuickJS context: no globals survive between call
 
 Three consecutive timeouts or memory-limit hits trip the circuit breaker: the plugin is auto-disabled, the app shows a notice, and it stays off until manually re-enabled.
 
-Hooks granted `permissions: ["ffmpeg"]` get a raised wall-clock budget (~30 min) so a long ffmpeg run can finish; the 30 s CPU ceiling still bounds the JavaScript itself — time spent awaiting the ffmpeg subprocess doesn't count against it.
+Hooks granted `permissions: ["ffmpeg"]` (running against a produced file, i.e. `onDone`) or `permissions: ["ytdlp"]` (any hook) get a raised wall-clock budget (~30 min) so a long external-tool run can finish; the 30 s CPU ceiling still bounds the JavaScript itself — time spent awaiting the subprocess doesn't count against it. `resolve` keeps its own budget (10 s default, `timeoutMs` override, 30 s hard ceiling) even where `flux.ytdlp` is reachable — plan long `run()` calls accordingly.

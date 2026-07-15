@@ -745,6 +745,7 @@ mod tests {
             queue_id: String::new(),
             checksum: String::new(),
             file_missing: false,
+            completed_at: String::new(),
         }
     }
 

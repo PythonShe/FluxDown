@@ -1,30 +1,40 @@
-// 组件：v1 仅 ffmpeg 托管安装管理。
-// 状态探测 GET /api/v1/components/ffmpeg，可安装版本 GET .../versions，
+// 组件：ffmpeg / yt-dlp 托管安装管理。
+// 状态探测 GET /api/v1/components/<name>，可安装版本 GET .../versions，
 // 安装/更新 POST .../install（后台执行，经 WS componentProgress/componentResult 推送），
 // 卸载 POST .../uninstall。手动路径复用既有 config 端点（PUT /api/v1/config，
-// 键 component.ffmpeg.path，与 native/engine `components::CONFIG_FFMPEG_PATH` 一致）。
+// 键 component.ffmpeg.path / component.ytdlp.path，与 native/engine
+// `components::CONFIG_FFMPEG_PATH`/`CONFIG_YTDLP_PATH` 一致）。
 //
-// 优先级：手动路径 > 托管安装 > 系统 PATH（与引擎 resolve_ffmpeg 语义一致）。
+// 优先级：手动路径 > 托管安装 > 系统 PATH（与引擎 resolve_ffmpeg/resolve_ytdlp 语义一致）。
 import { useState, type ReactNode } from 'react'
 import { RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '../../lib/cn'
 import { confirmDialog } from '../../lib/confirm'
 import { fmtBytes } from '../../lib/format'
 import { translateBackendMessage, useI18n } from '../../lib/i18n'
-import type { FfmpegSource } from '../../lib/types'
+import type { ComponentFfmpegStatus, ComponentYtdlpStatus, FfmpegSource } from '../../lib/types'
 import { componentProgressStore, componentResultStore, useStore } from '../../lib/ws'
 import { CopyButton } from '../CopyButton'
 import {
   useFfmpegStatusQuery,
   useFfmpegVersionsQuery,
   useInstallFfmpegMutation,
+  useInstallYtdlpMutation,
   useUninstallFfmpegMutation,
+  useUninstallYtdlpMutation,
+  useYtdlpStatusQuery,
+  useYtdlpVersionsQuery,
 } from '../../hooks/useComponents'
 import { useConfigMutation, useConfigQuery } from './useConfig'
 import { SetRow, SetSelect, TextFieldRow } from './controls'
 
-/** config 键：手动指定的 ffmpeg 路径，须与 native/engine `CONFIG_FFMPEG_PATH` 保持一致。 */
-const CONFIG_FFMPEG_PATH = 'component.ffmpeg.path'
+type ComponentName = 'ffmpeg' | 'ytdlp'
+
+/** config 键：手动指定路径，须与 native/engine `CONFIG_FFMPEG_PATH`/`CONFIG_YTDLP_PATH` 保持一致。 */
+const CONFIG_PATH_KEY: Record<ComponentName, string> = {
+  ffmpeg: 'component.ffmpeg.path',
+  ytdlp: 'component.ytdlp.path',
+}
 
 const SOURCE_TONE: Record<FfmpegSource, 'accent' | 'neutral' | 'danger'> = {
   manual: 'neutral',
@@ -67,27 +77,48 @@ function PathRow({ title, desc, value, empty }: { title: string; desc?: string; 
   )
 }
 
-export function ComponentsSettings() {
+interface ComponentCardProps {
+  component: ComponentName
+  status: ComponentFfmpegStatus | ComponentYtdlpStatus | undefined
+  statusLoading: boolean
+  statusError: boolean
+  versionsQuery: ReturnType<typeof useFfmpegVersionsQuery>
+  installMut: ReturnType<typeof useInstallFfmpegMutation>
+  uninstallMut: ReturnType<typeof useUninstallFfmpegMutation>
+}
+
+/** 单个组件（ffmpeg/yt-dlp）状态/安装/卸载卡片 —— 两者结构完全对称，仅文案与端点不同。 */
+function ComponentCard({
+  component,
+  status,
+  statusLoading,
+  statusError,
+  versionsQuery,
+  installMut,
+  uninstallMut,
+}: ComponentCardProps) {
   const { t } = useI18n()
   const { data: config, isLoading: configLoading } = useConfigQuery()
   const configMut = useConfigMutation()
-  const { data: status, isLoading: statusLoading, isError: statusError } = useFfmpegStatusQuery()
-  // 版本列表仅在状态确认本平台支持托管安装后拉取，避免 macOS 等平台反复失败弹错。
-  const versionsQuery = useFfmpegVersionsQuery(status?.managedSupported === true)
-  const installMut = useInstallFfmpegMutation()
-  const uninstallMut = useUninstallFfmpegMutation()
   const [selectedVersion, setSelectedVersion] = useState('')
 
-  const progress = useStore(componentProgressStore).ffmpeg
+  const configKey = CONFIG_PATH_KEY[component]
+  const binName = t(`components.${component}`)
+  const progress = useStore(componentProgressStore)[component]
   const result = useStore(componentResultStore)
   const installing = installMut.isPending || progress !== undefined
 
-  const manualPath = config?.[CONFIG_FFMPEG_PATH] ?? ''
+  const manualPath = config?.[configKey] ?? ''
+  const manualPathPlaceholder =
+    component === 'ytdlp' ? t('components.ytdlpManualPathPlaceholder') : t('components.manualPathPlaceholder')
+  const installDesc = component === 'ytdlp' ? t('components.ytdlpInstallDesc') : t('components.installDesc')
+  const managedUnsupportedText =
+    component === 'ytdlp' ? t('components.ytdlpManagedUnsupported') : t('components.managedUnsupported')
 
   async function uninstall() {
     const ok = await confirmDialog({
-      title: t('components.uninstallTitle'),
-      message: t('components.uninstallMsg'),
+      title: t('components.uninstallTitle', { bin: binName }),
+      message: t('components.uninstallMsg', { bin: binName }),
       danger: true,
     })
     if (ok) uninstallMut.mutate()
@@ -98,11 +129,11 @@ export function ComponentsSettings() {
 
   let versionsBody: ReactNode
   if (status && !status.managedSupported) {
-    // 平台不支持托管安装（macOS 等）：静态引导，不展示版本选择/安装按钮，
+    // 平台不支持托管安装（macOS 等为 false）：静态引导，不展示版本选择/安装按钮，
     // 也不发起版本拉取，避免反复弹「不支持安装」。
     versionsBody = (
       <SetRow title={t('components.install')} align="start">
-        <p className="text-[12px] text-text3">{t('components.managedUnsupported')}</p>
+        <p className="text-[12px] text-text3">{managedUnsupportedText}</p>
       </SetRow>
     )
   } else if (versionsQuery.isLoading) {
@@ -117,13 +148,13 @@ export function ComponentsSettings() {
       : t('components.versionsEmpty')
     versionsBody = (
       <SetRow title={t('components.install')} align="start">
-        <p className="text-[12px] text-text3">{t('components.versionsFailed', { error: reason })}</p>
+        <p className="text-[12px] text-text3">{t('components.versionsFailed', { error: reason, bin: binName })}</p>
       </SetRow>
     )
   } else {
     const data = versionsQuery.data
     versionsBody = (
-      <SetRow title={t('components.install')} desc={t('components.installDesc')}>
+      <SetRow title={t('components.install')} desc={installDesc}>
         <div className="flex flex-shrink-0 items-center gap-2">
           <SetSelect
             value={selectedVersion}
@@ -153,14 +184,11 @@ export function ComponentsSettings() {
   }
 
   return (
-    <div className="max-w-[640px]">
-      <h2 className="set-title">{t('set.components')}</h2>
-      <p className="set-desc">{t('set.components.desc')}</p>
-
+    <>
       <h3 className="set-title" style={{ fontSize: 13, marginTop: 0 }}>
-        {t('components.ffmpeg')}
+        {binName}
       </h3>
-      <p className="set-desc">{t('components.ffmpegDesc')}</p>
+      <p className="set-desc">{t(`components.${component}Desc`)}</p>
 
       <div className="set-group">
         {statusLoading || configLoading ? (
@@ -182,7 +210,7 @@ export function ComponentsSettings() {
             </SetRow>
             <PathRow
               title={t('components.systemPath')}
-              desc={t('components.systemPathDesc')}
+              desc={t('components.systemPathDesc', { bin: binName })}
               value={status.systemPath}
               empty={t('components.none')}
             />
@@ -192,8 +220,8 @@ export function ComponentsSettings() {
           title={t('components.manualPath')}
           desc={t('components.manualPathDesc')}
           value={manualPath}
-          placeholder={t('components.manualPathPlaceholder')}
-          onCommit={(v) => configMut.mutate({ [CONFIG_FFMPEG_PATH]: v.trim() })}
+          placeholder={manualPathPlaceholder}
+          onCommit={(v) => configMut.mutate({ [configKey]: v.trim() })}
         />
       </div>
 
@@ -213,7 +241,7 @@ export function ComponentsSettings() {
             </div>
           </div>
         )}
-        {result && result.component === 'ffmpeg' && (
+        {result && result.component === component && (
           <p
             className={cn('text-[12px]', result.ok ? 'text-success' : 'text-danger')}
             style={{ padding: '0 16px 14px' }}
@@ -238,6 +266,46 @@ export function ComponentsSettings() {
           </SetRow>
         ) : null}
       </div>
+    </>
+  )
+}
+
+export function ComponentsSettings() {
+  const { t } = useI18n()
+
+  const { data: ffmpegStatus, isLoading: ffmpegStatusLoading, isError: ffmpegStatusError } = useFfmpegStatusQuery()
+  const ffmpegVersionsQuery = useFfmpegVersionsQuery(ffmpegStatus?.managedSupported === true)
+  const installFfmpegMut = useInstallFfmpegMutation()
+  const uninstallFfmpegMut = useUninstallFfmpegMutation()
+
+  const { data: ytdlpStatus, isLoading: ytdlpStatusLoading, isError: ytdlpStatusError } = useYtdlpStatusQuery()
+  const ytdlpVersionsQuery = useYtdlpVersionsQuery(ytdlpStatus?.managedSupported === true)
+  const installYtdlpMut = useInstallYtdlpMutation()
+  const uninstallYtdlpMut = useUninstallYtdlpMutation()
+
+  return (
+    <div className="max-w-[640px]">
+      <h2 className="set-title">{t('set.components')}</h2>
+      <p className="set-desc">{t('set.components.desc')}</p>
+
+      <ComponentCard
+        component="ffmpeg"
+        status={ffmpegStatus}
+        statusLoading={ffmpegStatusLoading}
+        statusError={ffmpegStatusError}
+        versionsQuery={ffmpegVersionsQuery}
+        installMut={installFfmpegMut}
+        uninstallMut={uninstallFfmpegMut}
+      />
+      <ComponentCard
+        component="ytdlp"
+        status={ytdlpStatus}
+        statusLoading={ytdlpStatusLoading}
+        statusError={ytdlpStatusError}
+        versionsQuery={ytdlpVersionsQuery}
+        installMut={installYtdlpMut}
+        uninstallMut={uninstallYtdlpMut}
+      />
     </div>
   )
 }

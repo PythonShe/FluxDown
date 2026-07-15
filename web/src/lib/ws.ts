@@ -311,7 +311,9 @@ function dispatch(msg: WsServerMsg) {
         delete next[msg.component]
         return next
       })
-      void queryClientRef?.invalidateQueries({ queryKey: ['ffmpegStatus'] })
+      void queryClientRef?.invalidateQueries({
+        queryKey: msg.component === 'ytdlp' ? ['ytdlpStatus'] : ['ffmpegStatus'],
+      })
       break
     case 'pong':
       connStore.set({ status: 'connected', rttMs: Math.round(performance.now() - pingSentAt) })

@@ -1,7 +1,4 @@
-//! 可选外部组件管理（v1 仅 ffmpeg）。
-//!
-//! ffmpeg 是宿主侧受控二进制，服务 DASH/轨对任务的音视频 mux——与插件沙箱
-//! （QuickJS）是两套正交的信任模型，本模块不与插件系统交互。
+//! ffmpeg 组件：宿主侧受控二进制，服务 DASH/轨对任务的音视频 mux。
 //!
 //! 路径解析优先级（[`resolve_ffmpeg`]）：
 //! 1. 手动指定（config `component.ffmpeg.path`，用户显式覆盖，最高优先）
@@ -13,11 +10,10 @@
 //! 同时携带多个 `n<major.minor>` 版本资产，一次请求即可列出全部可选版本
 //! （[`list_versions`]），用户可钉住特定版本或更新到最新稳定版。
 //! macOS 无 BtbN 构建，仅支持系统探测 + 手动指定。
-//!
-//! 二进制**不随安装包分发**，运行时按需由用户主动触发下载（合规边界）。
 
 use std::path::{Path, PathBuf};
 
+use super::{ComponentError, ComponentSource};
 use crate::db::Db;
 
 /// config 键：手动指定的 ffmpeg 绝对路径（空/缺失 = 未指定）。
@@ -25,36 +21,11 @@ pub const CONFIG_FFMPEG_PATH: &str = "component.ffmpeg.path";
 /// config 键：托管安装的版本号（如 `7.1`；空/缺失 = 未安装托管版本）。
 pub const CONFIG_FFMPEG_MANAGED_VERSION: &str = "component.ffmpeg.managed_version";
 
-/// ffmpeg 路径的来源。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FfmpegSource {
-    /// 用户手动指定路径（config）。
-    Manual,
-    /// 数据目录 `bin/` 下的托管安装。
-    Managed,
-    /// 系统 PATH 中找到。
-    System,
-    /// 未找到任何可用 ffmpeg。
-    None,
-}
-
-impl FfmpegSource {
-    /// 稳定的 wire 字符串（跨 hub 信号 / server JSON 共用）。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FfmpegSource::Manual => "manual",
-            FfmpegSource::Managed => "managed",
-            FfmpegSource::System => "system",
-            FfmpegSource::None => "none",
-        }
-    }
-}
-
 /// ffmpeg 组件状态快照（探测结果，供设置页展示）。
 #[derive(Debug, Clone)]
 pub struct FfmpegStatus {
     /// 生效路径的来源。
-    pub source: FfmpegSource,
+    pub source: ComponentSource,
     /// 生效的可执行文件路径（`source == None` 时为空）。
     pub path: String,
     /// `ffmpeg -version` 探测到的版本串（探测失败/未找到时为空）。
@@ -84,6 +55,19 @@ fn ffmpeg_binary_name() -> &'static str {
     }
 }
 
+/// 托管 ffprobe 的目标路径：`<data_dir>/bin/ffprobe[.exe]`（随 ffmpeg 一并安装）。
+pub fn managed_ffprobe_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("bin").join(ffprobe_binary_name())
+}
+
+fn ffprobe_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    }
+}
+
 /// 当前平台是否提供 ffmpeg 托管安装（BtbN/FFmpeg-Builds 官方静态构建）。
 ///
 /// BtbN 仅发布 win64/winarm64/linux64/linuxarm64 构建，无 macOS 构建。仅按
@@ -95,7 +79,7 @@ fn ffmpeg_binary_name() -> &'static str {
 /// 通常带 glibc、能运行下载来的 glibc 构建，故这里仍返回 `true`；真正 musl
 /// 用户态（Alpine/OpenWrt）无法运行的情况由 [`install`] 的安装后 `-version`
 /// 探测兜底（返回 [`ComponentError::Verify`] 并给出改用系统包管理器的提示）。
-pub fn managed_install_supported() -> bool {
+fn managed_install_supported() -> bool {
     cfg!(all(
         target_os = "windows",
         any(target_arch = "x86_64", target_arch = "aarch64")
@@ -107,17 +91,7 @@ pub fn managed_install_supported() -> bool {
 
 /// 扫描系统 PATH 寻找 ffmpeg 可执行文件。
 pub fn find_system_ffmpeg() -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_var) {
-        if dir.as_os_str().is_empty() {
-            continue;
-        }
-        let candidate = dir.join(ffmpeg_binary_name());
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    super::find_in_path(ffmpeg_binary_name())
 }
 
 /// 解析生效的 ffmpeg 路径（manual → managed → system）。
@@ -144,6 +118,31 @@ pub async fn resolve_ffmpeg(db: &Db, data_dir: &Path) -> Option<PathBuf> {
         return Some(managed);
     }
     find_system_ffmpeg()
+}
+
+/// 解析生效的 ffprobe 路径（手动 ffmpeg 同目录 → 托管 → 系统 PATH）。
+///
+/// 供插件 `flux.ffprobe` 结构化探测（`ffprobe -print_format json -show_format
+/// -show_streams`）用；随托管 ffmpeg 一并安装，yt-dlp 也经 `--ffmpeg-location`
+/// 所在目录自动发现它。
+pub async fn resolve_ffprobe(db: &Db, data_dir: &Path) -> Option<PathBuf> {
+    if let Ok(Some(p)) = db.get_config(CONFIG_FFMPEG_PATH).await
+        && !p.trim().is_empty()
+    {
+        // 用户手动指定 ffmpeg 时，同目录通常也有 ffprobe。
+        let manual = PathBuf::from(p.trim());
+        if let Some(dir) = manual.parent() {
+            let cand = dir.join(ffprobe_binary_name());
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    let managed = managed_ffprobe_path(data_dir);
+    if managed.is_file() {
+        return Some(managed);
+    }
+    super::find_in_path(ffprobe_binary_name())
 }
 
 /// 运行 `<path> -version` 解析版本串（如 `7.1` / `n7.1-...` 原样 token）。
@@ -180,16 +179,16 @@ pub async fn ffmpeg_status(db: &Db, data_dir: &Path) -> FfmpegStatus {
     let managed = managed_ffmpeg_path(data_dir);
 
     let (source, path) = if let Some(m) = manual.filter(|m| m.is_file()) {
-        (FfmpegSource::Manual, m)
+        (ComponentSource::Manual, m)
     } else if managed.is_file() {
-        (FfmpegSource::Managed, managed)
+        (ComponentSource::Managed, managed)
     } else if let Some(s) = system.clone() {
-        (FfmpegSource::System, s)
+        (ComponentSource::System, s)
     } else {
-        (FfmpegSource::None, PathBuf::new())
+        (ComponentSource::None, PathBuf::new())
     };
 
-    let version = if source == FfmpegSource::None {
+    let version = if source == ComponentSource::None {
         String::new()
     } else {
         probe_version(&path).await.unwrap_or_default()
@@ -215,31 +214,12 @@ pub async fn uninstall_ffmpeg(db: &Db, data_dir: &Path) -> Result<(), ComponentE
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(ComponentError::Io(e.to_string())),
     }
+    // ffprobe 随 ffmpeg 一并安装，一并清除（best-effort，缺失不报错）。
+    let _ = tokio::fs::remove_file(managed_ffprobe_path(data_dir)).await;
     db.delete_config(CONFIG_FFMPEG_MANAGED_VERSION)
         .await
         .map_err(|e| ComponentError::Db(e.to_string()))?;
     Ok(())
-}
-
-/// 组件操作错误。
-#[derive(thiserror::Error, Debug)]
-pub enum ComponentError {
-    /// 当前平台无托管构建（macOS 等）——请用系统安装或手动指定路径。
-    #[error("managed install not supported on this platform")]
-    Unsupported,
-    #[error("http error: {0}")]
-    Http(String),
-    #[error("asset not found: {0}")]
-    NotFound(String),
-    #[error("io error: {0}")]
-    Io(String),
-    #[error("db error: {0}")]
-    Db(String),
-    #[error("archive error: {0}")]
-    Archive(String),
-    /// 安装后可执行探测失败（下载损坏/架构不符）。
-    #[error("installed binary failed verification: {0}")]
-    Verify(String),
 }
 
 #[cfg(feature = "components")]
@@ -300,31 +280,10 @@ mod install {
         Some(ver.to_string())
     }
 
-    async fn fetch_release_json(
-        client: &reqwest::Client,
-    ) -> Result<serde_json::Value, ComponentError> {
-        let resp = client
-            .get(RELEASE_API)
-            .header("User-Agent", "FluxDown")
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .await
-            .map_err(|e| ComponentError::Http(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(ComponentError::Http(format!(
-                "GitHub API returned {}",
-                resp.status()
-            )));
-        }
-        resp.json::<serde_json::Value>()
-            .await
-            .map_err(|e| ComponentError::Http(e.to_string()))
-    }
-
     /// 列出当前平台可安装的稳定版本（降序）。
     pub async fn list_versions(client: &reqwest::Client) -> Result<FfmpegVersions, ComponentError> {
         let plat = platform_tag().ok_or(ComponentError::Unsupported)?;
-        let release = fetch_release_json(client).await?;
+        let release = super::super::fetch_github_json(client, RELEASE_API).await?;
         let empty = Vec::new();
         let assets = release["assets"].as_array().unwrap_or(&empty);
         let mut versions: Vec<String> = assets
@@ -353,7 +312,7 @@ mod install {
         progress: &(dyn Fn(u64, u64) + Send + Sync),
     ) -> Result<FfmpegStatus, ComponentError> {
         let plat = platform_tag().ok_or(ComponentError::Unsupported)?;
-        let release = fetch_release_json(client).await?;
+        let release = super::super::fetch_github_json(client, RELEASE_API).await?;
         let empty = Vec::new();
         let assets = release["assets"].as_array().unwrap_or(&empty);
 
@@ -391,10 +350,10 @@ mod install {
             "tar.xz"
         };
         let archive_path = bin_dir.join(format!("ffmpeg.download.{archive_ext}"));
-        download_to_file(client, &url, &archive_path, progress).await?;
+        super::super::download_to_file(client, &url, &archive_path, progress).await?;
 
-        // 解压出唯一需要的 `bin/ffmpeg[.exe]`。
-        let extract_result = extract_ffmpeg(&archive_path, &bin_dir).await;
+        // 解压出 `bin/ffmpeg[.exe]`（必需）+ `bin/ffprobe[.exe]`（best-effort）。
+        let extract_result = extract_binaries(&archive_path, &bin_dir).await;
         let _ = tokio::fs::remove_file(&archive_path).await;
         extract_result?;
 
@@ -421,110 +380,91 @@ mod install {
         Ok(super::ffmpeg_status(db, data_dir).await)
     }
 
-    async fn download_to_file(
-        client: &reqwest::Client,
-        url: &str,
-        dest: &Path,
-        progress: &(dyn Fn(u64, u64) + Send + Sync),
-    ) -> Result<(), ComponentError> {
-        use futures_util::StreamExt;
-        use tokio::io::AsyncWriteExt;
-
-        let resp = client
-            .get(url)
-            .header("User-Agent", "FluxDown")
-            .send()
-            .await
-            .map_err(|e| ComponentError::Http(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(ComponentError::Http(format!(
-                "download returned {}",
-                resp.status()
-            )));
-        }
-        let total = resp.content_length().unwrap_or(0);
-        let mut file = tokio::fs::File::create(dest)
-            .await
-            .map_err(|e| ComponentError::Io(e.to_string()))?;
-        let mut stream = resp.bytes_stream();
-        let mut downloaded: u64 = 0;
-        let mut last_report: u64 = 0;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| ComponentError::Http(e.to_string()))?;
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| ComponentError::Io(e.to_string()))?;
-            downloaded += chunk.len() as u64;
-            // 节流：每 256KB 上报一次，避免信号风暴。
-            if downloaded - last_report >= 256 * 1024 || downloaded == total {
-                progress(downloaded, total);
-                last_report = downloaded;
-            }
-        }
-        file.flush()
-            .await
-            .map_err(|e| ComponentError::Io(e.to_string()))?;
-        progress(downloaded, total);
-        Ok(())
-    }
-
-    /// 从归档中提取 `**/bin/ffmpeg[.exe]` 到 `bin_dir` 下的最终位置。
-    async fn extract_ffmpeg(archive: &Path, bin_dir: &Path) -> Result<(), ComponentError> {
-        let target = bin_dir.join(super::ffmpeg_binary_name());
+    /// 从归档提取 `bin/ffmpeg[.exe]`（必需）与 `bin/ffprobe[.exe]`（best-effort，
+    /// 供 yt-dlp 后处理 / 插件 `flux.ffprobe` 结构化探测用）到 `bin_dir`。
+    async fn extract_binaries(archive: &Path, bin_dir: &Path) -> Result<(), ComponentError> {
+        let ffmpeg = super::ffmpeg_binary_name();
+        let ffprobe = super::ffprobe_binary_name();
         if cfg!(windows) {
-            extract_from_zip(archive, &target).await
+            extract_from_zip(archive, bin_dir, ffmpeg, ffprobe).await
         } else {
-            extract_from_tar_xz(archive, bin_dir, &target).await
+            extract_from_tar_xz(archive, bin_dir, ffmpeg, ffprobe).await
         }
     }
 
-    /// Windows：zip crate（同步 API，spawn_blocking）。只取 ffmpeg.exe 单条目。
-    async fn extract_from_zip(archive: &Path, target: &Path) -> Result<(), ComponentError> {
+    /// Windows：zip crate（同步 API，spawn_blocking）。一次打开定位并提取 ffmpeg.exe
+    /// （必需）+ ffprobe.exe（best-effort）。
+    async fn extract_from_zip(
+        archive: &Path,
+        bin_dir: &Path,
+        ffmpeg: &str,
+        ffprobe: &str,
+    ) -> Result<(), ComponentError> {
         let archive = archive.to_path_buf();
-        let target = target.to_path_buf();
+        let ffmpeg_target = bin_dir.join(ffmpeg);
+        let ffprobe_target = bin_dir.join(ffprobe);
         tokio::task::spawn_blocking(move || -> Result<(), ComponentError> {
             let file =
                 std::fs::File::open(&archive).map_err(|e| ComponentError::Io(e.to_string()))?;
             let mut zip =
                 zip::ZipArchive::new(file).map_err(|e| ComponentError::Archive(e.to_string()))?;
-            let mut entry_index: Option<usize> = None;
+            let (mut ffmpeg_idx, mut ffprobe_idx) = (None, None);
             for i in 0..zip.len() {
                 let entry = zip
                     .by_index(i)
                     .map_err(|e| ComponentError::Archive(e.to_string()))?;
                 let name = entry.name().replace('\\', "/");
                 if name.ends_with("/bin/ffmpeg.exe") {
-                    entry_index = Some(i);
-                    break;
+                    ffmpeg_idx = Some(i);
+                } else if name.ends_with("/bin/ffprobe.exe") {
+                    ffprobe_idx = Some(i);
                 }
             }
-            let idx = entry_index.ok_or_else(|| {
+            let idx = ffmpeg_idx.ok_or_else(|| {
                 ComponentError::Archive("ffmpeg.exe not found in archive".to_string())
             })?;
-            let mut entry = zip
-                .by_index(idx)
-                .map_err(|e| ComponentError::Archive(e.to_string()))?;
-            let tmp = target.with_extension("exe.tmp");
-            let mut out =
-                std::fs::File::create(&tmp).map_err(|e| ComponentError::Io(e.to_string()))?;
-            std::io::copy(&mut entry, &mut out).map_err(|e| ComponentError::Io(e.to_string()))?;
-            drop(out);
-            std::fs::rename(&tmp, &target).map_err(|e| {
-                let _ = std::fs::remove_file(&tmp);
-                ComponentError::Io(e.to_string())
-            })?;
+            extract_zip_entry(&mut zip, idx, &ffmpeg_target)?;
+            // ffprobe best-effort：缺失/失败只记日志，不影响 ffmpeg 安装成功。
+            match ffprobe_idx {
+                Some(pi) => {
+                    if let Err(e) = extract_zip_entry(&mut zip, pi, &ffprobe_target) {
+                        crate::log_info!("[components] ffprobe extract skipped: {}", e);
+                    }
+                }
+                None => crate::log_info!("[components] ffprobe not in archive, skipped"),
+            }
             Ok(())
         })
         .await
         .map_err(|e| ComponentError::Io(format!("join error: {e}")))?
     }
 
-    /// Linux：tar.xz 经系统 `tar -xJf` 解压（tar+xz 为发行版基础组件，
-    /// 避免引入 xz2/tar crate 新依赖）。
+    /// 提取 zip 第 `idx` 条目到 `target`（tmp + rename 原子替换）。
+    fn extract_zip_entry(
+        zip: &mut zip::ZipArchive<std::fs::File>,
+        idx: usize,
+        target: &Path,
+    ) -> Result<(), ComponentError> {
+        let mut entry = zip
+            .by_index(idx)
+            .map_err(|e| ComponentError::Archive(e.to_string()))?;
+        let tmp = target.with_extension("tmp");
+        let mut out = std::fs::File::create(&tmp).map_err(|e| ComponentError::Io(e.to_string()))?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| ComponentError::Io(e.to_string()))?;
+        drop(out);
+        std::fs::rename(&tmp, target).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            ComponentError::Io(e.to_string())
+        })
+    }
+
+    /// Linux：tar.xz 经系统 `tar -xJf` 解压（tar+xz 为发行版基础组件，避免引入
+    /// xz2/tar crate 新依赖）。一次解压取 ffmpeg（必需）+ ffprobe（best-effort）。
     async fn extract_from_tar_xz(
         archive: &Path,
         bin_dir: &Path,
-        target: &Path,
+        ffmpeg: &str,
+        ffprobe: &str,
     ) -> Result<(), ComponentError> {
         let extract_dir = bin_dir.join("ffmpeg.extract.tmp");
         let _ = tokio::fs::remove_dir_all(&extract_dir).await;
@@ -550,42 +490,54 @@ mod install {
                     .collect::<String>()
             )));
         }
-        // 归档内布局：ffmpeg-nX.Y-latest-<plat>-gpl-X.Y/bin/ffmpeg
-        let found = find_ffmpeg_in(&extract_dir).await;
-        let result = match found {
-            Some(src) => {
-                match tokio::fs::rename(&src, target).await {
-                    Ok(()) => {}
-                    Err(_) => {
-                        // 跨设备 rename 失败时回退 copy。
-                        tokio::fs::copy(&src, target)
-                            .await
-                            .map_err(|e| ComponentError::Io(e.to_string()))?;
-                    }
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let perms = std::fs::Permissions::from_mode(0o755);
-                    tokio::fs::set_permissions(target, perms)
-                        .await
-                        .map_err(|e| ComponentError::Io(e.to_string()))?;
-                }
-                Ok(())
-            }
+        // 归档内布局：ffmpeg-nX.Y-latest-<plat>-gpl-X.Y/bin/{ffmpeg,ffprobe}
+        let result = match find_in_extract(&extract_dir, ffmpeg).await {
+            Some(src) => move_into_bin(&src, &bin_dir.join(ffmpeg)).await,
             None => Err(ComponentError::Archive(
                 "ffmpeg not found in archive".to_string(),
             )),
         };
+        // ffprobe best-effort。
+        if result.is_ok() {
+            match find_in_extract(&extract_dir, ffprobe).await {
+                Some(src) => {
+                    if let Err(e) = move_into_bin(&src, &bin_dir.join(ffprobe)).await {
+                        crate::log_info!("[components] ffprobe extract skipped: {}", e);
+                    }
+                }
+                None => crate::log_info!("[components] ffprobe not in archive, skipped"),
+            }
+        }
         let _ = tokio::fs::remove_dir_all(&extract_dir).await;
         result
     }
 
-    /// 在解压目录下寻找 `*/bin/ffmpeg`（两层定位，避免全量递归）。
-    async fn find_ffmpeg_in(extract_dir: &Path) -> Option<std::path::PathBuf> {
+    /// 把解压出的二进制搬到 `bin/` 目标位置并置可执行位（跨设备回退 copy）。
+    async fn move_into_bin(src: &Path, target: &Path) -> Result<(), ComponentError> {
+        match tokio::fs::rename(src, target).await {
+            Ok(()) => {}
+            Err(_) => {
+                tokio::fs::copy(src, target)
+                    .await
+                    .map_err(|e| ComponentError::Io(e.to_string()))?;
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o755);
+            tokio::fs::set_permissions(target, perms)
+                .await
+                .map_err(|e| ComponentError::Io(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// 在解压目录下寻找 `*/bin/<name>`（两层定位，避免全量递归）。
+    async fn find_in_extract(extract_dir: &Path, name: &str) -> Option<std::path::PathBuf> {
         let mut top = tokio::fs::read_dir(extract_dir).await.ok()?;
         while let Ok(Some(entry)) = top.next_entry().await {
-            let candidate = entry.path().join("bin").join("ffmpeg");
+            let candidate = entry.path().join("bin").join(name);
             if candidate.is_file() {
                 return Some(candidate);
             }
@@ -631,13 +583,81 @@ mod install {
             v.sort_by_key(|x| std::cmp::Reverse(version_key(x)));
             assert_eq!(v, vec!["8.0", "7.1", "6.1"]);
         }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn zip_extract_pulls_ffmpeg_and_ffprobe() {
+            use std::io::Write as _;
+            let dir = std::env::temp_dir().join(format!(
+                "fluxdown_zipx_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+
+            let make_zip = |path: &std::path::Path, entries: &[(&str, &[u8])]| {
+                let f = std::fs::File::create(path).unwrap();
+                let mut zw = zip::ZipWriter::new(f);
+                let opts = zip::write::SimpleFileOptions::default();
+                for (name, bytes) in entries {
+                    zw.start_file(*name, opts).unwrap();
+                    zw.write_all(bytes).unwrap();
+                }
+                zw.finish().unwrap();
+            };
+
+            // 两者齐全：ffmpeg + ffprobe 均提取，内容精确。
+            let both = dir.join("both.zip");
+            let bin1 = dir.join("bin1");
+            std::fs::create_dir_all(&bin1).unwrap();
+            make_zip(
+                &both,
+                &[
+                    ("build/bin/ffmpeg.exe", b"FFMPEG_BIN"),
+                    ("build/bin/ffprobe.exe", b"FFPROBE_BIN"),
+                ],
+            );
+            super::extract_from_zip(&both, &bin1, "ffmpeg.exe", "ffprobe.exe")
+                .await
+                .unwrap();
+            assert_eq!(std::fs::read(bin1.join("ffmpeg.exe")).unwrap(), b"FFMPEG_BIN");
+            assert_eq!(
+                std::fs::read(bin1.join("ffprobe.exe")).unwrap(),
+                b"FFPROBE_BIN"
+            );
+
+            // 只有 ffmpeg：ffprobe best-effort 缺失不报错，ffmpeg 仍提取。
+            let only = dir.join("only.zip");
+            let bin2 = dir.join("bin2");
+            std::fs::create_dir_all(&bin2).unwrap();
+            make_zip(&only, &[("build/bin/ffmpeg.exe", b"ONLY_FF")]);
+            super::extract_from_zip(&only, &bin2, "ffmpeg.exe", "ffprobe.exe")
+                .await
+                .unwrap();
+            assert!(bin2.join("ffmpeg.exe").is_file());
+            assert!(!bin2.join("ffprobe.exe").exists());
+
+            // 无 ffmpeg：必错。
+            let none = dir.join("none.zip");
+            let bin3 = dir.join("bin3");
+            std::fs::create_dir_all(&bin3).unwrap();
+            make_zip(&none, &[("build/readme.txt", b"x")]);
+            assert!(
+                super::extract_from_zip(&none, &bin3, "ffmpeg.exe", "ffprobe.exe")
+                    .await
+                    .is_err()
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::{FfmpegSource, managed_ffmpeg_path};
+    use super::managed_ffmpeg_path;
     use std::path::Path;
 
     #[test]
@@ -649,13 +669,5 @@ mod tests {
             "ffmpeg"
         };
         assert!(p.ends_with(Path::new("bin").join(expected)));
-    }
-
-    #[test]
-    fn source_wire_strings() {
-        assert_eq!(FfmpegSource::Manual.as_str(), "manual");
-        assert_eq!(FfmpegSource::Managed.as_str(), "managed");
-        assert_eq!(FfmpegSource::System.as_str(), "system");
-        assert_eq!(FfmpegSource::None.as_str(), "none");
     }
 }

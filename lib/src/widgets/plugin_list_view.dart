@@ -21,7 +21,15 @@ import 'plugin_setting_form.dart';
 class PluginListView extends StatefulWidget {
   final PluginProvider provider;
 
-  const PluginListView({super.key, required this.provider});
+  /// 安装的插件缺基础组件（ffmpeg/yt-dlp）时「前往组件设置」的跳转回调
+  /// （由设置页注入，切到组件分类）。
+  final VoidCallback? onNavigateToComponents;
+
+  const PluginListView({
+    super.key,
+    required this.provider,
+    this.onNavigateToComponents,
+  });
 
   @override
   State<PluginListView> createState() => _PluginListViewState();
@@ -78,6 +86,12 @@ class _PluginListViewState extends State<PluginListView> {
       ShadSonner.of(context).show(
         ShadToast(title: Text(message), duration: const Duration(seconds: 2)),
       );
+      // 安装成功但声明权限所需的基础组件缺失 → 弹依赖提醒（提醒式非阻断，
+      // 组件缺失时对应 flux.* 能力面 available() 为 false，插件本身可运行）。
+      if ((result.op == 'install' || result.op == 'market_install') &&
+          result.missingComponents.isNotEmpty) {
+        _showDepsReminder(result.missingComponents);
+      }
       return;
     }
     final message = switch (result.op) {
@@ -161,6 +175,46 @@ class _PluginListViewState extends State<PluginListView> {
               widget.provider.uninstall(plugin.identity);
             },
             child: Text(s.pluginUninstallTooltip),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 组件名 → 设置页展示名（与「组件」分类标题一致）。
+  String _componentDisplayName(String component) {
+    final s = currentS;
+    return switch (component) {
+      'ffmpeg' => s.componentsFfmpegTitle,
+      'ytdlp' => s.componentsYtdlpTitle,
+      _ => component,
+    };
+  }
+
+  /// 依赖组件缺失提醒：列出缺失组件，可一键跳转组件设置分类。
+  void _showDepsReminder(List<String> missing) {
+    final s = currentS;
+    final c = AppColors.of(context);
+    final names = missing.map(_componentDisplayName).join(', ');
+    showShadDialog(
+      context: context,
+      barrierColor: c.dialogBarrier,
+      animateIn: const [],
+      animateOut: const [],
+      builder: (ctx) => ShadDialog(
+        title: Text(s.pluginDepsMissingTitle),
+        description: Text(s.pluginDepsMissingBody(names)),
+        actions: [
+          ShadButton.outline(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(s.pluginDepsLater),
+          ),
+          ShadButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              widget.onNavigateToComponents?.call();
+            },
+            child: Text(s.pluginDepsGoToComponents),
           ),
         ],
       ),
@@ -397,6 +451,7 @@ class _PluginCard extends StatelessWidget {
         description: plugin.description,
         homepage: plugin.homepage,
         settingsCount: plugin.settings.length,
+        permissions: plugin.permissions,
       ),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -572,6 +627,7 @@ class _MarketCardState extends State<_MarketCard> {
         publishTime: entry.publishTime,
         minAppVersion: entry.minAppVersion,
         yankedLabel: yankedLabel,
+        permissions: entry.permissions,
       ),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,

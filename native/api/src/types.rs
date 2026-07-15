@@ -156,6 +156,7 @@ pub struct DownloadRequest {
 ///     queue_id: String::new(),
 ///     checksum: String::new(),
 ///     file_missing: false,
+///     completed_at: String::new(),
 /// };
 /// let dto = TaskDto::from(info);
 /// assert_eq!(dto.task_id, "t1");
@@ -185,6 +186,10 @@ pub struct TaskDto {
     /// 文件跟踪：completed 任务的目标文件是否已丢失（被删除/移动）。默认 false。
     #[serde(default)]
     pub file_missing: bool,
+    /// 任务结束时间，Unix 秒级时间戳（空 = 尚未完成）。
+    /// 记录下载真正完成（status→3）的时刻，不含插件 hook 后处理耗时。
+    #[serde(default)]
+    pub completed_at: String,
 }
 
 impl From<fluxdown_engine::model::TaskInfo> for TaskDto {
@@ -203,6 +208,7 @@ impl From<fluxdown_engine::model::TaskInfo> for TaskDto {
             queue_id: t.queue_id,
             checksum: t.checksum,
             file_missing: t.file_missing,
+            completed_at: t.completed_at,
         }
     }
 }
@@ -401,6 +407,9 @@ pub struct PluginDto {
     pub settings: Vec<SettingFieldDto>,
     /// 当前设置值（key → value 字符串）。
     pub settings_values: HashMap<String, String>,
+    /// manifest 声明的能力权限（如 `["ffmpeg"]`，供 UI 展示授权徽章）。
+    #[serde(default)]
+    pub permissions: Vec<String>,
 }
 
 /// 安装 dev 插件请求体。
@@ -417,9 +426,16 @@ pub struct SetPluginEnabledRequest {
 }
 
 /// 安装成功返回体。
+///
+/// `missing_components` 列出插件声明权限所需、但尚未安装的基础组件
+/// （如 `"ffmpeg"`/`"ytdlp"`，依赖表见引擎 `plugin::dependencies`）——
+/// 提醒式而非阻断式：安装本身已成功，客户端应提示用户前往组件设置安装依赖。
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct InstalledPlugin {
     pub identity: String,
+    #[serde(default)]
+    pub missing_components: Vec<String>,
 }
 
 #[cfg(feature = "plugins")]
@@ -479,6 +495,7 @@ impl From<fluxdown_engine::plugin::PluginInfo> for PluginDto {
             disabled_reason: p.disabled_reason,
             settings: p.settings.into_iter().map(SettingFieldDto::from).collect(),
             settings_values: p.settings_values.into_iter().collect(),
+            permissions: p.permissions,
         }
     }
 }
@@ -509,6 +526,9 @@ pub struct MarketEntryDto {
     pub yanked: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// manifest 声明的能力权限（如 `["ffmpeg"]`，供安装前展示授权）。
+    #[serde(default)]
+    pub permissions: Vec<String>,
 }
 
 /// 从市场安装请求体。
@@ -535,6 +555,7 @@ impl From<fluxdown_engine::plugin::MarketEntry> for MarketEntryDto {
             publish_time: e.publish_time,
             yanked: e.yanked,
             tags: e.tags,
+            permissions: e.permissions,
         }
     }
 }
@@ -686,6 +707,7 @@ mod tests {
             queue_id: String::new(),
             checksum: String::new(),
             file_missing: false,
+            completed_at: String::new(),
         };
         let v = serde_json::to_value(&dto).unwrap();
         assert_eq!(v["taskId"], "t1");

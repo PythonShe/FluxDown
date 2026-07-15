@@ -15,7 +15,7 @@
 //!   字面量 IP 前置校验与逐跳重定向校验仍然生效）。代理由用户显式配置，视为可信出口。
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +29,7 @@ use crate::proxy_config::ProxyConfig;
 
 use super::runtime::{
     BridgeHttpRequest, BridgeHttpResponse, FfmpegAvailability, FfmpegOutcome, FfmpegSpec,
-    PluginBridge, PluginError, PluginLogLevel,
+    PluginBridge, PluginError, PluginLogLevel, YtdlpAvailability, YtdlpOutcome, YtdlpSpec,
 };
 
 /// 响应体上限（超限截断 + `truncated:true`）。
@@ -60,6 +60,139 @@ const MAX_FFMPEG_ARG_LEN: usize = 8 * 1024;
 const FFMPEG_STDOUT_CAP: usize = 256 * 1024;
 /// ffmpeg stderr 回传上限（超限截断）。
 const FFMPEG_STDERR_CAP: usize = 64 * 1024;
+/// yt-dlp 单次调用默认超时（缺省 `timeoutMs` 时；提取通常数秒，下载可长）。
+const YTDLP_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+/// yt-dlp 单次调用超时上限（裁剪 `timeoutMs`）。
+const YTDLP_MAX_TIMEOUT: Duration = Duration::from_secs(3600);
+/// 全局并发 yt-dlp 进程上限。
+const MAX_CONCURRENT_YTDLP: usize = 2;
+/// yt-dlp 参数条数上限。
+const MAX_YTDLP_ARGS: usize = 512;
+/// yt-dlp 单参数字节上限。
+const MAX_YTDLP_ARG_LEN: usize = 8 * 1024;
+/// yt-dlp stdout 回传上限（`-J` 播放列表 JSON 可较大；超限截断）。
+const YTDLP_STDOUT_CAP: usize = 4 * 1024 * 1024;
+/// yt-dlp stderr 回传上限（超限截断）。
+const YTDLP_STDERR_CAP: usize = 256 * 1024;
+
+/// flux.fs 单文件字节上限。
+const MAX_FS_FILE_BYTES: usize = 8 * 1024 * 1024;
+/// flux.fs 单插件工作区顶层文件总量上限。
+const MAX_FS_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+/// flux.fs 单插件工作区顶层文件数上限。
+const MAX_FS_FILES: usize = 100;
+/// flux.fs 文件名长度上限。
+const MAX_FS_NAME_LEN: usize = 255;
+
+/// 插件工作区目录：`<data_dir>/plugins-work/<sanitized_id>/`。flux.fs 与
+/// flux.ytdlp 共用同一根（cwd 对齐），使插件经 flux.fs 物化的输入文件正好落在
+/// 工具的工作目录里。`plugin_id` 经清洗（非 `[a-z0-9_-]` → `_`）成安全目录名。
+fn plugin_workspace(data_dir: &Path, plugin_id: &str) -> PathBuf {
+    let safe_id: String = plugin_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    data_dir.join("plugins-work").join(safe_id)
+}
+
+/// flux.fs 文件名拒绝原因（`None` = 放行）。仅允许单层安全文件名：非空、
+/// ≤`MAX_FS_NAME_LEN`、无路径分隔/盘符/NUL、非 `.`/`..`。
+fn fs_name_reject_reason(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        return Some("空文件名");
+    }
+    if name.len() > MAX_FS_NAME_LEN {
+        return Some("文件名过长");
+    }
+    if name == "." || name == ".." {
+        return Some(". / .. 保留名");
+    }
+    if name.contains(['/', '\\', ':']) || name.contains('\0') {
+        return Some("含路径分隔/盘符/NUL");
+    }
+    None
+}
+
+/// 为受管外部工具（yt-dlp/ffmpeg/…）子进程补全 `PATH`，使其能发现用户/系统
+/// 安装的 JS 运行时（node/deno）等——这些常装在**用户级 PATH**（如 scoop 的
+/// `~\scoop\shims`、`~\scoop\apps\nodejs\current`）。
+///
+/// 根因：GUI 应用（尤其非从终端启动）继承的 `PATH` 常**缺失用户环境变量段**，
+/// 子进程 `Command` 默认只继承这份残缺 `PATH` → yt-dlp 找不到 node → n-sig
+/// 挑战求解失败 → 只能拿到缩略图。此处从注册表读**权威完整 PATH**
+/// （`HKLM\...\Session Manager\Environment\Path` + `HKCU\Environment\Path`），
+/// 与进程现有 `PATH` 合并去重后设回子进程——不硬编码任何具体安装目录。
+///
+/// 仅 Windows 生效；其余平台 `Command` 继承的 `PATH` 已足够，为空操作。
+#[cfg(windows)]
+fn apply_full_path_env(cmd: &mut Command) {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+    fn read_path(root: winreg::RegKey, sub: &str) -> Option<String> {
+        root.open_subkey(sub)
+            .ok()
+            .and_then(|k| k.get_value::<String, _>("Path").ok())
+            .filter(|s| !s.trim().is_empty())
+    }
+
+    // 收集：进程现有 PATH（保留其顺序优先）+ 注册表系统/用户 PATH，去重合并。
+    let mut seen = std::collections::HashSet::new();
+    let mut merged: Vec<String> = Vec::new();
+    let mut push_all = |raw: &str| {
+        for seg in raw.split(';') {
+            let seg = seg.trim();
+            if seg.is_empty() {
+                continue;
+            }
+            let key = seg.to_ascii_lowercase();
+            if seen.insert(key) {
+                merged.push(seg.to_string());
+            }
+        }
+    };
+
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    let inherited_segs = if inherited.is_empty() {
+        0
+    } else {
+        inherited
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+            .count()
+    };
+    push_all(&inherited);
+    if let Some(system) = read_path(
+        RegKey::predef(HKEY_LOCAL_MACHINE),
+        r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+    ) {
+        push_all(&system);
+    }
+    if let Some(user) = read_path(RegKey::predef(HKEY_CURRENT_USER), "Environment") {
+        push_all(&user);
+    }
+
+    // 持久化：记录补全前后段数（补入的多为用户级 PATH，如 node/deno 安装目录）。
+    log_info!(
+        "[ytdlp-env] PATH 补全: 继承 {inherited_segs} 段 → 合并 {} 段（+{} 段来自注册表）",
+        merged.len(),
+        merged.len().saturating_sub(inherited_segs)
+    );
+
+    if !merged.is_empty() {
+        cmd.env("PATH", merged.join(";"));
+    }
+}
+
+/// 非 Windows：`Command` 继承的 `PATH` 已足够，空操作。
+#[cfg(not(windows))]
+fn apply_full_path_env(_cmd: &mut Command) {}
 
 /// 唯一的「可全局路由单播」判定函数。三处复用，杜绝判定逻辑漂移。
 ///
@@ -193,6 +326,8 @@ pub struct EngineBridge {
     data_dir: PathBuf,
     /// 全局并发 ffmpeg 进程限流。
     ffmpeg_sema: Arc<Semaphore>,
+    /// 全局并发 yt-dlp 进程限流。
+    ytdlp_sema: Arc<Semaphore>,
 }
 
 impl EngineBridge {
@@ -237,6 +372,7 @@ impl EngineBridge {
             fetch_sema: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCH)),
             data_dir,
             ffmpeg_sema: Arc::new(Semaphore::new(MAX_CONCURRENT_FFMPEG)),
+            ytdlp_sema: Arc::new(Semaphore::new(MAX_CONCURRENT_YTDLP)),
         })
     }
 }
@@ -362,6 +498,110 @@ impl PluginBridge for EngineBridge {
             .map_err(|e| PluginError::Runtime(format!("storage 写入失败: {e}")))
     }
 
+    async fn fs_write(
+        &self,
+        plugin_id: &str,
+        name: &str,
+        content: String,
+    ) -> Result<(), PluginError> {
+        if let Some(r) = fs_name_reject_reason(name) {
+            return Err(PluginError::InvalidOutput(format!(
+                "flux.fs 文件名 '{name}' 非法: {r}"
+            )));
+        }
+        if content.len() > MAX_FS_FILE_BYTES {
+            return Err(PluginError::InvalidOutput(format!(
+                "flux.fs 文件超过 {MAX_FS_FILE_BYTES} 字节上限"
+            )));
+        }
+        let ws = plugin_workspace(&self.data_dir, plugin_id);
+        tokio::fs::create_dir_all(&ws)
+            .await
+            .map_err(|e| PluginError::Runtime(format!("flux.fs 创建工作区失败: {e}")))?;
+        // 容量/文件数上限：统计顶层文件（跳过 `.cache` 等子目录）。
+        let (mut count, mut total, mut existing, mut found) = (0usize, 0u64, 0u64, false);
+        if let Ok(mut rd) = tokio::fs::read_dir(&ws).await {
+            while let Ok(Some(e)) = rd.next_entry().await {
+                if e.file_type().await.map(|t| t.is_file()).unwrap_or(false) {
+                    count += 1;
+                    let sz = e.metadata().await.map(|m| m.len()).unwrap_or(0);
+                    total += sz;
+                    if e.file_name().to_string_lossy() == name {
+                        found = true;
+                        existing = sz;
+                    }
+                }
+            }
+        }
+        if !found && count >= MAX_FS_FILES {
+            return Err(PluginError::InvalidOutput(format!(
+                "flux.fs 文件数超过 {MAX_FS_FILES} 上限"
+            )));
+        }
+        if total - existing + content.len() as u64 > MAX_FS_TOTAL_BYTES {
+            return Err(PluginError::InvalidOutput(format!(
+                "flux.fs 工作区总量超过 {MAX_FS_TOTAL_BYTES} 字节上限"
+            )));
+        }
+        let path = ws.join(name);
+        tokio::fs::write(&path, content.as_bytes())
+            .await
+            .map_err(|e| PluginError::Runtime(format!("flux.fs 写入失败: {e}")))?;
+        // 敏感输入（如 cookie）尽力设 0600。
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await;
+        }
+        Ok(())
+    }
+
+    async fn fs_read(&self, plugin_id: &str, name: &str) -> Option<String> {
+        if fs_name_reject_reason(name).is_some() {
+            return None;
+        }
+        let path = plugin_workspace(&self.data_dir, plugin_id).join(name);
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => {
+                // 读上限保护：超上限截断（避免把超大文件读回 JS）。
+                let capped = if bytes.len() > MAX_FS_FILE_BYTES {
+                    &bytes[..MAX_FS_FILE_BYTES]
+                } else {
+                    &bytes[..]
+                };
+                Some(String::from_utf8_lossy(capped).into_owned())
+            }
+            Err(_) => None,
+        }
+    }
+
+    async fn fs_remove(&self, plugin_id: &str, name: &str) -> Result<(), PluginError> {
+        if let Some(r) = fs_name_reject_reason(name) {
+            return Err(PluginError::InvalidOutput(format!(
+                "flux.fs 文件名 '{name}' 非法: {r}"
+            )));
+        }
+        let path = plugin_workspace(&self.data_dir, plugin_id).join(name);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(PluginError::Runtime(format!("flux.fs 删除失败: {e}"))),
+        }
+    }
+
+    async fn fs_list(&self, plugin_id: &str) -> Vec<String> {
+        let ws = plugin_workspace(&self.data_dir, plugin_id);
+        let mut out = Vec::new();
+        if let Ok(mut rd) = tokio::fs::read_dir(&ws).await {
+            while let Ok(Some(e)) = rd.next_entry().await {
+                if e.file_type().await.map(|t| t.is_file()).unwrap_or(false) {
+                    out.push(e.file_name().to_string_lossy().into_owned());
+                }
+            }
+        }
+        out
+    }
+
     fn log(&self, plugin_id: &str, level: PluginLogLevel, message: &str) {
         let truncated = if message.len() > MAX_LOG_BYTES {
             // 按字符边界安全截断。
@@ -430,45 +670,104 @@ impl PluginBridge for EngineBridge {
         jail_root: PathBuf,
         spec: FfmpegSpec,
     ) -> Result<FfmpegOutcome, PluginError> {
-        // 1) 参数校验（封网 + 封越牢路径；近乎全量 CLI）。先于二进制解析 fail-fast。
-        if spec.args.is_empty() {
-            return Err(PluginError::InvalidOutput(
-                "ffmpeg args 不可为空".to_string(),
-            ));
-        }
-        if spec.args.len() > MAX_FFMPEG_ARGS {
-            return Err(PluginError::InvalidOutput(format!(
-                "ffmpeg 参数过多（>{MAX_FFMPEG_ARGS}）"
-            )));
-        }
-        validate_ffmpeg_args(&spec.args)?;
-
-        // 2) 生效 ffmpeg 二进制（manual→managed→system；不触网）。
+        // 生效 ffmpeg（manual→managed→system；不触网）。`-nostdin` 前置。
         let bin = crate::components::resolve_ffmpeg(&self.db, &self.data_dir)
             .await
             .ok_or_else(|| PluginError::Runtime("ffmpeg 未安装或不可用".to_string()))?;
+        run_jailed_tool(
+            &self.ffmpeg_sema,
+            "ffmpeg",
+            &bin,
+            jail_root,
+            spec,
+            &["-nostdin"],
+        )
+        .await
+    }
 
-        // 3) 工作目录：牢笼根（canonicalize 后）+ 可选安全 subdir，禁逃逸。
-        let jail = tokio::fs::canonicalize(&jail_root)
+    async fn run_ffprobe(
+        &self,
+        _plugin_id: &str,
+        jail_root: PathBuf,
+        spec: FfmpegSpec,
+    ) -> Result<FfmpegOutcome, PluginError> {
+        // 生效 ffprobe（手动 ffmpeg 同目录 / 托管 / 系统 PATH；随 ffmpeg 组件一并安装）。
+        // ffprobe 不识别 `-nostdin`，故无前置（stdin 仍置 null）。与 ffmpeg 同权限门、
+        // 同牢笼、同封网/封越牢校验（`validate_ffmpeg_args`）。
+        let bin = crate::components::resolve_ffprobe(&self.db, &self.data_dir)
             .await
-            .map_err(|e| PluginError::Runtime(format!("ffmpeg 牢笼根无效: {e}")))?;
+            .ok_or_else(|| {
+                PluginError::Runtime("ffprobe 未安装或不可用（随 ffmpeg 组件一并安装）".to_string())
+            })?;
+        run_jailed_tool(&self.ffmpeg_sema, "ffprobe", &bin, jail_root, spec, &[]).await
+    }
+
+    async fn ytdlp_available(&self) -> Option<YtdlpAvailability> {
+        let status = crate::components::ytdlp_status(&self.db, &self.data_dir).await;
+        Some(YtdlpAvailability {
+            available: !status.path.is_empty(),
+            version: status.version,
+            source: status.source.as_str().to_string(),
+        })
+    }
+
+    async fn run_ytdlp(
+        &self,
+        plugin_id: &str,
+        spec: YtdlpSpec,
+    ) -> Result<YtdlpOutcome, PluginError> {
+        // 1) 参数校验（放行 URL；封越牢路径 + 封危险开关）。先于二进制解析 fail-fast。
+        if spec.args.is_empty() {
+            return Err(PluginError::InvalidOutput(
+                "yt-dlp args 不可为空".to_string(),
+            ));
+        }
+        if spec.args.len() > MAX_YTDLP_ARGS {
+            return Err(PluginError::InvalidOutput(format!(
+                "yt-dlp 参数过多（>{MAX_YTDLP_ARGS}）"
+            )));
+        }
+        validate_ytdlp_args(&spec.args)?;
+
+        // 2) 生效 yt-dlp 二进制（manual→managed→system；不触网）。
+        let bin = crate::components::resolve_ytdlp(&self.db, &self.data_dir)
+            .await
+            .ok_or_else(|| PluginError::Runtime("yt-dlp 未安装或不可用".to_string()))?;
+
+        // yt-dlp 的合并（bestvideo+bestaudio）/抽音（-x）/remux/recode 等后处理依赖
+        // ffmpeg。托管 ffmpeg 落在 <data_dir>/bin，不在 PATH，yt-dlp 默认找不到；这里
+        // 解析生效 ffmpeg（manual→managed→system）并经 `--ffmpeg-location` 注入。插件
+        // 自带的 `--ffmpeg-location` 仍在黑名单中被拒（防指向任意二进制），宿主注入的
+        // 可信路径是唯一来源——两组件由此协同，且不放大攻击面。
+        let ffmpeg = crate::components::resolve_ffmpeg(&self.db, &self.data_dir).await;
+
+        // 3) 牢笼根：bridge 自持的每插件工作区（与 flux.fs 同根，懒创建 +
+        //    canonicalize）+ 可选安全 subdir，禁逃逸。插件经 flux.fs 物化的输入
+        //    文件（cookie/config…）正落在此 cwd，以相对名喂给 yt-dlp。
+        let root = plugin_workspace(&self.data_dir, plugin_id);
+        tokio::fs::create_dir_all(&root)
+            .await
+            .map_err(|e| PluginError::Runtime(format!("创建 yt-dlp 牢笼失败: {e}")))?;
+        let jail = tokio::fs::canonicalize(&root)
+            .await
+            .map_err(|e| PluginError::Runtime(format!("yt-dlp 牢笼根无效: {e}")))?;
         let work = match spec.subdir.as_deref() {
             Some(sub) if !sub.is_empty() => {
                 if !super::manifest::is_safe_relative_path(sub) {
                     return Err(PluginError::InvalidOutput(format!(
-                        "ffmpeg subdir '{sub}' 非法"
+                        "yt-dlp subdir '{sub}' 非法"
                     )));
                 }
                 let cand = jail.join(sub);
                 tokio::fs::create_dir_all(&cand)
                     .await
-                    .map_err(|e| PluginError::Runtime(format!("创建 ffmpeg subdir 失败: {e}")))?;
+                    .map_err(|e| PluginError::Runtime(format!("创建 yt-dlp subdir 失败: {e}")))?;
                 let real = tokio::fs::canonicalize(&cand)
                     .await
-                    .map_err(|e| PluginError::Runtime(format!("ffmpeg subdir 无效: {e}")))?;
+                    .map_err(|e| PluginError::Runtime(format!("yt-dlp subdir 无效: {e}")))?;
                 if !real.starts_with(&jail) {
                     return Err(PluginError::InvalidOutput(
-                        "ffmpeg subdir 逃逸牢笼".to_string(),
+                        "yt-dlp subdir 逃逸牢笼".to_string(),
                     ));
                 }
                 real
@@ -480,35 +779,49 @@ impl PluginBridge for EngineBridge {
         let timeout = spec
             .timeout_ms
             .map(Duration::from_millis)
-            .unwrap_or(FFMPEG_DEFAULT_TIMEOUT)
-            .min(FFMPEG_MAX_TIMEOUT);
+            .unwrap_or(YTDLP_DEFAULT_TIMEOUT)
+            .min(YTDLP_MAX_TIMEOUT);
 
         // 5) 并发限流。
         let _permit = self
-            .ffmpeg_sema
+            .ytdlp_sema
             .clone()
             .acquire_owned()
             .await
-            .map_err(|_| PluginError::Runtime("ffmpeg semaphore closed".to_string()))?;
+            .map_err(|_| PluginError::Runtime("yt-dlp semaphore closed".to_string()))?;
 
-        // 6) 启动。`-nostdin` 前置注入；stdin=null；kill_on_drop 保超时/取消时清进程。
+        // 6) 启动。`--ignore-config` 前置注入（挡 ambient 配置里的 --exec 等）；
+        //    stdin=null；kill_on_drop 保超时/取消时清进程。
         let mut cmd = Command::new(&bin);
-        cmd.current_dir(&work)
-            .arg("-nostdin")
-            .args(&spec.args)
+        apply_full_path_env(&mut cmd);
+        cmd.current_dir(&work).arg("--ignore-config");
+        if let Some(ff) = &ffmpeg {
+            cmd.arg("--ffmpeg-location").arg(ff);
+        }
+        // 缓存收进牢笼（yt-dlp 默认写 ~/.cache/yt-dlp 在牢笼外）。放牢笼根而非
+        // subdir，使同插件多次调用共享 nsig/player JS 等缓存；插件自带的
+        // `--cache-dir`（只能是牢笼内相对路径）会覆盖此默认，仍在牢笼内。
+        cmd.arg("--cache-dir").arg(jail.join(".cache"));
+        log_info!(
+            "[ytdlp-exec] plugin={} 执行: {} --ignore-config --cache-dir <jail> {}",
+            plugin_id,
+            bin.display(),
+            spec.args.join(" ")
+        );
+        cmd.args(&spec.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let child = cmd
             .spawn()
-            .map_err(|e| PluginError::Runtime(format!("启动 ffmpeg 失败: {e}")))?;
+            .map_err(|e| PluginError::Runtime(format!("启动 yt-dlp 失败: {e}")))?;
         let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
             Ok(Ok(o)) => o,
-            Ok(Err(e)) => return Err(PluginError::Runtime(format!("ffmpeg 执行失败: {e}"))),
+            Ok(Err(e)) => return Err(PluginError::Runtime(format!("yt-dlp 执行失败: {e}"))),
             Err(_) => {
                 // 超时：future 被 drop → kill_on_drop 杀子进程。
-                return Ok(FfmpegOutcome {
+                return Ok(YtdlpOutcome {
                     code: -1,
                     stdout: String::new(),
                     stderr: String::new(),
@@ -518,9 +831,23 @@ impl PluginBridge for EngineBridge {
                 });
             }
         };
-        let (stdout, truncated_stdout) = truncate_utf8(&output.stdout, FFMPEG_STDOUT_CAP);
-        let (stderr, truncated_stderr) = truncate_utf8(&output.stderr, FFMPEG_STDERR_CAP);
-        Ok(FfmpegOutcome {
+        let (stdout, truncated_stdout) = truncate_utf8(&output.stdout, YTDLP_STDOUT_CAP);
+        let (stderr, truncated_stderr) = truncate_utf8(&output.stderr, YTDLP_STDERR_CAP);
+        let code = output.status.code().unwrap_or(-1);
+        if code == 0 {
+            log_info!("[ytdlp-exec] 结果: code=0, stdout={} 字节", stdout.len());
+        } else {
+            let stderr_tail: String = {
+                let n = stderr.chars().count();
+                stderr.chars().skip(n.saturating_sub(600)).collect()
+            };
+            log_error!(
+                "[ytdlp-exec] 结果: code={code}, cwd={}, stdout={} 字节, stderr={stderr_tail}",
+                work.display(),
+                stdout.len()
+            );
+        }
+        Ok(YtdlpOutcome {
             code: output.status.code().unwrap_or(-1),
             stdout,
             stderr,
@@ -529,6 +856,112 @@ impl PluginBridge for EngineBridge {
             truncated_stderr,
         })
     }
+}
+
+/// 在牢笼内执行受管外部工具（ffmpeg / ffprobe）的共用管线：参数校验（封网 +
+/// 封越牢）→ 牢笼 canonicalize + 可选 subdir 禁逃逸 → 超时裁剪 → 全局并发限流
+/// （`ffmpeg_sema`）→ off-actor 子进程（`prefix` 前置注入、stdin=null、
+/// kill_on_drop）→ 输出按上限截断。`tool` 仅用于错误文案。
+#[allow(clippy::too_many_arguments)]
+async fn run_jailed_tool(
+    sema: &Arc<Semaphore>,
+    tool: &str,
+    bin: &Path,
+    jail_root: PathBuf,
+    spec: FfmpegSpec,
+    prefix: &[&str],
+) -> Result<FfmpegOutcome, PluginError> {
+    // 1) 参数校验（封网 + 封越牢路径；近乎全量 CLI）。
+    if spec.args.is_empty() {
+        return Err(PluginError::InvalidOutput(format!("{tool} args 不可为空")));
+    }
+    if spec.args.len() > MAX_FFMPEG_ARGS {
+        return Err(PluginError::InvalidOutput(format!(
+            "{tool} 参数过多（>{MAX_FFMPEG_ARGS}）"
+        )));
+    }
+    validate_ffmpeg_args(&spec.args)?;
+
+    // 2) 工作目录：牢笼根（canonicalize）+ 可选安全 subdir，禁逃逸。
+    let jail = tokio::fs::canonicalize(&jail_root)
+        .await
+        .map_err(|e| PluginError::Runtime(format!("{tool} 牢笼根无效: {e}")))?;
+    let work = match spec.subdir.as_deref() {
+        Some(sub) if !sub.is_empty() => {
+            if !super::manifest::is_safe_relative_path(sub) {
+                return Err(PluginError::InvalidOutput(format!(
+                    "{tool} subdir '{sub}' 非法"
+                )));
+            }
+            let cand = jail.join(sub);
+            tokio::fs::create_dir_all(&cand)
+                .await
+                .map_err(|e| PluginError::Runtime(format!("创建 {tool} subdir 失败: {e}")))?;
+            let real = tokio::fs::canonicalize(&cand)
+                .await
+                .map_err(|e| PluginError::Runtime(format!("{tool} subdir 无效: {e}")))?;
+            if !real.starts_with(&jail) {
+                return Err(PluginError::InvalidOutput(format!(
+                    "{tool} subdir 逃逸牢笼"
+                )));
+            }
+            real
+        }
+        _ => jail.clone(),
+    };
+
+    // 3) 超时（裁剪到上限）。
+    let timeout = spec
+        .timeout_ms
+        .map(Duration::from_millis)
+        .unwrap_or(FFMPEG_DEFAULT_TIMEOUT)
+        .min(FFMPEG_MAX_TIMEOUT);
+
+    // 4) 并发限流。
+    let _permit = sema
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| PluginError::Runtime(format!("{tool} semaphore closed")))?;
+
+    // 5) 启动。`prefix` 前置注入；stdin=null；kill_on_drop 保超时/取消时清进程。
+    let mut cmd = Command::new(bin);
+    apply_full_path_env(&mut cmd);
+    cmd.current_dir(&work)
+        .args(prefix)
+        .args(&spec.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let child = cmd
+        .spawn()
+        .map_err(|e| PluginError::Runtime(format!("启动 {tool} 失败: {e}")))?;
+    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return Err(PluginError::Runtime(format!("{tool} 执行失败: {e}"))),
+        Err(_) => {
+            // 超时：future 被 drop → kill_on_drop 杀子进程。
+            return Ok(FfmpegOutcome {
+                code: -1,
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: true,
+                truncated_stdout: false,
+                truncated_stderr: false,
+            });
+        }
+    };
+    let (stdout, truncated_stdout) = truncate_utf8(&output.stdout, FFMPEG_STDOUT_CAP);
+    let (stderr, truncated_stderr) = truncate_utf8(&output.stderr, FFMPEG_STDERR_CAP);
+    Ok(FfmpegOutcome {
+        code: output.status.code().unwrap_or(-1),
+        stdout,
+        stderr,
+        timed_out: false,
+        truncated_stdout,
+        truncated_stderr,
+    })
 }
 
 /// 校验 ffmpeg 参数：仅封堵网络协议与越牢路径引用，其余（滤镜/编码器/复用器
@@ -605,10 +1038,87 @@ fn truncate_utf8(bytes: &[u8], cap: usize) -> (String, bool) {
     (s[..end].to_string(), true)
 }
 
+/// 会执行外部程序 / 加载任意配置或插件 / 读浏览器凭据的 yt-dlp 开关黑名单
+/// （突破沙箱边界，一律拒绝）。
+const YTDLP_BLOCKED_FLAGS: [&str; 13] = [
+    "--exec",
+    "--exec-before-download",
+    "--downloader",
+    "--external-downloader",
+    "--config-location",
+    "--config-locations",
+    "--plugin-dirs",
+    "--ffmpeg-location",
+    "--batch-file",
+    "-a",
+    "--load-info-json",
+    "--load-info",
+    "--cookies-from-browser",
+];
+
+/// 校验 yt-dlp 参数：放行 URL（yt-dlp 本职），封越牢文件路径 + 封会执行外部
+/// 程序 / 加载任意配置或插件的开关。
+fn validate_ytdlp_args(args: &[String]) -> Result<(), PluginError> {
+    for a in args {
+        if a.len() > MAX_YTDLP_ARG_LEN {
+            return Err(PluginError::InvalidOutput("yt-dlp 参数过长".to_string()));
+        }
+        if a.contains('\0') {
+            return Err(PluginError::InvalidOutput("yt-dlp 参数含 NUL".to_string()));
+        }
+        if let Some(reason) = ytdlp_arg_reject_reason(a) {
+            return Err(PluginError::InvalidOutput(format!(
+                "yt-dlp 参数 '{a}' 被拒: {reason}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 单参数拒绝原因（`None` = 放行）。放行网络 URL；拒绝 `file:` 本地方案、危险
+/// 开关、绝对路径 / 盘符 / `..` / 内嵌绝对路径（`type:/abs` 形式的 `--paths`）。
+fn ytdlp_arg_reject_reason(a: &str) -> Option<&'static str> {
+    // 危险开关（含 `--flag=value` 形式，取 `=` 前的 flag 部分比较）。
+    let flag = a.split('=').next().unwrap_or(a);
+    if YTDLP_BLOCKED_FLAGS.contains(&flag) {
+        return Some("危险开关");
+    }
+    // file: 本地方案拒绝；其余 URL（http/https/ftp/rtmp/…）放行——yt-dlp 本职。
+    if a.to_ascii_lowercase().starts_with("file:") {
+        return Some("file: 本地方案");
+    }
+    if a.contains("://") {
+        return None;
+    }
+    // 非 URL：按路径校验。绝对路径 / 分隔符开头。
+    if a.starts_with('/') || a.starts_with('\\') {
+        return Some("绝对路径");
+    }
+    // Windows 盘符：`X:` 结尾或 `X:/`、`X:\`（不误伤含单字符前缀的普通值如 `A:b`）。
+    let b = a.as_bytes();
+    if b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || b[2] == b'/' || b[2] == b'\\')
+    {
+        return Some("盘符路径");
+    }
+    // `..` 路径段（含内嵌 `foo/../bar`）。
+    if a.split(['/', '\\']).any(|seg| seg == "..") {
+        return Some(".. 越级");
+    }
+    // 选项值内嵌的绝对路径（如 `--paths home:/abs`、`temp:C\:\x`）。
+    if a.contains(":/") || a.contains(":\\") {
+        return Some("内嵌绝对路径");
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         arg_reject_reason, is_globally_routable_unicast, truncate_utf8, validate_ffmpeg_args,
+        validate_ytdlp_args, ytdlp_arg_reject_reason,
     };
     use std::net::IpAddr;
 
@@ -682,6 +1192,77 @@ mod tests {
         assert!(validate_ffmpeg_args(&["ok.mp4".into()]).is_ok());
         assert!(validate_ffmpeg_args(&["bad\0name".into()]).is_err());
         assert!(validate_ffmpeg_args(&["/abs".into()]).is_err());
+    }
+
+    #[test]
+    fn ytdlp_args_accept_urls_and_relative() {
+        // URL（本职）、相对输出模板、格式选择器、含冒号的头部/路径类型前缀，均放行。
+        for a in [
+            "-J",
+            "--no-warnings",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "http://example.com/a?x=1&y=2",
+            "-f",
+            "bestvideo+bestaudio/best",
+            "-o",
+            "%(title)s.%(ext)s",
+            "--paths",
+            "temp:sub",
+            "--add-header",
+            "Referer:https://site.example/",
+            "--add-header",
+            "A:b",
+            "--download-sections",
+            "*00:01:00-00:02:00",
+            "--merge-output-format",
+            "mp4",
+        ] {
+            assert!(
+                ytdlp_arg_reject_reason(a).is_none(),
+                "'{a}' should be accepted, got {:?}",
+                ytdlp_arg_reject_reason(a)
+            );
+        }
+    }
+
+    #[test]
+    fn ytdlp_args_reject_dangerous_flags_and_escape() {
+        // 危险开关（执行外部程序/加载配置或插件/读浏览器凭据）+ 越牢路径，逐一拒绝。
+        for a in [
+            "--exec",
+            "--exec=rm -rf x",
+            "--exec-before-download",
+            "-a",
+            "--batch-file",
+            "--downloader",
+            "--external-downloader",
+            "--config-location",
+            "--config-locations",
+            "--plugin-dirs",
+            "--ffmpeg-location",
+            "--load-info-json",
+            "--load-info",
+            "--cookies-from-browser",
+            "/etc/passwd",
+            "\\\\server\\share",
+            "C:\\Windows\\system32",
+            "../secret",
+            "a/../../b",
+            "file:///etc/passwd",
+            "home:/abs/dir",
+        ] {
+            assert!(
+                ytdlp_arg_reject_reason(a).is_some(),
+                "'{a}' should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn ytdlp_validate_rejects_nul_and_reports() {
+        assert!(validate_ytdlp_args(&["-J".into(), "https://x/y".into()]).is_ok());
+        assert!(validate_ytdlp_args(&["bad\0name".into()]).is_err());
+        assert!(validate_ytdlp_args(&["--exec".into()]).is_err());
     }
 
     #[test]
