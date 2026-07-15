@@ -128,6 +128,8 @@
     "detail.url": "下载链接",
     "detail.savePath": "保存路径",
     "detail.createdAt": "创建时间",
+    "detail.completedAt": "完成时间",
+    "detail.duration": "耗时",
     "detail.status": "状态",
     "detail.defaultQueue": "默认队列",
     "detail.currentQueue": "当前队列",

@@ -201,6 +201,7 @@ function dispatch(msg: WsServerMsg) {
           // 新任务（其他客户端/aria2 创建）→ 拉全量。
           void qc.invalidateQueries({ queryKey: ['tasks'] })
         } else {
+          const prev = tasks.find((t) => t.taskId === taskId)
           qc.setQueryData<TaskDto[]>(['tasks'], (old) =>
             old?.map((t) =>
               t.taskId === taskId
@@ -215,6 +216,10 @@ function dispatch(msg: WsServerMsg) {
                 : t,
             ),
           )
+          // 完成瞬间跃迁：REST 缓存无 completedAt（WS 进度不含该字段），拉一次全量补齐完成时间/耗时。
+          if (live.status === 3 && prev && prev.status !== 3) {
+            void qc.invalidateQueries({ queryKey: ['tasks'] })
+          }
         }
       }
       break

@@ -7,7 +7,7 @@ import { Ban, Download, ListOrdered, Trash2, X, Zap } from 'lucide-react'
 import { api, taskFileUrl } from '../../lib/api'
 import { CopyButton } from '../CopyButton'
 import { cn } from '../../lib/cn'
-import { fmtBytes, fmtEta, fmtSpeed, fmtTime, protoLabel } from '../../lib/format'
+import { fmtBytes, fmtDuration, fmtEta, fmtSpeed, fmtTime, protoLabel } from '../../lib/format'
 import { t as i18nT, translateBackendMessage, useI18n } from '../../lib/i18n'
 import { segmentStore, splitStore, useStore } from '../../lib/ws'
 import { confirmDialog } from '../../lib/confirm'
@@ -165,6 +165,12 @@ function GeneralTab({ t, queues }: { t: ViewTask; queues: QueueDto[] }) {
       <DField label={tr('detail.savePath')} value={`${t.saveDir}/${t.fileName}`} />
       <DField label={tr('detail.protoQueue')} value={`${protoLabel(t.url)} · ${queueName}`} />
       <DField label={tr('detail.createdAt')} value={fmtTime(t.createdAt)} />
+      {t.status === 3 && t.completedAt ? (
+        <>
+          <DField label={tr('detail.completedAt')} value={fmtTime(t.completedAt)} />
+          <DField label={tr('detail.duration')} value={fmtDuration(t.createdAt, t.completedAt)} />
+        </>
+      ) : null}
       {t.status === 4 && t.errorMessage ? (
         <DField label={tr('detail.error')} value={translateBackendMessage(t.errorMessage)} copy />
       ) : null}

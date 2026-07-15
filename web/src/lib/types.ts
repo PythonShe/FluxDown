@@ -19,6 +19,8 @@ export interface TaskDto {
   checksum: string
   /** 文件跟踪：completed 任务的目标文件是否已丢失（被删除/移动）。默认 false */
   fileMissing?: boolean
+  /** Unix 秒时间戳（字符串），任务完成时刻；未完成为空串 */
+  completedAt?: string
 }
 
 export interface QueueDto {

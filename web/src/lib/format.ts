@@ -34,6 +34,18 @@ export function fmtTime(unixSecs: string | number): string {
   return new Date(n * 1000).toLocaleString(getLocale() === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })
 }
 
+/** 任务耗时（开始→完成）：`23s` / `3m05s` / `1h02m03s`。无效输入返回 '—'。 */
+export function fmtDuration(startSecs: string | number, endSecs: string | number): string {
+  const a = typeof startSecs === 'string' ? parseInt(startSecs, 10) : startSecs
+  const b = typeof endSecs === 'string' ? parseInt(endSecs, 10) : endSecs
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) return '—'
+  const s = Math.max(0, b - a)
+  const pad = (v: number) => v.toString().padStart(2, '0')
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m${pad(s % 60)}s`
+  return `${Math.floor(s / 3600)}h${pad(Math.floor((s % 3600) / 60))}m${pad(s % 60)}s`
+}
+
 // ---- 时间分组（今天/昨天/本周/本月/更早，对齐桌面端） ----
 
 export type TimeGroup = 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'older'

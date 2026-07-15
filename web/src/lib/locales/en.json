@@ -128,6 +128,8 @@
     "detail.url": "URL",
     "detail.savePath": "Save path",
     "detail.createdAt": "Created",
+    "detail.completedAt": "Completed",
+    "detail.duration": "Duration",
     "detail.status": "Status",
     "detail.defaultQueue": "Default queue",
     "detail.currentQueue": "Current queue",
