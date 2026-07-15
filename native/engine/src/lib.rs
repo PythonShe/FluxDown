@@ -22,6 +22,7 @@ pub mod model;
 /// 插件系统（可选、可失败的下载中间层）。仅 `plugins` feature 下编译。
 #[cfg(feature = "plugins")]
 pub mod plugin;
+mod proc;
 pub mod proxy_config;
 pub mod segment_advisor;
 pub mod segment_coordinator;

@@ -123,7 +123,9 @@ pub async fn resolve_ytdlp(db: &Db, data_dir: &Path) -> Option<PathBuf> {
 
 /// 运行 `<path> --version` 解析版本串（yt-dlp 首行即版本，如 `2026.07.04`）。
 pub async fn probe_ytdlp_version(path: &Path) -> Option<String> {
-    let output = tokio::process::Command::new(path)
+    let mut cmd = tokio::process::Command::new(path);
+    crate::proc::no_console_window(&mut cmd);
+    let output = cmd
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .output()

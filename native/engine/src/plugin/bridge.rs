@@ -794,6 +794,7 @@ impl PluginBridge for EngineBridge {
         //    stdin=null；kill_on_drop 保超时/取消时清进程。
         let mut cmd = Command::new(&bin);
         apply_full_path_env(&mut cmd);
+        crate::proc::no_console_window(&mut cmd);
         cmd.current_dir(&work).arg("--ignore-config");
         if let Some(ff) = &ffmpeg {
             cmd.arg("--ffmpeg-location").arg(ff);
@@ -927,6 +928,7 @@ async fn run_jailed_tool(
     // 5) 启动。`prefix` 前置注入；stdin=null；kill_on_drop 保超时/取消时清进程。
     let mut cmd = Command::new(bin);
     apply_full_path_env(&mut cmd);
+    crate::proc::no_console_window(&mut cmd);
     cmd.current_dir(&work)
         .args(prefix)
         .args(&spec.args)

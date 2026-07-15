@@ -147,7 +147,9 @@ pub async fn resolve_ffprobe(db: &Db, data_dir: &Path) -> Option<PathBuf> {
 
 /// 运行 `<path> -version` 解析版本串（如 `7.1` / `n7.1-...` 原样 token）。
 pub async fn probe_version(path: &Path) -> Option<String> {
-    let output = tokio::process::Command::new(path)
+    let mut cmd = tokio::process::Command::new(path);
+    crate::proc::no_console_window(&mut cmd);
+    let output = cmd
         .arg("-version")
         .stdin(std::process::Stdio::null())
         .output()
@@ -471,7 +473,9 @@ mod install {
         tokio::fs::create_dir_all(&extract_dir)
             .await
             .map_err(|e| ComponentError::Io(e.to_string()))?;
-        let output = tokio::process::Command::new("tar")
+        let mut cmd = tokio::process::Command::new("tar");
+        crate::proc::no_console_window(&mut cmd);
+        let output = cmd
             .arg("-xJf")
             .arg(archive)
             .arg("-C")

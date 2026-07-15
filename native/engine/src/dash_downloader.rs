@@ -197,7 +197,9 @@ async fn mux_audio_video(
     // Spawn ffmpeg with -c copy (stream copy, no re-encoding).
     // `.kill_on_drop(true)` ensures if we're cancelled (select! drops the
     // future), the child process is killed automatically.
-    let output_fut = Command::new(ffmpeg)
+    let mut cmd = Command::new(ffmpeg);
+    crate::proc::no_console_window(&mut cmd);
+    let output_fut = cmd
         .args([
             "-y", // overwrite output without asking
             "-i",
