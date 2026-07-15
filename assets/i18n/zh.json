@@ -732,7 +732,7 @@
     "pluginDepsLater": "稍后",
 
     "marketSectionTitle": "插件市场",
-    "marketSectionDesc": "从去中心化镜像浏览并安装社区插件",
+    "marketSectionDesc": "浏览并安装社区插件",
     "marketEmpty": "暂无可用插件",
     "marketLoadFailed": "加载市场失败：{message}",
     "marketInstallButton": "安装",

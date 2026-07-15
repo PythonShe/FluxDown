@@ -53,7 +53,7 @@ Open **Settings → Plugins** in the desktop app. Three ways in:
 
 - **Zip upload** — a `.fxplug` file (which is just a zip of the plugin folder, see [Packaging](/docs/en/plugins/packaging/)).
 - **From a directory** — point at a local folder containing `manifest.json`. With **dev mode** on (the default for directory installs), FluxDown records the folder path instead of copying it, and re-reads your `.js` files on every invocation — edit, save, re-run, no reinstall. Manifest changes still require a reload (toggle the plugin off and on).
-- **Plugin market** — browse and install published plugins from the decentralized index.
+- **Plugin market** — browse and install published plugins straight from the in-app market.
 
 Installed plugins live under `<data dir>/plugins/<identity>/`. New installs are enabled by default.
 

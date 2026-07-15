@@ -1,6 +1,6 @@
 ---
 title: Packaging & Plugin Market
-description: The .fxplug format, install safety limits, and publishing to the decentralized index.
+description: The .fxplug format, install safety limits, and publishing to the plugin index.
 section: plugins
 order: 5
 ---
@@ -34,7 +34,7 @@ The plugin is extracted to `<data dir>/plugins/<identity>/`. Installing the same
 
 ## The plugin market
 
-FluxDown's market is decentralized: it is **a data format, not a service**. The pieces:
+FluxDown's market is **a data format, not a service** — an index the app reads directly, with no backend and no account. The pieces:
 
 - **An index** — a Git-versioned JSON file listing plugins, versions and download mirrors. The default index lives at `zerx-lab/fluxdown-plugin-index` on GitHub; anyone can fork it and run their own. Users can add custom index sources in the app.
 - **Content addressing** — every published version records `contentHash = sha256(<the .fxplug file>)`. After downloading from any mirror, FluxDown recomputes the hash and rejects a mismatch. A compromised mirror cannot swap the payload.

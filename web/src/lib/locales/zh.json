@@ -361,7 +361,7 @@
     "plugins.autoDisabledTitle": "插件已自动禁用",
     "plugins.autoDisabledMsg": "插件「{name}」因多次失败已被自动禁用（熔断）。",
     "market.title": "插件市场",
-    "market.desc": "浏览并安装来自去中心化插件索引的插件",
+    "market.desc": "浏览并安装社区插件",
     "market.empty": "市场暂无可用插件",
     "market.loadFailed": "插件市场加载失败",
     "market.install": "安装",

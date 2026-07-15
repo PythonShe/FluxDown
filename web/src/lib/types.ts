@@ -289,7 +289,7 @@ export interface InstalledPlugin {
   missingComponents?: string[]
 }
 
-/** 去中心化插件市场索引条目（浏览/安装用）。yanked 值域：none/deprecated/vulnerable/malicious。 */
+/** 插件市场索引条目（浏览/安装用）。yanked 值域：none/deprecated/vulnerable/malicious。 */
 export interface MarketEntry {
   pluginId: string
   version: string

@@ -6,7 +6,7 @@ import 'package:rinf/rinf.dart';
 import '../bindings/bindings.dart';
 import '../services/log_service.dart';
 
-/// 插件系统状态（已安装列表 + 去中心化市场索引）。
+/// 插件系统状态（已安装列表 + 插件市场索引）。
 ///
 /// 复刻 [SettingsProvider] 的 ChangeNotifier + rinf 信号订阅模式：构造时
 /// 建立信号订阅，`requestPlugins()`/`requestMarket()` 主动拉取，写操作
@@ -183,7 +183,7 @@ class PluginProvider extends ChangeNotifier {
     IgnorePluginRetry(taskId: taskId).sendSignalToRust();
   }
 
-  /// 请求去中心化插件市场索引（进入市场区域时调用）。
+  /// 请求插件市场索引（进入市场区域时调用）。
   void requestMarket() {
     logInfo('Plugin', 'requestMarket');
     _marketLoading = true;

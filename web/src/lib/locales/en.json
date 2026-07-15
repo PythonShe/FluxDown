@@ -361,7 +361,7 @@
     "plugins.autoDisabledTitle": "Plugin disabled automatically",
     "plugins.autoDisabledMsg": "Plugin \"{name}\" was disabled automatically after repeated failures (circuit breaker).",
     "market.title": "Plugin market",
-    "market.desc": "Browse and install plugins from the decentralized plugin index",
+    "market.desc": "Browse and install community plugins",
     "market.empty": "No plugins available in the market",
     "market.loadFailed": "Failed to load the plugin market",
     "market.install": "Install",

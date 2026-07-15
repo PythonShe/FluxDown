@@ -732,7 +732,7 @@
     "pluginDepsLater": "Later",
 
     "marketSectionTitle": "Plugin Market",
-    "marketSectionDesc": "Browse and install community plugins from decentralized mirrors",
+    "marketSectionDesc": "Browse and install community plugins",
     "marketEmpty": "No plugins available",
     "marketLoadFailed": "Failed to load market: {message}",
     "marketInstallButton": "Install",

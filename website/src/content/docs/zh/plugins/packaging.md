@@ -1,9 +1,9 @@
 ---
 title: 打包与插件市场
-description: .fxplug 格式、安装时的安全限制、发布到去中心化索引。
+description: .fxplug 格式、安装时的安全限制、发布到插件索引。
 section: plugins
 order: 5
-sourceHash: "06abfb7c9309"
+sourceHash: "70f54c9ba733"
 ---
 
 ## `.fxplug` 格式
@@ -35,7 +35,7 @@ my-plugin.fxplug          my-plugin.fxplug
 
 ## 插件市场
 
-FluxDown 的市场是去中心化的：它是**一份数据格式，不是一个服务**。组成部分：
+FluxDown 的市场是**一份数据格式，不是一个服务**——一份应用直接读取的索引，无后端、无账号。组成部分：
 
 - **索引**——一份 Git 版本化的 JSON 文件，列出插件、版本和下载镜像。默认索引在 GitHub 的 `zerx-lab/fluxdown-plugin-index` 仓库；任何人都可以 fork 一份自己维护。用户可以在应用里添加自定义索引源。
 - **内容寻址**——每个发布版本都记录 `contentHash = sha256(整个 .fxplug 文件)`。从任何镜像下载后，FluxDown 重新计算哈希，不一致就拒绝。被攻破的镜像换不掉内容。

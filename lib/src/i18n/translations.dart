@@ -1051,7 +1051,7 @@ class S {
   String get pluginDepsLater => _r('pluginDepsLater');
 
   // ─────────────────────────────────────────────
-  // 插件系统 — 去中心化市场
+  // 插件系统 — 插件市场
   // ─────────────────────────────────────────────
   String get marketSectionTitle => _r('marketSectionTitle');
   String get marketSectionDesc => _r('marketSectionDesc');

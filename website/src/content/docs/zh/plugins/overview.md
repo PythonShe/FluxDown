@@ -3,7 +3,7 @@ title: 插件系统概览
 description: FluxDown 插件是什么、能做什么、怎么运行、怎么安装。
 section: plugins
 order: 1
-sourceHash: "0c050e57af5f"
+sourceHash: "afe56e1c44a5"
 ---
 
 FluxDown 插件是挂进下载流程的小段 JavaScript 程序。一个插件就是一个文件夹：一份 `manifest.json` 加一两个 `.js` 文件——不需要构建工具，不需要 npm，不需要任何框架。
@@ -54,7 +54,7 @@ hooks 是纯通知，发出后不管结果：
 
 - **上传 zip**——一个 `.fxplug` 文件（就是插件文件夹打的 zip，见[打包与市场](/docs/zh/plugins/packaging/)）。
 - **从目录安装**——指向一个含 `manifest.json` 的本地文件夹。打开**开发模式**开关（目录安装默认开启）时，FluxDown 只记录文件夹路径、不拷贝，且每次调用都重新读你的 `.js` 文件——改完存盘直接生效，不用重装。改 manifest 仍需重新加载（把插件关掉再打开）。
-- **插件市场**——浏览并安装去中心化索引里发布的插件。
+- **插件市场**——在应用内浏览并一键安装已发布的插件。
 
 已安装的插件放在 `<数据目录>/plugins/<identity>/` 下。新装的插件默认启用。
 
