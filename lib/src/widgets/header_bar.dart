@@ -249,12 +249,9 @@ class HeaderBarState extends State<HeaderBar> {
         decoration: BoxDecoration(
           color: c.surface1,
           border: Border(
-            // 顶部系统边线仅 Windows 补齐：自定义 titlebar 去掉 WS_CAPTION 后
-            // DWM 不再绘制顶部 1px 边线（左/右/下由 WS_THICKFRAME 提供）。
-            // macOS traffic light / Linux 各有原生边框行为，不加以免不一致。
-            top: Platform.isWindows
-                ? BorderSide(color: c.border, width: 1)
-                : BorderSide.none,
+            // 顶部 1px 边线由原生层绘制（Windows: DWM，见 flutter_window.cpp
+            // 的 WM_NCCALCSIZE 保留 1px 非客户区；macOS/Linux 原生框架自带），
+            // 保证四边全宽一致，不再逐 widget 模拟（模拟只覆盖 HeaderBar 中段）。
             bottom: BorderSide(color: c.border, width: 1),
           ),
         ),

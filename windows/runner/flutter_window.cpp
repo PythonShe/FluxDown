@@ -19,31 +19,6 @@ namespace {
 // window (set when subclassing for top-edge hit-test forwarding).
 constexpr const wchar_t kChildOriginalProcProp[] = L"FluxDownChildProc";
 
-// SDK 的 VersionHelpers 无 Win11 判定；经 RtlGetVersion 读真实
-// build 号（不受兼容性清单影响），build >= 22000 即 Windows 11。
-bool IsWindows11OrLater() {
-  using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
-  static const bool is_win11 = [] {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (!ntdll) {
-      return false;
-    }
-    auto rtl_get_version = reinterpret_cast<RtlGetVersionFn>(
-        GetProcAddress(ntdll, "RtlGetVersion"));
-    if (!rtl_get_version) {
-      return false;
-    }
-    RTL_OSVERSIONINFOW info{};
-    info.dwOSVersionInfoSize = sizeof(info);
-    if (rtl_get_version(&info) != 0) {
-      return false;
-    }
-    return info.dwMajorVersion > 10 ||
-           (info.dwMajorVersion == 10 && info.dwBuildNumber >= 22000);
-  }();
-  return is_win11;
-}
-
 // True while the custom frame is active: WS_THICKFRAME present, not
 // maximized (fullscreen strips the resize frame).
 bool IsCustomFrameNormalState(HWND hwnd) {
@@ -306,17 +281,19 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   // 窗口样式已去掉 WS_CAPTION（见 win32_window.cpp）。此处必须先于插件的
   // HandleTopLevelWindowProc 拦截 WM_NCCALCSIZE：window_manager 在
   // TitleBarStyle.hidden 下会自行改写 rgrc 抹掉侧边框架（黑边/无边框的
-  // 根源）。交给 DefWindowProc 计算得到左/右/下标准框架后，把顶部 ~8px
-  // 框架带还给客户区——无标题栏窗口的顶部框架带是可见非客户区，不还原
-  // 会多出一条空白。顶部边框线：Win11 由 DWM 自动绘制；Win10 保留 1px
-  // 非客户区让 DWM 画出顶边线，保证四边边框一致。
+  // 根源）。交给 DefWindowProc 计算得到左/右/下标准框架后，把顶部框架带
+  // 还给客户区，但**保留 1px 非客户区**——无标题栏窗口默认由 DWM 绘制
+  // 顶边线，但只有当顶部仍存在非客户区带时 DWM 才会画满整条（含圆角）。
+  // Win11 若把整条顶带（+0）都还给客户区，DWM 便不再绘制顶边线，导致
+  // 只能靠 Dart 逐 widget 模拟补线（仅覆盖 HeaderBar 中段，侧边栏/右侧
+  // 缺失）。故 Win10/Win11 一律保留 1px，让 DWM 画出全宽一致的顶边框。
   // 最大化/全屏仍交给插件调整（否则内容会被屏幕边缘裁掉）。
   if (message == WM_NCCALCSIZE && wparam == TRUE &&
       IsCustomFrameNormalState(hwnd)) {
     auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam);
     const LONG original_top = params->rgrc[0].top;
     DefWindowProc(hwnd, message, wparam, lparam);
-    params->rgrc[0].top = original_top + (IsWindows11OrLater() ? 0 : 1);
+    params->rgrc[0].top = original_top + 1;
     return 0;
   }
 
