@@ -41,7 +41,7 @@ export function AboutSettings({
       <p className="set-desc">FluxDown Server — Downloads, Supercharged.</p>
       <div className="set-group">
         <SetRow title={t('set.about.version')}>
-          <span className="set-value">{isLoading ? t('common.loading') : info ? `${info.app} ${info.version}` : '—'}</span>
+          <span className="set-value">{isLoading ? t('common.loading') : info ? `${info.name} ${info.version}` : '—'}</span>
         </SetRow>
         <SetRow title={t('set.about.channel')} desc={t('set.about.channelDesc')}>
           <SetSelect

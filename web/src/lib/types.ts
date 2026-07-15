@@ -53,7 +53,7 @@ export interface CreatedTask {
 }
 
 export interface ApiInfo {
-  app: string
+  name: string
   version: string
 }
 

@@ -35,18 +35,15 @@ use crate::routes_ext::{ServerState, extra_router};
 use crate::ws_hub::{EngineEventSink, WsHostSelection, WsHub};
 
 /// 服务器版本。发布流水线在编译期经 `FLUXDOWN_SERVER_VERSION` 注入 git tag
-/// 版本号（crate 版本不随发布演进，直接用会显示错误的 `0.1.0`）；
-/// 未注入或为空（本地开发构建）时退回 crate 版本。
+/// 版本号；本地开发构建（`cargo run` 未注入）时固定显示 `dev`，
+/// 而非 crate 版本号（crate 版本不随发布演进，直接显示无意义）。
+/// web 端据此跳过更新检测（`dev` 视为无版本，永不判定"有新版本"）。
 pub(crate) const SERVER_VERSION: &str = {
     let injected = match option_env!("FLUXDOWN_SERVER_VERSION") {
         Some(v) => v,
         None => "",
     };
-    if injected.is_empty() {
-        env!("CARGO_PKG_VERSION")
-    } else {
-        injected
-    }
+    if injected.is_empty() { "dev" } else { injected }
 };
 
 #[tokio::main]

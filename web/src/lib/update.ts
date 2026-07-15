@@ -93,9 +93,13 @@ async function fetchLatestServerRelease(frontier: boolean): Promise<LatestServer
   return m ? { version: m[1], url: best.html_url } : null
 }
 
-/** 启动后自动检测新版本；结果全会话缓存，失败静默。 */
+/** 启动后自动检测新版本；结果全会话缓存，失败静默。dev 构建（本地 `cargo run`，
+ * 未经发布流水线注入版本号）跳过检测——`dev` 不是可比较的版本号，且本地开发
+ * 无需被打扰更新提示。 */
 export function useUpdateCheck(): UpdateState {
   const { data: info } = useQuery({ queryKey: ['info'], queryFn: api.info })
+  const current = info?.version ?? null
+  const isDev = current === 'dev'
   // 复用设置页的 config 查询键，切换渠道（web_update_channel）后自动重取。
   const { data: config } = useQuery({
     queryKey: ['config'],
@@ -109,13 +113,13 @@ export function useUpdateCheck(): UpdateState {
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: Number.POSITIVE_INFINITY,
     retry: 1,
+    enabled: !isDev,
   })
 
-  const current = info?.version ?? null
   return {
     current,
-    latest: latest?.version ?? null,
-    releaseUrl: latest?.url ?? null,
-    hasUpdate: current != null && latest != null && cmpVersion(latest.version, current) > 0,
+    latest: isDev ? null : (latest?.version ?? null),
+    releaseUrl: isDev ? null : (latest?.url ?? null),
+    hasUpdate: !isDev && current != null && latest != null && cmpVersion(latest.version, current) > 0,
   }
 }
