@@ -7,6 +7,7 @@ import '../services/open_folder.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_metrics.dart';
 import 'context_menu.dart';
+import 'edit_threads_dialog.dart';
 import 'task_list_item.dart';
 
 class TaskList extends StatefulWidget {
@@ -198,6 +199,11 @@ class _TaskListState extends State<TaskList> {
                             .deleteTask(task.id, deleteFiles: deleteFiles),
                     isPriority: widget.controller.priorityTaskId == task.id,
                     onBoost: () => widget.controller.setPriorityTask(task.id),
+                    onEditThreads: () => showEditThreadsDialog(
+                      context,
+                      widget.controller,
+                      task,
+                    ),
                     isPluginProcessing: widget.controller.isPluginProcessing(
                       task.id,
                     ),

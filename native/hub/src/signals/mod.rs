@@ -99,6 +99,24 @@ pub struct ControlTask {
     pub action: i32, // 0=pause, 1=resume, 2=cancel, 3=delete(+files), 4=delete(record only)
 }
 
+/// 修改某个已存在任务的分段（线程）数（Dart → Rust）。
+/// 仅在任务处于非活跃态（暂停/错误/等待）时生效；改动会清空已下进度，
+/// 下次恢复时按新分段数重新下载。`segments <= 0` = 恢复为「自动」。
+#[derive(Deserialize, DartSignal)]
+pub struct UpdateTaskSegments {
+    pub task_id: String,
+    pub segments: i32,
+}
+
+/// 分段数修改结果（Rust → Dart）。`ok = false` 表示任务正在下载/准备中/
+/// 已完成而被拒绝，Dart 侧据此提示用户先暂停。
+#[derive(Serialize, RustSignal)]
+pub struct TaskSegmentsUpdated {
+    pub task_id: String,
+    pub segments: i32,
+    pub ok: bool,
+}
+
 /// Batch control multiple tasks at once (pause/resume/delete).
 /// Replaces N individual ControlTask IPC calls with a single signal.
 #[derive(Deserialize, DartSignal)]
@@ -282,6 +300,9 @@ pub struct TaskInfo {
     /// 记录下载真正完成（status→3）的时刻，不含插件 hook 后处理耗时。
     #[serde(default)]
     pub completed_at: String,
+    /// 配置的分段（线程）数。0 = 自动。供 UI 展示与「改线程数」编辑。
+    #[serde(default)]
+    pub segments: i32,
 }
 
 /// 文件跟踪：一批已完成任务的「文件已丢失」标志变化（Rust → Dart）。

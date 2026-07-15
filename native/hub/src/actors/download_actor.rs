@@ -33,8 +33,9 @@ use crate::signals::{
     RequestYtdlpStatus, RequestYtdlpVersions, RescanFiles, RevealFile, SaveConfig,
     SavePluginSettings, SelectBtFiles, SelectHlsQuality, SelectResolveVariant, SetFileAssociation,
     SetPluginEnabled, SetPriorityTask, SetUrlProtocol, SystemProxyInfo, TestProxyConnection,
-    TrackerSubscriptionResult, UninstallFfmpeg, UninstallPlugin, UninstallYtdlp, UpdateCheckResult,
-    UpdateEd2kServerSubscription, UpdateFailureMarker, UpdateQueue, UpdateTrackerSubscription,
+    TaskSegmentsUpdated, TrackerSubscriptionResult, UninstallFfmpeg, UninstallPlugin,
+    UninstallYtdlp, UpdateCheckResult, UpdateEd2kServerSubscription, UpdateFailureMarker,
+    UpdateQueue, UpdateTaskSegments, UpdateTrackerSubscription,
     UrlProtocolStatus, YtdlpInstallProgress, YtdlpInstallResult, YtdlpStatusReport,
     YtdlpVersionList,
 };
@@ -463,6 +464,7 @@ pub async fn run(db_dir: PathBuf) {
     let batch_create_recv = BatchCreateTask::get_dart_signal_receiver();
     let control_recv = ControlTask::get_dart_signal_receiver();
     let batch_control_recv = BatchControlTask::get_dart_signal_receiver();
+    let update_task_segments_recv = UpdateTaskSegments::get_dart_signal_receiver();
     let all_recv = RequestAllTasks::get_dart_signal_receiver();
     let create_queue_recv = CreateQueue::get_dart_signal_receiver();
     let update_queue_recv = UpdateQueue::get_dart_signal_receiver();
@@ -754,6 +756,26 @@ pub async fn run(db_dir: PathBuf) {
                     }
                     _ => {}
                 }
+            }
+            Some(signal) = update_task_segments_recv.recv() => {
+                let msg = signal.message;
+                log_info!(
+                    "[actor] UpdateTaskSegments: task_id={}, segments={}",
+                    msg.task_id, msg.segments,
+                );
+                let ok = match engine.manager.set_task_segments(&msg.task_id, msg.segments).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log_info!("[actor] set_task_segments 失败: {}", e);
+                        false
+                    }
+                };
+                TaskSegmentsUpdated {
+                    task_id: msg.task_id,
+                    segments: msg.segments.max(0),
+                    ok,
+                }
+                .send_signal_to_dart();
             }
             Some(signal) = batch_control_recv.recv() => {
                 let msg = signal.message;

@@ -11,6 +11,7 @@ import '../i18n/locale_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_metrics.dart';
 import '../theme/segment_palette.dart';
+import 'edit_threads_dialog.dart';
 
 /// 插件系统失败任务的错误消息前缀（引擎/hub/server 固定格式，逃生舱按钮据此判断）。
 const _pluginErrorPrefix = '[插件]';
@@ -489,7 +490,8 @@ class _DetailPanelState extends State<DetailPanel> {
           ),
         ],
         if (segCount != null)
-          _buildInfoRow(currentS.threads, currentS.infoThreads(segCount), c),
+          _buildInfoRow(currentS.activeSegments, '$segCount', c),
+        _buildThreadsConfigRow(c, task),
         if (splitCount > 0) _buildSplitInfoRow(c, task),
         _buildInfoRow(currentS.infoPath, task.saveDir, c),
         _buildUrlRow(c, task.url),
@@ -588,6 +590,57 @@ class _DetailPanelState extends State<DetailPanel> {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  /// 配置线程数行 —— 显示任务当前配置的线程数（用户设定的上限，稳定值），
+  /// 并提供编辑入口。仅对 HTTP/FTP 任务展示（BT/ED2K 不适用分段线程语义）。
+  /// 已完成任务不可改（无意义）；其余状态均可改——引擎对活跃任务自动
+  /// 暂停/恢复以立即生效，进度完整保留。
+  Widget _buildThreadsConfigRow(AppColors c, DownloadTask task) {
+    final proto = task.protocolLabel;
+    if (proto != 'HTTP' && proto != 'FTP') return const SizedBox.shrink();
+
+    final n = task.configuredSegments;
+    final valueText = n > 0 ? currentS.infoThreads(n) : currentS.auto;
+    final editable = task.status != TaskStatus.completed;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 60,
+            child: Text(
+              currentS.configuredThreads,
+              style: TextStyle(fontSize: 11, color: c.textMuted),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              valueText,
+              style: TextStyle(
+                fontSize: 11,
+                color: c.textSecondary,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          if (editable)
+            Tooltip(
+              message: currentS.editThreads,
+              child: ShadButton.ghost(
+                height: 22,
+                width: 22,
+                padding: EdgeInsets.zero,
+                onPressed: () =>
+                    showEditThreadsDialog(context, widget.controller, task),
+                child: Icon(LucideIcons.pencil, size: 12, color: c.textSecondary),
+              ),
+            ),
         ],
       ),
     );

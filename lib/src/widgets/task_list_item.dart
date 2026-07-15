@@ -28,6 +28,9 @@ class TaskListItem extends StatefulWidget {
   final bool isPriority;
   final VoidCallback? onBoost;
 
+  /// 修改线程数（打开对话框）。null = 不显示该菜单项。
+  final VoidCallback? onEditThreads;
+
   /// 插件钩子处理中（旁路 UI 指示，仅在 completed 状态下有意义）
   final bool isPluginProcessing;
 
@@ -47,6 +50,7 @@ class TaskListItem extends StatefulWidget {
     this.onDoubleTap,
     this.isPriority = false,
     this.onBoost,
+    this.onEditThreads,
     this.isPluginProcessing = false,
     this.isManageMode = false,
     this.isChecked = false,
@@ -88,6 +92,7 @@ class _TaskListItemState extends State<TaskListItem> {
       onDelete: widget.onDelete,
       isPriority: widget.isPriority,
       onBoost: widget.onBoost,
+      onEditThreads: widget.onEditThreads,
     );
   }
 
@@ -454,6 +459,7 @@ void showTaskContextMenu(
   required void Function({required bool deleteFiles}) onDelete,
   bool isPriority = false,
   VoidCallback? onBoost,
+  VoidCallback? onEditThreads,
 }) {
   final c = AppColors.of(context);
   final s = LocaleScope.of(context);
@@ -509,6 +515,21 @@ void showTaskContextMenu(
         label: isPriority ? s.cancelBoost : s.boostDownload,
         color: isPriority ? c.textPrimary : const Color(0xFFF59E0B),
         action: onBoost,
+      ),
+    );
+  }
+
+  // --- 修改线程数（非完成的 HTTP/FTP 任务）---
+  final proto = task.protocolLabel;
+  if (task.status != TaskStatus.completed &&
+      onEditThreads != null &&
+      (proto == 'HTTP' || proto == 'FTP')) {
+    items.add(
+      ContextMenuItem(
+        icon: LucideIcons.settings2,
+        label: s.editThreads,
+        color: c.textPrimary,
+        action: onEditThreads,
       ),
     );
   }

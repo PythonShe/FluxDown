@@ -808,6 +808,7 @@ mod tests {
             checksum: String::new(),
             file_missing: false,
             completed_at: String::new(),
+            segments: 0,
         }]));
 
         let snap = hub.live_speeds_snapshot();
@@ -831,6 +832,7 @@ mod tests {
             checksum: String::new(),
             file_missing: false,
             completed_at: String::new(),
+            segments: 0,
         }
     }
 

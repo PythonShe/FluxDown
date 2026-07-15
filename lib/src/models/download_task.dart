@@ -246,6 +246,11 @@ class DownloadTask {
   /// 由引擎扫描后经 FileMissingChanged / AllTasks 下发，仅对 completed 有意义。
   final bool fileMissing;
 
+  /// 配置的分段（线程）数。0 = 自动（引擎动态计算）。
+  /// 来自 DB 的 tasks.segments 列（经 AllTasks 快照下发），供详情面板
+  /// 展示与「创建后改线程数」编辑。与运行时实际分片数 [segments] 不同。
+  final int configuredSegments;
+
   DownloadTask({
     required this.id,
     required this.url,
@@ -263,6 +268,7 @@ class DownloadTask {
     this.queueId = '',
     this.fileNameConfirmed = false,
     this.fileMissing = false,
+    this.configuredSegments = 0,
     this.completedAt,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
@@ -286,6 +292,7 @@ class DownloadTask {
       queueId: info.queueId,
       fileNameConfirmed: hasName,
       fileMissing: info.fileMissing,
+      configuredSegments: info.segments,
       createdAt: seconds > 0
           ? DateTime.fromMillisecondsSinceEpoch(seconds * 1000)
           : DateTime.now(),
@@ -313,6 +320,7 @@ class DownloadTask {
     String? queueId,
     bool? fileNameConfirmed,
     bool? fileMissing,
+    int? configuredSegments,
     DateTime? createdAt,
     DateTime? completedAt,
   }) {
@@ -333,6 +341,7 @@ class DownloadTask {
       queueId: queueId ?? this.queueId,
       fileNameConfirmed: fileNameConfirmed ?? this.fileNameConfirmed,
       fileMissing: fileMissing ?? this.fileMissing,
+      configuredSegments: configuredSegments ?? this.configuredSegments,
       createdAt: createdAt ?? this.createdAt,
       completedAt: clearCompletedAt ? null : (completedAt ?? this.completedAt),
     );

@@ -246,6 +246,14 @@ class S {
   String customRangeHint(int min, int max) =>
       _r('customRangeHint', {'min': min, 'max': max});
   String get threadsInvalidRange => _r('threadsInvalidRange');
+  String get editThreads => _r('editThreads');
+  String get editThreadsTitle => _r('editThreadsTitle');
+  String get editThreadsResetHint => _r('editThreadsResetHint');
+  String get editThreadsPausedOnly => _r('editThreadsPausedOnly');
+  String get threadsChanged => _r('threadsChanged');
+  String get threadsChangeRejected => _r('threadsChangeRejected');
+  String get configuredThreads => _r('configuredThreads');
+  String get activeSegments => _r('activeSegments');
   String get renameOptional => _r('renameOptional');
   String get autoDetectFilename => _r('autoDetectFilename');
   String get filenameOptional => _r('filenameOptional');

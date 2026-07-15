@@ -26,6 +26,7 @@ impl From<model::TaskInfo> for signals::TaskInfo {
             checksum: t.checksum,
             file_missing: t.file_missing,
             completed_at: t.completed_at,
+            segments: t.segments,
         }
     }
 }

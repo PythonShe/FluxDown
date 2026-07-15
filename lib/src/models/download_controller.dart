@@ -77,6 +77,10 @@ class DownloadController extends ChangeNotifier {
   /// 下载完成回调 — 当任务状态从非 completed 变为 completed 时触发
   void Function(DownloadTask task)? onTaskCompleted;
 
+  /// 修改线程数结果回调 —— 收到 Rust 的 [TaskSegmentsUpdated] 后触发。
+  /// `ok=false` 表示任务正在下载/准备中/已完成而被拒绝，UI 据此提示。
+  void Function(String taskId, int segments, bool ok)? onSegmentsUpdateResult;
+
   /// 当前 Boost 优先任务 ID（空字符串 = 无优先任务）
   String _priorityTaskId = '';
 
@@ -116,6 +120,7 @@ class DownloadController extends ChangeNotifier {
   StreamSubscription<RustSignalPack<PriorityTaskChanged>>? _prioritySub;
   StreamSubscription<RustSignalPack<FileMissingChanged>>? _fileMissingSub;
   StreamSubscription<RustSignalPack<PluginHookActivityEvent>>? _pluginHookSub;
+  StreamSubscription<RustSignalPack<TaskSegmentsUpdated>>? _segmentsUpdatedSub;
 
   bool _disposed = false;
 
@@ -143,6 +148,7 @@ class DownloadController extends ChangeNotifier {
     _prioritySub?.cancel();
     _fileMissingSub?.cancel();
     _pluginHookSub?.cancel();
+    _segmentsUpdatedSub?.cancel();
     for (final timer in _pluginHookWatchdogs.values) {
       timer.cancel();
     }
@@ -1016,6 +1022,9 @@ class DownloadController extends ChangeNotifier {
     _pluginHookSub = PluginHookActivityEvent.rustSignalStream.listen(
       _onPluginHookActivity,
     );
+    _segmentsUpdatedSub = TaskSegmentsUpdated.rustSignalStream.listen(
+      _onTaskSegmentsUpdated,
+    );
   }
 
   void _onAllTasks(RustSignalPack<AllTasks> pack) {
@@ -1056,6 +1065,31 @@ class DownloadController extends ChangeNotifier {
       _tasks.add(task);
     }
     _safeNotifyListeners();
+  }
+
+  /// 修改某个任务的分段（线程）数。仅暂停/错误/等待态任务可改；下载中/
+  /// 准备中/已完成会被 Rust 拒绝（回 [TaskSegmentsUpdated] ok=false）。
+  /// 已下进度完整保留：恢复下载时按新线程数续传（增线程拆分现有段、减线程降并发）。
+  /// `segments <= 0` = 恢复为「自动」。
+  void setTaskSegments(String taskId, int segments) {
+    final n = segments < 0 ? 0 : segments;
+    logInfo(_tag, 'request set segments: task=$taskId, segments=$n');
+    UpdateTaskSegments(taskId: taskId, segments: n).sendSignalToRust();
+  }
+
+  /// 处理 Rust 的分段数修改结果：成功则更新 configuredSegments，
+  /// 并通过 [onSegmentsUpdateResult] 通知 UI 弹提示。
+  void _onTaskSegmentsUpdated(RustSignalPack<TaskSegmentsUpdated> pack) {
+    if (_disposed) return;
+    final u = pack.message;
+    if (u.ok) {
+      final idx = _tasks.indexWhere((t) => t.id == u.taskId);
+      if (idx >= 0) {
+        _tasks[idx] = _tasks[idx].copyWith(configuredSegments: u.segments);
+        _safeNotifyListeners();
+      }
+    }
+    onSegmentsUpdateResult?.call(u.taskId, u.segments, u.ok);
   }
 
   /// 文件跟踪：引擎扫描后定向更新受影响任务的 fileMissing 标志。只 copyWith

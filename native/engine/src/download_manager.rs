@@ -1422,6 +1422,57 @@ impl DownloadManager {
         crate::segment_coordinator::clear_domain_conn_caps(&self.db);
     }
 
+    /// 修改某个任务的分段（线程）数。**已下进度完整保留**：只更新
+    /// `tasks.segments`，不动分段行与磁盘临时文件。
+    ///
+    /// 活跃任务（下载中/准备中）会被**自动暂停 → 改配置 → 自动恢复**，让新
+    /// 线程数立即生效，无需用户手动操作；非活跃任务（暂停/错误/等待）只改
+    /// 配置，下次恢复时生效。恢复时 coordinator 从 DB 复用全部现有分段布局
+    /// （各段从 `start_byte + downloaded_bytes` 续传，零重复下载、不浪费一次性
+    /// token），新分段数作为并发上限（worker_cap）：增大 → 对现有段做 IDM 式
+    /// 对半拆分逐步 ramp 到新数；减小 → 限制并发但现有段仍全部处理；
+    /// 0（自动）→ 复用现有段布局。
+    ///
+    /// 返回 `Ok(true)` 表示已更新；`Ok(false)` 表示任务不存在或已完成
+    /// （已完成任务改线程数无意义）。
+    ///
+    /// `segments <= 0` 表示恢复为「自动」（交回 segment_advisor）。
+    pub async fn set_task_segments(
+        &mut self,
+        task_id: &str,
+        segments: i32,
+    ) -> Result<bool, crate::db::DbError> {
+        let task = match self.db.load_task_by_id(task_id).await? {
+            Some(t) => t,
+            None => return Ok(false),
+        };
+        // 已完成任务改线程数无意义，拒绝。
+        if task.status == 3 {
+            return Ok(false);
+        }
+        // 活跃 = 内存中有 spawn，或 DB 状态为下载中(1)/准备中(5)。
+        let was_active =
+            self.active_tasks.contains_key(task_id) || matches!(task.status, 1 | 5);
+        let seg = if segments <= 0 { 0 } else { segments };
+
+        // 活跃任务：先暂停当前 spawn（取消 + 落 paused），改配置后再恢复，
+        // 让新 worker_cap 立即生效。全程在 current_thread actor 内串行，无竞态。
+        if was_active {
+            self.pause_task(task_id).await;
+        }
+        self.db.update_task_segments(task_id, seg).await?;
+        log_info!(
+            "[manager] task {} 分段数已改为 {}（进度保留，was_active={}）",
+            task_id,
+            seg,
+            was_active
+        );
+        if was_active {
+            self.resume_task(task_id).await;
+        }
+        Ok(true)
+    }
+
     /// Get a reference to the current proxy configuration.
     #[allow(dead_code)]
     pub fn proxy_config(&self) -> &ProxyConfig {

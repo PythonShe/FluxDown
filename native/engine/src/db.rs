@@ -240,10 +240,11 @@ fn task_from_row(row: &AnyRow) -> Result<TaskInfo, sqlx::Error> {
         checksum: row.try_get("checksum").unwrap_or_default(),
         file_missing: row.try_get::<i32, _>("file_missing").unwrap_or(0) != 0,
         completed_at: row.try_get("completed_at").unwrap_or_default(),
+        segments: row.try_get("segments").unwrap_or(0),
     })
 }
 
-const TASK_COLUMNS: &str = "id, url, file_name, save_dir, status, downloaded_bytes, total_bytes, error_message, created_at, proxy_url, queue_id, checksum, file_missing, completed_at";
+const TASK_COLUMNS: &str = "id, url, file_name, save_dir, status, downloaded_bytes, total_bytes, error_message, created_at, proxy_url, queue_id, checksum, file_missing, completed_at, segments";
 
 impl Db {
     /// 在 `dir` 目录下打开（不存在则创建）SQLite 数据库 `flux_down.db`。

@@ -89,6 +89,8 @@ class _HomePageState extends State<HomePage> {
     _pluginProvider.addListener(_onPluginProviderChanged);
     // 监听下载完成事件 → 发送系统通知
     _controller.onTaskCompleted = _handleTaskCompleted;
+    // 监听「修改线程数」结果 → toast 提示
+    _controller.onSegmentsUpdateResult = _handleSegmentsUpdateResult;
     // 监听 controller 变化 — 选中任务被删除时自动关闭详情面板
     _controller.addListener(_onControllerChanged);
     // 全局键盘快捷键
@@ -156,6 +158,7 @@ class _HomePageState extends State<HomePage> {
     _pluginProvider.dispose();
     _controller.removeListener(_onControllerChanged);
     _controller.onTaskCompleted = null;
+    _controller.onSegmentsUpdateResult = null;
     _controller.dispose();
     _settingsProvider.dispose();
     super.dispose();
@@ -276,6 +279,27 @@ class _HomePageState extends State<HomePage> {
     // 通知服务内部做 800ms 防抖合批（多文件 → "N 个文件已下载"），
     // 此处无需再做汇总聚合。
     NotificationService.instance.showDownloadComplete(task);
+  }
+
+  /// 「修改线程数」结果提示。成功 → 普通 toast；被拒（任务非暂停态）→
+  /// destructive toast 提示先暂停。
+  void _handleSegmentsUpdateResult(String taskId, int segments, bool ok) {
+    if (!mounted) return;
+    if (ok) {
+      ShadSonner.of(context).show(
+        ShadToast(
+          title: Text(currentS.threadsChanged),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } else {
+      ShadSonner.of(context).show(
+        ShadToast.destructive(
+          title: Text(currentS.threadsChangeRejected),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   /// 全局快捷键处理 — 不依赖焦点树

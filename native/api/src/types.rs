@@ -157,6 +157,7 @@ pub struct DownloadRequest {
 ///     checksum: String::new(),
 ///     file_missing: false,
 ///     completed_at: String::new(),
+///     segments: 0,
 /// };
 /// let dto = TaskDto::from(info);
 /// assert_eq!(dto.task_id, "t1");
