@@ -11,6 +11,7 @@ import '../services/app_icon_service.dart';
 import '../services/update_service.dart';
 import '../i18n/locale_provider.dart';
 import '../models/settings_provider.dart';
+import '../models/ua_presets.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_metrics.dart';
 import 'category_edit_dialog.dart';
@@ -979,33 +980,13 @@ class _QueueActionIconState extends State<_QueueActionIcon> {
 }
 
 // ─────────────────────────────────────────────
-// 队列对话框 UA 预设（与设置页保持同步）
+// 队列对话框 UA 预设（'' = 继承全局，其余取共享预设表）
 // ─────────────────────────────────────────────
 
-/// key '' = 继承全局；其余 key 对应具体 UA 字符串
-const _kQueueUaPresets = {
-  '': '', // 继承全局设置
-  'chrome':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-  'firefox':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) '
-      'Gecko/20100101 Firefox/147.0',
-  'edge':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.3800.70',
-  'safari':
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-      'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3.1 Safari/605.1.15',
-  'netdisk': 'netdisk',
-};
-
-/// 根据 UA 字符串反推预设 key
+/// 根据 UA 字符串反推预设 key（'' = 继承全局设置）
 String _detectQueueUaPreset(String ua) {
-  for (final entry in _kQueueUaPresets.entries) {
-    if (entry.value == ua) return entry.key;
-  }
-  return ua.isEmpty ? '' : 'custom';
+  final detected = detectUaPreset(ua);
+  return detected == 'default' ? '' : detected;
 }
 
 /// 新建/编辑队列对话框
@@ -1090,7 +1071,7 @@ class _QueueDialogState extends State<_QueueDialog> {
     if (preset == null) return;
     setState(() => _selectedUaPreset = preset);
     if (preset != 'custom') {
-      _uaCtrl.text = _kQueueUaPresets[preset] ?? '';
+      _uaCtrl.text = kUaPresets[preset] ?? '';
     }
   }
 
@@ -1288,10 +1269,6 @@ class _QueueDialogState extends State<_QueueDialog> {
                         child: Text(s.userAgentPresetSafari),
                       ),
                       ShadOption(
-                        value: 'netdisk',
-                        child: Text(s.userAgentPresetNetdisk),
-                      ),
-                      ShadOption(
                         value: 'custom',
                         child: Text(s.userAgentPresetCustom),
                       ),
@@ -1302,7 +1279,6 @@ class _QueueDialogState extends State<_QueueDialog> {
                         'firefox' => 'Firefox',
                         'edge' => 'Edge',
                         'safari' => 'Safari',
-                        'netdisk' => 'netdisk',
                         'custom' => s.userAgentPresetCustom,
                         _ => s.queueUaInheritGlobal,
                       };

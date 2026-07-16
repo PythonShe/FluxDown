@@ -11,6 +11,7 @@ import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { newDownloadOpenStore } from '../../lib/dialogs'
 import { useI18n } from '../../lib/i18n'
+import { UA_PRESETS } from '../../lib/ua-presets'
 import { useStore } from '../../lib/ws'
 import { FsPicker } from './fs-picker'
 
@@ -120,26 +121,7 @@ export function NewDownloadDialog() {
   ]
   const userAgentOptions = [
     { value: '', label: t('newDl.globalDefault') },
-    {
-      value:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      label: 'Chrome',
-    },
-    {
-      value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-      label: 'Firefox',
-    },
-    {
-      value:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
-      label: 'Edge',
-    },
-    {
-      value:
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
-      label: 'Safari',
-    },
-    { value: 'netdisk', label: 'netdisk' },
+    ...UA_PRESETS.map((p) => ({ value: p.value, label: p.label })),
   ]
 
   const { data: config } = useQuery({ queryKey: ['config'], queryFn: api.getConfig, enabled: open })

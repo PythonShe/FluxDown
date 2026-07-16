@@ -20,6 +20,7 @@ import '../models/download_queue.dart';
 import '../models/components_provider.dart';
 import '../models/plugin_provider.dart';
 import '../models/settings_provider.dart';
+import '../models/ua_presets.dart';
 import '../services/app_icon_service.dart';
 import '../services/floating_ball/floating_ball_service.dart';
 import '../services/log_service.dart';
@@ -3146,40 +3147,6 @@ class _AutoRetryDelayInputState extends State<_AutoRetryDelayInput> {
 // UA 编辑器
 // ─────────────────────────────────────────────
 
-/// 预设 UA 映射（key → UA 字符串，'custom' 留空让用户自行输入）
-///
-/// Chrome / Edge 遵循 UA Reduction 策略，次版本号固定为 0.0.0；
-/// Edge 额外携带完整的小版本号（Edg/145.0.3800.70）以匹配官方实际发送的格式。
-/// 版本基准：Chrome 145 / Edge 145 / Firefox 147 / Safari 18.3（2025-2026 主流版本）
-const _kUaPresets = {
-  // Chrome 145（UA Reduction：Win11 与 Win10 发送同一 UA，次版本号全为 0）
-  'chrome':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-  // Firefox 147（Gecko/20100101 为固定占位，仅主版本号暴露）
-  'firefox':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) '
-      'Gecko/20100101 Firefox/147.0',
-  // Edge 145（基于 Chromium，追加 Edg/ 标记；注意是 Edg 而非 Edge）
-  'edge':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.3800.70',
-  // Safari 18.3（macOS Sonoma；WebKit 版本号 605.1.15 长期固定）
-  'safari':
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-      'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3.1 Safari/605.1.15',
-  // 百度网盘直链专用标识
-  'netdisk': 'netdisk',
-};
-
-String _detectPreset(String ua) {
-  if (ua.isEmpty) return 'default'; // 空 = 内置默认标识（FluxDown/版本号）
-  for (final entry in _kUaPresets.entries) {
-    if (entry.value == ua) return entry.key;
-  }
-  return 'custom';
-}
-
 class _UserAgentEditor extends StatefulWidget {
   final SettingsProvider settingsProvider;
 
@@ -3198,7 +3165,7 @@ class _UserAgentEditorState extends State<_UserAgentEditor> {
     super.initState();
     final ua = widget.settingsProvider.globalUserAgent;
     _controller = TextEditingController(text: ua);
-    _selectedPreset = _detectPreset(ua);
+    _selectedPreset = detectUaPreset(ua);
   }
 
   @override
@@ -3207,7 +3174,7 @@ class _UserAgentEditorState extends State<_UserAgentEditor> {
     final ua = widget.settingsProvider.globalUserAgent;
     if (ua != _controller.text) {
       _controller.text = ua;
-      _selectedPreset = _detectPreset(ua);
+      _selectedPreset = detectUaPreset(ua);
     }
   }
 
@@ -3221,8 +3188,8 @@ class _UserAgentEditorState extends State<_UserAgentEditor> {
     if (preset == null) return;
     setState(() => _selectedPreset = preset);
     if (preset != 'custom') {
-      // 'default' 不在 _kUaPresets 中，映射为空字符串（引擎内置 UA）
-      final ua = _kUaPresets[preset] ?? '';
+      // 'default' 不在 kUaPresets 中，映射为空字符串（引擎内置 UA）
+      final ua = kUaPresets[preset] ?? '';
       _controller.text = ua;
       widget.settingsProvider.setGlobalUserAgent(ua);
     }
@@ -3230,7 +3197,7 @@ class _UserAgentEditorState extends State<_UserAgentEditor> {
 
   void _onTextChanged(String value) {
     // 手动编辑时切换到 custom
-    final detected = _detectPreset(value);
+    final detected = detectUaPreset(value);
     if (detected != _selectedPreset) {
       setState(() => _selectedPreset = detected);
     }
@@ -3261,10 +3228,6 @@ class _UserAgentEditorState extends State<_UserAgentEditor> {
               ),
               ShadOption(value: 'edge', child: Text(s.userAgentPresetEdge)),
               ShadOption(value: 'safari', child: Text(s.userAgentPresetSafari)),
-              ShadOption(
-                value: 'netdisk',
-                child: Text(s.userAgentPresetNetdisk),
-              ),
               ShadOption(value: 'custom', child: Text(s.userAgentPresetCustom)),
             ],
             selectedOptionBuilder: (context, value) {
@@ -3274,7 +3237,6 @@ class _UserAgentEditorState extends State<_UserAgentEditor> {
                 'firefox' => 'Firefox',
                 'edge' => 'Edge',
                 'safari' => 'Safari',
-                'netdisk' => 'netdisk',
                 _ => s.userAgentPresetCustom,
               };
               return Text(label, overflow: TextOverflow.ellipsis, maxLines: 1);

@@ -3,33 +3,10 @@ import { useState } from 'react'
 import { useI18n } from '../../lib/i18n'
 import type { ConfigMap } from '../../lib/types'
 import { FsPicker } from '../dialogs/fs-picker'
+import { UA_PRESETS } from '../../lib/ua-presets'
 import { NumberFieldRow, SetRow, SetSelect, SetSwitch, TextInput } from './controls'
 
 const MB = 1024 * 1024
-
-const UA_PRESETS = [
-  {
-    label: 'Chrome',
-    value:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  },
-  {
-    label: 'Firefox',
-    value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
-  },
-  {
-    label: 'Edge',
-    value:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0',
-  },
-  {
-    label: 'Safari',
-    value:
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
-  },
-  // 百度网盘直链专用标识
-  { label: 'netdisk', value: 'netdisk' },
-]
 
 const CUSTOM = '__custom__'
 

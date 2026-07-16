@@ -26,22 +26,12 @@ import 'package:flutter/widgets.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 import '../i18n/locale_provider.dart';
+import '../models/ua_presets.dart';
 import '../services/file_picker_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_metrics.dart';
 import 'dir_picker_field.dart';
 import 'thread_selector.dart';
-
-/// UA 预设映射（key → UA 字符串）
-const kQuickUaPresets = {
-  'chrome':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'firefox':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
-  'edge':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
-  'netdisk': 'netdisk',
-};
 
 /// 解析后的单条下载入口（URL + 可选 out= 文件名 + 可选 checksum=）
 class QuickDownloadEntry {
@@ -276,7 +266,7 @@ class _QuickDownloadFormState extends State<QuickDownloadForm> {
   /// 选中的哈希算法（与后端 verify_checksum 支持的算法名一致）
   String _selectedHashAlgo = 'sha-256';
   String? selectedThreads;
-  String _selectedUaPreset = 'custom';
+  String _selectedUaPreset = 'default';
 
   /// 选中的队列 ID（空字符串 = 默认队列）
   late String _selectedQueueId;
@@ -692,8 +682,11 @@ class _QuickDownloadFormState extends State<QuickDownloadForm> {
                   width: 150,
                   child: ShadSelect<String>(
                     initialValue: _selectedUaPreset,
-                    placeholder: Text(s.userAgentPresetCustom),
                     options: [
+                      ShadOption(
+                        value: 'default',
+                        child: Text(s.queueUaInheritGlobal),
+                      ),
                       ShadOption(
                         value: 'chrome',
                         child: Text(s.userAgentPresetChrome),
@@ -707,8 +700,8 @@ class _QuickDownloadFormState extends State<QuickDownloadForm> {
                         child: Text(s.userAgentPresetEdge),
                       ),
                       ShadOption(
-                        value: 'netdisk',
-                        child: Text(s.userAgentPresetNetdisk),
+                        value: 'safari',
+                        child: Text(s.userAgentPresetSafari),
                       ),
                       ShadOption(
                         value: 'custom',
@@ -720,8 +713,9 @@ class _QuickDownloadFormState extends State<QuickDownloadForm> {
                         'chrome' => 'Chrome',
                         'firefox' => 'Firefox',
                         'edge' => 'Edge',
-                        'netdisk' => 'netdisk',
-                        _ => s.userAgentPresetCustom,
+                        'safari' => 'Safari',
+                        'custom' => s.userAgentPresetCustom,
+                        _ => s.queueUaInheritGlobal,
                       };
                       return Text(
                         label,
@@ -732,9 +726,8 @@ class _QuickDownloadFormState extends State<QuickDownloadForm> {
                     onChanged: (v) {
                       if (v == null) return;
                       setState(() => _selectedUaPreset = v);
-                      final preset = kQuickUaPresets[v];
-                      if (preset != null) {
-                        _userAgentController.text = preset;
+                      if (v != 'custom') {
+                        _userAgentController.text = kUaPresets[v] ?? '';
                       }
                     },
                   ),
@@ -743,10 +736,11 @@ class _QuickDownloadFormState extends State<QuickDownloadForm> {
                 Expanded(
                   child: ShadInput(
                     controller: _userAgentController,
-                    placeholder: Text(s.userAgentPlaceholder),
-                    onChanged: (_) {
-                      if (_selectedUaPreset != 'custom') {
-                        setState(() => _selectedUaPreset = 'custom');
+                    placeholder: Text(s.userAgentTaskPlaceholder),
+                    onChanged: (value) {
+                      final detected = detectUaPreset(value);
+                      if (detected != _selectedUaPreset) {
+                        setState(() => _selectedUaPreset = detected);
                       }
                     },
                   ),

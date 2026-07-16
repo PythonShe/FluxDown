@@ -256,7 +256,7 @@
     "set.download.speedLimit": "Global speed limit",
     "set.download.speedLimitDesc": "MB/s, token bucket, 0 = unlimited",
     "set.download.ua": "Global User-Agent",
-    "set.download.uaDesc": "Browser identity for download requests. Set to \"netdisk\" for Baidu Pan direct links",
+    "set.download.uaDesc": "Browser identity for download requests",
     "set.download.uaDefault": "Default (unset)",
     "set.download.uaCustomPlaceholder": "Custom User-Agent",
     "set.download.serverTime": "Use server file time",

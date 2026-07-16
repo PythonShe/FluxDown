@@ -256,7 +256,7 @@
     "set.download.speedLimit": "全局限速",
     "set.download.speedLimitDesc": "单位 MB/s，Token Bucket，0 = 不限速",
     "set.download.ua": "全局 User-Agent",
-    "set.download.uaDesc": "下载请求时使用的浏览器标识。百度网盘直链下载需设为 netdisk",
+    "set.download.uaDesc": "下载请求时使用的浏览器标识",
     "set.download.uaDefault": "默认（不设置）",
     "set.download.uaCustomPlaceholder": "自定义 User-Agent",
     "set.download.serverTime": "使用服务器文件时间",

@@ -45,7 +45,7 @@ Open **Settings** from the top bar's gear icon. The settings sidebar has eight c
 | Speed Limit | Global download speed cap in KB/s (0 = unlimited). Also editable from the status bar. | 0 (unlimited) |
 | Auto-retry Attempts | Automatic retries after transient errors like network drops (-1 = unlimited, 0 = off). | 3 |
 | Retry Interval | Seconds to wait before each automatic retry. | 5 |
-| User-Agent | The browser identity sent with download requests; presets for Chrome/Firefox/Edge/Safari, plus a `netdisk` preset required for Baidu Pan direct links. Empty uses the built-in Chrome UA. | Empty (built-in Chrome UA) |
+| User-Agent | The browser identity sent with download requests; presets for Chrome/Firefox/Edge/Safari. Empty uses the built-in Chrome UA. | Empty (built-in Chrome UA) |
 | File manager command | Custom command template for opening a file or folder in a third-party manager. Placeholders: `{path}` (current path) and `{dir}` (folder). Empty uses the platform default (Explorer/Finder/Nautilus). | Empty |
 | Default Queue | Which queue new downloads join when none is explicitly chosen (used by the browser extension too). Only shown once you've created a named queue. | Default Queue |
 

@@ -566,11 +566,10 @@ class S {
   String get userAgentPresetFirefox => _r('userAgentPresetFirefox');
   String get userAgentPresetEdge => _r('userAgentPresetEdge');
   String get userAgentPresetSafari => _r('userAgentPresetSafari');
-  String get userAgentPresetNetdisk => _r('userAgentPresetNetdisk');
   String get userAgentPresetCustom => _r('userAgentPresetCustom');
   List<String> get searchKeywordsUserAgent =>
       _r('searchKeywordsUserAgent').split(',')
-        ..addAll(['ua', 'user-agent', 'netdisk']);
+        ..addAll(['ua', 'user-agent']);
 
   // 文件管理器自定义命令
   String get fileManagerSection => _r('fileManagerSection');

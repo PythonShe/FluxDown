@@ -43,7 +43,7 @@ The New Download dialog's advanced options let you tailor requests for sites tha
 |---|---|
 | Cookie | Sent as-is, format `name=value; name2=value2`. Leave empty to send no cookies. |
 | Custom Headers | Arbitrary extra key/value HTTP headers (use the Cookie field above for cookies, not a header row). |
-| User-Agent | Presets for Chrome (default), Firefox, Edge, netdisk (for Baidu Pan direct links), or a custom string. Leave empty to use the global default from *Settings → Download → User-Agent*. |
+| User-Agent | Presets for Chrome (default), Firefox, Edge, or a custom string. Leave empty to use the global default from *Settings → Download → User-Agent*. |
 
 FluxDown's built-in default User-Agent is a neutral `FluxDown/1.0` string rather than an impersonated Chrome UA — Cloudflare's bot detection compares the declared browser against the TLS fingerprint, and a non-Chrome TLS stack paired with a Chrome UA gets flagged as bot traffic on some CDNs. When a download is captured by the browser extension, the real captured User-Agent is used first; if the server rejects that request, FluxDown automatically retries once without it.
 

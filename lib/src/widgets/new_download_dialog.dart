@@ -25,6 +25,7 @@ import '../i18n/locale_provider.dart';
 import '../models/download_controller.dart';
 import '../models/download_queue.dart';
 import '../models/settings_provider.dart';
+import '../models/ua_presets.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_metrics.dart';
 import '../services/bt_file_selection_service.dart';
@@ -85,7 +86,7 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
   final List<_HeaderRow> _headerRows = [];
 
   String? selectedThreads;
-  String _selectedUaPreset = 'custom';
+  String _selectedUaPreset = 'default';
 
   /// 选中的队列 ID（空字符串 = 默认队列）
   String _selectedQueueId = '';
@@ -1412,6 +1413,10 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                       initialValue: _selectedUaPreset,
                       options: [
                         ShadOption(
+                          value: 'default',
+                          child: Text(s.queueUaInheritGlobal),
+                        ),
+                        ShadOption(
                           value: 'chrome',
                           child: Text(s.userAgentPresetChrome),
                         ),
@@ -1424,8 +1429,8 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                           child: Text(s.userAgentPresetEdge),
                         ),
                         ShadOption(
-                          value: 'netdisk',
-                          child: Text(s.userAgentPresetNetdisk),
+                          value: 'safari',
+                          child: Text(s.userAgentPresetSafari),
                         ),
                         ShadOption(
                           value: 'custom',
@@ -1437,8 +1442,9 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                           'chrome' => 'Chrome',
                           'firefox' => 'Firefox',
                           'edge' => 'Edge',
-                          'netdisk' => 'netdisk',
-                          _ => s.userAgentPresetCustom,
+                          'safari' => 'Safari',
+                          'custom' => s.userAgentPresetCustom,
+                          _ => s.queueUaInheritGlobal,
                         };
                         return Text(
                           label,
@@ -1449,20 +1455,8 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                       onChanged: (preset) {
                         if (preset == null) return;
                         setState(() => _selectedUaPreset = preset);
-                        const presets = {
-                          'chrome':
-                              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                              '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                          'firefox':
-                              'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) '
-                              'Gecko/20100101 Firefox/133.0',
-                          'edge':
-                              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                              '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
-                          'netdisk': 'netdisk',
-                        };
                         if (preset != 'custom') {
-                          _userAgentController.text = presets[preset] ?? '';
+                          _userAgentController.text = kUaPresets[preset] ?? '';
                         }
                       },
                     ),
@@ -1472,8 +1466,11 @@ class _NewDownloadDialogContentState extends State<_NewDownloadDialogContent> {
                     child: ShadInput(
                       controller: _userAgentController,
                       placeholder: Text(s.userAgentTaskPlaceholder),
-                      onChanged: (_) {
-                        setState(() => _selectedUaPreset = 'custom');
+                      onChanged: (value) {
+                        final detected = detectUaPreset(value);
+                        if (detected != _selectedUaPreset) {
+                          setState(() => _selectedUaPreset = detected);
+                        }
                       },
                     ),
                   ),

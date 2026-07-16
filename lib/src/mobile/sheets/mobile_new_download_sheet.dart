@@ -8,22 +8,11 @@ import '../../bindings/bindings.dart';
 import '../../i18n/locale_provider.dart';
 import '../../models/download_controller.dart';
 import '../../models/settings_provider.dart';
+import '../../models/ua_presets.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_metrics.dart';
 import '../mobile_ui.dart';
 import '../services/mobile_storage_service.dart';
-
-/// UA 预设（与桌面新建下载对话框一致）
-const _uaPresets = <String, String>{
-  'default': '',
-  'chrome':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-  'firefox':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) '
-      'Gecko/20100101 Firefox/147.0',
-  'netdisk': 'netdisk',
-};
 
 /// 新建下载底部弹层
 Future<void> showMobileNewDownloadSheet(
@@ -178,7 +167,7 @@ class _NewDownloadSheetState extends State<_NewDownloadSheet> {
     final segments = int.tryParse(_threads) ?? 0;
     widget.settings.setLastDialogThreads(segments > 0 ? _threads : 'auto');
 
-    final userAgent = _uaPresets[_uaPreset] ?? '';
+    final userAgent = kUaPresets[_uaPreset] ?? '';
     final cookies = _cookieController.text.trim();
     final checksum = _checksumController.text.trim();
     // 仅保留 key 非空的行；同名 key 后者覆盖前者。
@@ -363,9 +352,14 @@ class _NewDownloadSheetState extends State<_NewDownloadSheet> {
                   onTap: () => setState(() => _uaPreset = 'firefox'),
                 ),
                 MobileChip(
-                  label: s.userAgentPresetNetdisk,
-                  selected: _uaPreset == 'netdisk',
-                  onTap: () => setState(() => _uaPreset = 'netdisk'),
+                  label: 'Edge',
+                  selected: _uaPreset == 'edge',
+                  onTap: () => setState(() => _uaPreset = 'edge'),
+                ),
+                MobileChip(
+                  label: 'Safari',
+                  selected: _uaPreset == 'safari',
+                  onTap: () => setState(() => _uaPreset = 'safari'),
                 ),
               ],
             ),
