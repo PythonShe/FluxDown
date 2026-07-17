@@ -680,7 +680,7 @@ class _HomePageState extends State<HomePage> {
                 left: _sidebarWidth - (_ResizeHandle.hitSize - 1) / 2,
                 width: _ResizeHandle.hitSize,
                 child: _ResizeHandle(
-                  color: Colors.transparent,
+                  color: m.selectedBorder(c.accent).withValues(alpha: 0),
                   hoverColor: m.selectedBorder(c.accent),
                   dragColor: m.focusRing(c.accent),
                   onDrag: (dx) {
@@ -702,7 +702,7 @@ class _HomePageState extends State<HomePage> {
                 right: _detailWidth - (_ResizeHandle.hitSize - 1) / 2,
                 width: _ResizeHandle.hitSize,
                 child: _ResizeHandle(
-                  color: Colors.transparent,
+                  color: m.selectedBorder(c.accent).withValues(alpha: 0),
                   hoverColor: m.selectedBorder(c.accent),
                   dragColor: m.focusRing(c.accent),
                   onDrag: (dx) {

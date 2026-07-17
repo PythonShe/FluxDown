@@ -383,10 +383,11 @@ class S {
   String get settingsCatAccount => _r('settingsCatAccount');
   String get settingsCatAccountDesc => _r('settingsCatAccountDesc');
 
-  // 账户 —— UI 预览
+  // 账户 —— FluxCloud 登录/注册/设备管理
   String get accountHeroSubtitle => _r('accountHeroSubtitle');
   String get accountLogin => _r('accountLogin');
   String get accountLogout => _r('accountLogout');
+  String get accountRegister => _r('accountRegister');
   String get accountGroupCloudFeatures => _r('accountGroupCloudFeatures');
   String get accountCloudFeaturesDesc => _r('accountCloudFeaturesDesc');
   String get accountComingSoon => _r('accountComingSoon');
@@ -403,8 +404,84 @@ class S {
   String get accountCodePlaceholder => _r('accountCodePlaceholder');
   String get accountSendCode => _r('accountSendCode');
   String get accountPasswordPlaceholder => _r('accountPasswordPlaceholder');
-  String get accountForgotPassword => _r('accountForgotPassword');
   String get accountLoginTerms => _r('accountLoginTerms');
+  String get accountNoAccountYet => _r('accountNoAccountYet');
+  String get accountAlreadyHaveAccount => _r('accountAlreadyHaveAccount');
+  String get accountRegisterDialogTitle => _r('accountRegisterDialogTitle');
+  String get accountNicknamePlaceholder => _r('accountNicknamePlaceholder');
+  String get accountPasswordHint => _r('accountPasswordHint');
+  String get accountDeviceVerifyTitle => _r('accountDeviceVerifyTitle');
+  String accountDeviceVerifySubtitle(String email) =>
+      _r('accountDeviceVerifySubtitle', {'email': email});
+  String get accountRegisterVerifyTitle => _r('accountRegisterVerifyTitle');
+  String accountRegisterVerifySubtitle(String email) =>
+      _r('accountRegisterVerifySubtitle', {'email': email});
+  String accountCodeExpireIn(int seconds) =>
+      _r('accountCodeExpireIn', {'seconds': seconds});
+  String get accountResendCode => _r('accountResendCode');
+  String accountResendCodeIn(int seconds) =>
+      _r('accountResendCodeIn', {'seconds': seconds});
+  String get accountVerifySubmit => _r('accountVerifySubmit');
+  String get accountErrorInvalidCredentials =>
+      _r('accountErrorInvalidCredentials');
+  String get accountErrorInvalidCode => _r('accountErrorInvalidCode');
+  String get accountErrorRateLimited => _r('accountErrorRateLimited');
+  String get accountErrorEmailTaken => _r('accountErrorEmailTaken');
+  String get accountErrorAccountDisabled =>
+      _r('accountErrorAccountDisabled');
+  String get accountErrorRegistrationClosed =>
+      _r('accountErrorRegistrationClosed');
+  String get accountErrorRegistrationIncomplete =>
+      _r('accountErrorRegistrationIncomplete');
+  String get accountErrorValidation => _r('accountErrorValidation');
+  String get accountErrorNetwork => _r('accountErrorNetwork');
+  String get accountErrorUnknown => _r('accountErrorUnknown');
+  String get accountDeviceRenameTitle => _r('accountDeviceRenameTitle');
+  String get accountDeviceRenameInvalid => _r('accountDeviceRenameInvalid');
+  String get accountDeviceDeleteConfirmTitle =>
+      _r('accountDeviceDeleteConfirmTitle');
+  String get accountDeviceDeleteConfirmDesc =>
+      _r('accountDeviceDeleteConfirmDesc');
+  String get accountDeviceDeleteCurrentWarning =>
+      _r('accountDeviceDeleteCurrentWarning');
+  String get accountDeviceCurrent => _r('accountDeviceCurrent');
+  String get accountDevicesTitle => _r('accountDevicesTitle');
+  String get accountDevicesDesc => _r('accountDevicesDesc');
+  String get accountDevicesEmpty => _r('accountDevicesEmpty');
+  String get accountDevicesLoadFailed => _r('accountDevicesLoadFailed');
+  String get accountDevicesRetry => _r('accountDevicesRetry');
+  String accountDevicesManageAll(int count) =>
+      _r('accountDevicesManageAll', {'count': count});
+  String get accountDevicesManageAllTitle =>
+      _r('accountDevicesManageAllTitle');
+  String get accountDevicesSearchHint => _r('accountDevicesSearchHint');
+  String get accountDevicesSearchNoResults =>
+      _r('accountDevicesSearchNoResults');
+  String get accountDeviceDetailTitle => _r('accountDeviceDetailTitle');
+  String get accountDeviceFieldPlatform => _r('accountDeviceFieldPlatform');
+  String get accountDeviceFieldAppVersion =>
+      _r('accountDeviceFieldAppVersion');
+  String get accountDeviceFieldLastIp => _r('accountDeviceFieldLastIp');
+  String get accountDeviceFieldCreatedAt =>
+      _r('accountDeviceFieldCreatedAt');
+  String get accountDeviceFieldLastSeenAt =>
+      _r('accountDeviceFieldLastSeenAt');
+  String get accountDeviceFieldId => _r('accountDeviceFieldId');
+  String get accountDeviceDeleteAction => _r('accountDeviceDeleteAction');
+  String get accountDevicePlatformWindows =>
+      _r('accountDevicePlatformWindows');
+  String get accountDevicePlatformMacos => _r('accountDevicePlatformMacos');
+  String get accountDevicePlatformLinux => _r('accountDevicePlatformLinux');
+  String get accountDevicePlatformAndroid =>
+      _r('accountDevicePlatformAndroid');
+  String get accountDevicePlatformIos => _r('accountDevicePlatformIos');
+  String get accountDevicePlatformWeb => _r('accountDevicePlatformWeb');
+  String get accountServerAddress => _r('accountServerAddress');
+  String get accountServerAddressDesc => _r('accountServerAddressDesc');
+  String get accountServerAddressInvalid =>
+      _r('accountServerAddressInvalid');
+  String get accountServerAddressReset => _r('accountServerAddressReset');
+  String get accountServerAddressSaved => _r('accountServerAddressSaved');
 
   // 分类子 Tab
   String get settingsTabGeneral => _r('settingsTabGeneral');
